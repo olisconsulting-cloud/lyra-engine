@@ -77,6 +77,21 @@ class ActionEngine:
         if not str(target).startswith(str(self.base_path.resolve())):
             return f"FEHLER: Pfad ausserhalb des Daten-Ordners."
 
+        # Workflow-Gate: In Projekt-Ordnern muss PLAN.md existieren
+        if relative_path.startswith("projects/"):
+            parts = relative_path.split("/")
+            if len(parts) >= 3:  # projects/name/datei.py
+                project_name = parts[1]
+                plan_path = self.projects_path / project_name / "PLAN.md"
+                # Ausnahme: PLAN.md, PROGRESS.md, README.md selbst duerfen geschrieben werden
+                target_filename = parts[-1]
+                if target_filename not in ("PLAN.md", "PROGRESS.md", "README.md"):
+                    if not plan_path.exists():
+                        return (
+                            f"FEHLER (Plan-First): Kein PLAN.md in projects/{project_name}/. "
+                            f"Nutze zuerst create_project mit acceptance_criteria!"
+                        )
+
         # Warnungen bei Code-Dateien
         warnings = ""
         if relative_path.endswith(".py"):
@@ -91,6 +106,16 @@ class ActionEngine:
             f.write(content)
 
         self._log_action("write_file", relative_path, f"Erstellt: {len(content)} Zeichen")
+
+        # Auto-Progress: PROGRESS.md aktualisieren bei Projekt-Dateien
+        if relative_path.startswith("projects/"):
+            parts = relative_path.split("/")
+            if len(parts) >= 3:
+                project_name = parts[1]
+                target_filename = parts[-1]
+                if target_filename not in ("PROGRESS.md",):
+                    self._update_progress(project_name, f"Datei geschrieben: {'/'.join(parts[2:])}")
+
         return f"{target}{warnings}"
 
     def read_file(self, relative_path: str) -> str:
@@ -291,5 +316,28 @@ class ActionEngine:
         if not projects:
             return "(keine Projekte)"
         return "\n".join(f"  - {p}" for p in sorted(projects))
+
+    def _update_progress(self, project_name: str, entry: str):
+        """Aktualisiert PROGRESS.md eines Projekts automatisch."""
+        progress_path = self.projects_path / project_name / "PROGRESS.md"
+        if not progress_path.exists():
+            return
+
+        try:
+            now = datetime.now().strftime("%Y-%m-%d %H:%M")
+            line = f"- [{now}] {entry}\n"
+
+            content = progress_path.read_text(encoding="utf-8")
+            # Nach "### Fortschritt" einfuegen
+            marker = "### Fortschritt\n"
+            if marker in content:
+                idx = content.index(marker) + len(marker)
+                content = content[:idx] + line + content[idx:]
+            else:
+                content += f"\n{line}"
+
+            progress_path.write_text(content, encoding="utf-8")
+        except Exception:
+            pass
 
     # Ziele werden ueber GoalStack verwaltet (engine/goal_stack.py), nicht hier.

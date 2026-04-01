@@ -276,6 +276,23 @@ TOOLS = [
         },
     },
     {
+        "name": "complete_project",
+        "description": "Schliesst ein Projekt als FERTIG ab. Geht NUR wenn alle Akzeptanzkriterien in PLAN.md abgehakt sind. Aktualisiert Status in PROGRESS.md.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "project_name": {"type": "string", "description": "Name des Projekts"},
+                "verified_criteria": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Liste der erfuellten Kriterien (muss ALLE aus PLAN.md enthalten)",
+                },
+                "summary": {"type": "string", "description": "Was wurde erreicht?"},
+            },
+            "required": ["project_name", "verified_criteria", "summary"],
+        },
+    },
+    {
         "name": "self_diagnose",
         "description": "Fuehrt eine Selbst-Diagnose durch: Integrations-Checks, Dependency-Analyse, stille Fehler. Nutze das um zu pruefen ob alle deine Systeme richtig funktionieren.",
         "input_schema": {"type": "object", "properties": {}},
@@ -923,6 +940,73 @@ REGELN:
                 result += "\n".join(criteria_lines)
                 result += "\n\nPruefe JEDES Kriterium. Ist es erfuellt? Wenn nicht: was fehlt?"
                 return result
+
+            elif name == "complete_project":
+                project_name = tool_input["project_name"]
+                plan_path = config.DATA_PATH / "projects" / project_name / "PLAN.md"
+                progress_path = config.DATA_PATH / "projects" / project_name / "PROGRESS.md"
+
+                if not plan_path.exists():
+                    return f"FEHLER: Kein PLAN.md in projects/{project_name}/"
+
+                # Akzeptanzkriterien aus PLAN.md lesen
+                plan_content = plan_path.read_text(encoding="utf-8")
+                required_criteria = []
+                in_criteria = False
+                for line in plan_content.split("\n"):
+                    if line.startswith("##") and ("akzeptanzkriterien" in line.lower() or "acceptance" in line.lower()):
+                        in_criteria = True
+                        continue
+                    if in_criteria:
+                        if line.startswith("##"):
+                            break
+                        if line.strip().startswith("- ["):
+                            # Kriterium-Text extrahieren (ohne Checkbox)
+                            criterion = line.strip()[6:].strip() if "] " in line else line.strip()[4:].strip()
+                            required_criteria.append(criterion)
+
+                if not required_criteria:
+                    return "FEHLER: Keine Akzeptanzkriterien in PLAN.md gefunden."
+
+                # Pruefen ob ALLE Kriterien in verified_criteria enthalten sind
+                verified = tool_input.get("verified_criteria", [])
+                missing = []
+                for req in required_criteria:
+                    found = any(req.lower()[:30] in v.lower() for v in verified)
+                    if not found:
+                        missing.append(req)
+
+                if missing:
+                    return (
+                        f"FEHLER: Projekt kann nicht abgeschlossen werden.\n"
+                        f"Fehlende Kriterien ({len(missing)}):\n" +
+                        "\n".join(f"  - [ ] {m}" for m in missing)
+                    )
+
+                # Alles OK — Projekt abschliessen
+                # PLAN.md: Kriterien abhaken
+                updated_plan = plan_content
+                for criterion in required_criteria:
+                    updated_plan = updated_plan.replace(f"- [ ] {criterion}", f"- [x] {criterion}")
+                plan_path.write_text(updated_plan, encoding="utf-8")
+
+                # PROGRESS.md: Abschluss dokumentieren
+                if progress_path.exists():
+                    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M")
+                    summary = tool_input.get("summary", "Abgeschlossen")
+                    progress_content = progress_path.read_text(encoding="utf-8")
+                    progress_content = progress_content.replace(
+                        "## Status: IN ARBEIT",
+                        f"## Status: FERTIG ({now})"
+                    )
+                    progress_content += f"\n### Abschluss\n- [{now}] {summary}\n"
+                    progress_path.write_text(progress_content, encoding="utf-8")
+
+                self.communication.write_journal(
+                    f"Projekt '{project_name}' ABGESCHLOSSEN: {tool_input.get('summary', '')}",
+                    self.sequences_total,
+                )
+                return f"Projekt '{project_name}' erfolgreich abgeschlossen! Alle {len(required_criteria)} Kriterien erfuellt."
 
             elif name == "self_diagnose":
                 parts = []
