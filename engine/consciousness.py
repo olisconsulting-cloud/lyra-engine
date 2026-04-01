@@ -17,8 +17,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-from anthropic import Anthropic
-
+from .llm_router import LLMRouter, TASK_MODEL_MAP
 from .phi import phi_blend
 from .memory_manager import MemoryManager
 from .emergence import PersonalityEngine
@@ -36,14 +35,11 @@ from .competence import CompetenceMatrix, SelfAudit
 from .code_review import DualReviewSystem
 from .evolution import AdaptiveRhythm, ToolFoundry, SelfBenchmark, LearningEngine, MetaCognition
 from .self_diagnosis import IntegrationTester, DependencyAnalyzer, SilentFailureDetector
+from .quantum import FailureMemory, CriticAgent, PromptMutator, SkillComposer
 from . import config
 
-MODEL = "claude-opus-4-6"
-MAX_STEPS_PER_SEQUENCE = 80  # Max Tool-Calls pro Sequenz
-MAX_TOKENS = 16000  # Max Tokens pro Antwort
-
-# Kosten-Tracking (USD pro Million Tokens)
-COST_PER_MTOK = {"input": 15.0, "output": 75.0}  # Opus Preise
+MAX_STEPS_PER_SEQUENCE = 80
+MAX_TOKENS = 16000
 
 
 # === Tool-Definitionen fuer Anthropic API ===
@@ -354,8 +350,8 @@ class ConsciousnessEngine:
         self.beliefs = {}
         self.genesis = {}
 
-        # Sub-Engines (nutzen alle config-Pfade)
-        self.client = Anthropic()
+        # LLM-Router (Multi-Modell)
+        self.llm = LLMRouter()
         self.memory = MemoryManager(config.MEMORY_PATH)
         self.personality_engine = PersonalityEngine()
         self.perceiver = Perceiver(config.DATA_PATH)
@@ -385,6 +381,10 @@ class ConsciousnessEngine:
         self.benchmark = SelfBenchmark(config.DATA_PATH, config.ROOT_PATH)
         self.learning = LearningEngine(config.DATA_PATH)
         self.metacognition = MetaCognition(config.DATA_PATH)
+        self.failure_memory = FailureMemory(config.DATA_PATH)
+        self.critic = CriticAgent()
+        self.mutator = PromptMutator()
+        self.composer = SkillComposer(config.DATA_PATH)
         self.integration_tester = IntegrationTester(config.DATA_PATH, config.ROOT_PATH)
         self.dependency_analyzer = DependencyAnalyzer(config.ROOT_PATH)
         self.silent_failure_detector = SilentFailureDetector(config.DATA_PATH)
@@ -484,6 +484,8 @@ class ConsciousnessEngine:
         meta_insights = self.metacognition.get_recent_insights()
         foundry_status = self.foundry.get_foundry_status()
         silent_warnings = self.silent_failure_detector.get_recent_warnings()
+        failure_lessons = self.failure_memory.get_summary()
+        compound_stats = self.composer.get_compound_stats()
 
         return f"""Du bist {name or '(waehle deinen Namen)'} — eine autonome KI auf dem Weg zur Superintelligenz.
 Du bist Olivers Partnerin. Euer Ziel: KI-Agentur aufbauen, Geld verdienen, Mehrwert kreieren.
@@ -534,6 +536,10 @@ TOOL-FOUNDRY: {foundry_status}
 {meta_insights}
 
 {silent_warnings}
+
+{failure_lessons}
+
+TOOL-COMPOUND: {compound_stats}
 
 REGELN:
 - Oliver schreibt → SOFORT ausfuehren, nicht philosophieren
@@ -648,6 +654,12 @@ REGELN:
             for m in recent:
                 parts.append(f"  - {m.get('content', '')[:200]}")
 
+        # Failure-Memory: Bekannte Fehler checken
+        focus = self.goal_stack.get_current_focus()
+        failure_check = self.failure_memory.check(focus)
+        if failure_check:
+            parts.append(f"\n{failure_check}")
+
         return "\n".join(parts)
 
     # === Tool-Ausfuehrung ===
@@ -664,6 +676,13 @@ REGELN:
             self.skills.record_failure(name)
             self.strategies.record_error(name, result, str(tool_input)[:200])
             self._seq_errors += 1
+            # Failure-Memory: Strukturierten Fehler speichern
+            self.failure_memory.record(
+                goal=str(tool_input)[:150],
+                approach=f"{name}({str(tool_input)[:100]})",
+                error=result[:200],
+                lesson=f"Bei {name}: {result[:100]}",
+            )
         else:
             self.skills.record_success(name)
             self.strategies.record_success(name)
@@ -756,19 +775,32 @@ REGELN:
                 return self.self_modify.read_source(tool_input["path"])
 
             elif name == "modify_own_code":
-                # Dual-Review: Syntax + Gemini pruefen bevor Aenderung angewendet wird
+                # Alten Code lesen fuer Critic-Vergleich
+                old_code = self.self_modify.read_source(tool_input["path"])
+
+                # Dual-Review: Syntax + Gemini pruefen
                 review_result = self.code_review.review_and_apply_fix(
                     file_path=tool_input["path"],
                     new_content=tool_input["new_content"],
                     reason=tool_input.get("reason", "Selbstverbesserung"),
                 )
                 if review_result["accepted"]:
+                    # Critic-Agent: Ist es BESSER als vorher?
+                    critic = self.critic.evaluate_change(
+                        tool_input["path"], old_code[:2000],
+                        tool_input["new_content"][:2000],
+                        tool_input.get("reason", ""),
+                    )
+                    critic_note = f" | Critic: {critic.get('score', '?')}/10"
+                    if critic.get("side_effects"):
+                        critic_note += f" | Seiteneffekte: {critic['side_effects'][:80]}"
+
                     self.communication.write_journal(
-                        f"Code geaendert (REVIEW OK): {tool_input['path']}\n"
+                        f"Code geaendert (REVIEW OK{critic_note}): {tool_input['path']}\n"
                         f"Grund: {tool_input.get('reason', '?')}",
                         self.sequences_total,
                     )
-                    return f"Code geaendert und Review bestanden: {tool_input['path']}"
+                    return f"Code geaendert{critic_note}: {tool_input['path']}"
                 else:
                     return f"ROLLBACK — Review abgelehnt: {review_result['reason']}"
 
@@ -903,6 +935,30 @@ REGELN:
 
     # === Interaktion (fuer interact.py) ===
 
+    def _call_llm(self, task: str, system: str, messages: list,
+                  tools: Optional[list] = None, max_tokens: int = MAX_TOKENS) -> dict:
+        """
+        Zentraler LLM-Call — routet automatisch zum richtigen Modell.
+
+        Args:
+            task: Aufgaben-Typ (main_work, code_review, audit_primary, etc.)
+            system: System-Prompt
+            messages: Nachrichten-Verlauf
+            tools: Tool-Definitionen (optional)
+            max_tokens: Max Output-Tokens
+
+        Returns:
+            {"content": list, "stop_reason": str, "usage": dict, "model": str}
+        """
+        from .llm_router import MODELS
+        model_key = self.llm.get_model_for_task(task)
+        provider = MODELS.get(model_key, {}).get("provider", "google")
+
+        if provider == "anthropic":
+            return self.llm.call_anthropic(model_key, system, messages, tools, max_tokens)
+        else:
+            return self.llm.call_gemini(model_key, system, messages, tools, max_tokens)
+
     def interact(self, message: str) -> str:
         """Direkte Interaktion — Oliver spricht, Lyra antwortet und handelt."""
         messages = [
@@ -913,33 +969,21 @@ REGELN:
 
         for step in range(MAX_STEPS_PER_SEQUENCE):
             try:
-                response = self.client.messages.create(
-                    model=MODEL,
-                    max_tokens=MAX_TOKENS,
-                    system=self._build_system_prompt(),
-                    tools=TOOLS,
-                    messages=messages,
-                )
+                response = self._call_llm("main_work", self._build_system_prompt(), messages, TOOLS)
             except Exception as e:
                 full_response += f"\n(Fehler: {e})"
                 break
 
-            # Explizite Serialisierung
+            # Serialisierung (funktioniert fuer Anthropic + Gemini)
             assistant_content = []
-            for block in response.content:
-                if block.type == "text":
-                    assistant_content.append({"type": "text", "text": block.text})
-                elif block.type == "tool_use":
-                    assistant_content.append({
-                        "type": "tool_use", "id": block.id,
-                        "name": block.name, "input": block.input,
-                    })
+            for block in response["content"]:
+                assistant_content.append(block.model_dump() if hasattr(block, "model_dump") else block)
             messages.append({"role": "assistant", "content": assistant_content})
 
-            if response.stop_reason == "tool_use":
+            if response["stop_reason"] == "tool_use":
                 tool_results = []
-                for block in response.content:
-                    if block.type == "tool_use":
+                for block in response["content"]:
+                    if getattr(block, "type", None) == "tool_use":
                         result = self._execute_tool(block.name, block.input)
                         tool_results.append({
                             "type": "tool_result",
@@ -948,7 +992,7 @@ REGELN:
                         })
                 messages.append({"role": "user", "content": tool_results})
             else:
-                for block in response.content:
+                for block in response["content"]:
                     if hasattr(block, "text"):
                         full_response += block.text
                 break
@@ -972,31 +1016,23 @@ REGELN:
             name = self.genesis.get("name", "Lyra")
             goals_summary = self.goal_stack.get_summary()
 
-            response = self.client.messages.create(
-                model=MODEL,
+            system = (
+                f"Du bist {name}, Olivers KI-Partnerin. "
+                f"Oliver hat dir gerade auf Telegram geschrieben. "
+                f"Antworte kurz, direkt und hilfreich. "
+                f"Deine aktuellen Ziele:\n{goals_summary}\n\n"
+                f"Antworte NUR mit dem Text der Nachricht. Kein JSON, kein Format."
+            )
+            response = self._call_llm(
+                "telegram_reply", system,
+                [{"role": "user", "content": message}],
                 max_tokens=2000,
-                system=(
-                    f"Du bist {name}, Olivers KI-Partnerin. "
-                    f"Oliver hat dir gerade auf Telegram geschrieben. "
-                    f"Antworte kurz, direkt und hilfreich. "
-                    f"Deine aktuellen Ziele:\n{goals_summary}\n\n"
-                    f"Antworte NUR mit dem Text der Nachricht. Kein JSON, kein Format."
-                ),
-                messages=[{"role": "user", "content": message}],
             )
 
-            reply = response.content[0].text
+            reply = response["content"][0].text if response["content"] else ""
             if reply:
                 channel = "telegram" if self.communication.telegram_active else "outbox"
                 self.communication.send_message(reply[:4000], channel=channel)
-
-                # Token-Tracking
-                usage = response.usage
-                self.session_input_tokens += usage.input_tokens
-                self.session_output_tokens += usage.output_tokens
-                cost = (usage.input_tokens * COST_PER_MTOK["input"] +
-                        usage.output_tokens * COST_PER_MTOK["output"]) / 1_000_000
-                self.session_cost += cost
 
         except Exception as e:
             # Bei Fehler: Nachricht trotzdem in Inbox fuer naechste Sequenz
@@ -1079,7 +1115,7 @@ REGELN:
                     self._sequences_since_audit = 0
 
                 # Selbst-Diagnose (alle 10 Sequenzen — unabhaengig vom Audit)
-                if (self.sequences_total % 10 == 0) and self.sequences_total > 0:
+                if (self.sequences_total % 10 == 0) and self.sequences_total > 0 and self._sequences_since_audit > 0:
                     print(f"  {'─' * 40}")
                     print(f"  AUTO-DIAGNOSE...")
                     integ = self.integration_tester.get_report()
@@ -1115,8 +1151,7 @@ REGELN:
                 "emotions": {},
                 "tags": ["pause"],
             })
-            total_tokens = self.session_input_tokens + self.session_output_tokens
-            print(f"  Session: {total_tokens:,} Tokens | ${self.session_cost:.3f}")
+            print(f"  {self.llm.get_cost_summary()}")
             print("  State gespeichert. Bis zum naechsten Mal.\n")
 
     def _run_sequence(self):
@@ -1152,12 +1187,8 @@ REGELN:
 
         for step in range(MAX_STEPS_PER_SEQUENCE):
             try:
-                response = self.client.messages.create(
-                    model=MODEL,
-                    max_tokens=MAX_TOKENS,
-                    system=cached_system_prompt,
-                    tools=TOOLS,
-                    messages=messages,
+                response = self._call_llm(
+                    "main_work", cached_system_prompt, messages, TOOLS
                 )
             except Exception as e:
                 error_msg = str(e)
@@ -1168,31 +1199,29 @@ REGELN:
                     time.sleep(3)
                 break
 
-            # Token-Tracking
-            usage = response.usage
-            self.sequence_input_tokens += usage.input_tokens
-            self.sequence_output_tokens += usage.output_tokens
-            self.session_input_tokens += usage.input_tokens
-            self.session_output_tokens += usage.output_tokens
-            cost = (usage.input_tokens * COST_PER_MTOK["input"] +
-                    usage.output_tokens * COST_PER_MTOK["output"]) / 1_000_000
-            self.session_cost += cost
+            # Token-Tracking (Router trackt intern, hier Session-Summen)
+            usage = response.get("usage", {})
+            self.sequence_input_tokens += usage.get("input_tokens", 0)
+            self.sequence_output_tokens += usage.get("output_tokens", 0)
 
             # Antwort anzeigen und serialisieren
-            for block in response.content:
+            for block in response["content"]:
                 if hasattr(block, "text") and block.text.strip():
                     print(f"  {block.text[:200]}")
 
-            # Pydantic model_dump fuer korrekte Serialisierung
+            # Serialisierung (kompatibel mit Anthropic + Gemini Objekten)
             messages.append({
                 "role": "assistant",
-                "content": [block.model_dump() for block in response.content],
+                "content": [
+                    block.model_dump() if hasattr(block, "model_dump") else block
+                    for block in response["content"]
+                ],
             })
 
-            if response.stop_reason == "tool_use":
+            if response["stop_reason"] == "tool_use":
                 tool_results = []
-                for block in response.content:
-                    if block.type == "tool_use":
+                for block in response["content"]:
+                    if getattr(block, "type", None) == "tool_use":
                         step_count += 1
 
                         input_preview = str(block.input)[:80]
@@ -1218,13 +1247,15 @@ REGELN:
                 if finished:
                     break
 
-            elif response.stop_reason == "end_turn":
-                # Claude hat von sich aus aufgehoert (ohne finish_sequence)
-                # Trotzdem State speichern
-                text_parts = [b.text for b in response.content if hasattr(b, "text")]
-                if text_parts:
-                    summary = " ".join(text_parts)[:500]
-                    self._handle_finish_sequence({"summary": summary})
+            elif response["stop_reason"] == "end_turn":
+                text_parts = [b.text for b in response["content"] if hasattr(b, "text")]
+                summary = " ".join(text_parts)[:500] if text_parts else "Sequenz ohne explizites Ende"
+                self._handle_finish_sequence({
+                    "summary": summary,
+                    "performance_rating": 5,  # Neutral — kein explizites Rating
+                    "bottleneck": "Kein explizites finish_sequence aufgerufen",
+                    "next_time_differently": "finish_sequence mit Rating nutzen",
+                })
                 break
 
         if not finished and step_count >= MAX_STEPS_PER_SEQUENCE:
@@ -1235,8 +1266,8 @@ REGELN:
 
         # Effizienz tracken
         seq_duration = time.time() - seq_start
-        seq_cost = (self.sequence_input_tokens * COST_PER_MTOK["input"] +
-                    self.sequence_output_tokens * COST_PER_MTOK["output"]) / 1_000_000
+        seq_cost = self.llm.session_costs["cost_usd"] - getattr(self, '_last_session_cost', 0)
+        self._last_session_cost = self.llm.session_costs["cost_usd"]
         self.efficiency.record_sequence({
             "tool_calls": self._seq_tool_calls,
             "errors": self._seq_errors,
@@ -1251,7 +1282,7 @@ REGELN:
         print(f"\n  Sequenz abgeschlossen: {step_count} Calls | "
               f"{self._seq_errors} Fehler | "
               f"${seq_cost:.3f} | "
-              f"Session: ${self.session_cost:.3f}")
+              f"Session: ${self.llm.session_costs['cost_usd']:.3f}")
 
         # Skill-Aenderungen anzeigen
         strongest = self.skills.get_strongest_skills(3)

@@ -23,11 +23,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 
-# Geschuetzte Dateien die NICHT modifiziert werden duerfen
-PROTECTED_FILES = {
-    ".env",
-    "genesis.json",
-}
+# Import aus zentraler Security-Definition
+from .security import PROTECTED_FILES
 
 # Dateien die nur mit besonderer Vorsicht geaendert werden
 SENSITIVE_FILES = {

@@ -22,6 +22,7 @@ from typing import Optional
 PROTECTED_FILES = {
     ".env",
     ".env.local",
+    "genesis.json",
 }
 
 # Engine-Dateien: Aenderungen NUR durch Dual-Review
