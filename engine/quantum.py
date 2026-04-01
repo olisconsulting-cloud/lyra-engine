@@ -84,9 +84,20 @@ class FailureMemory:
         if not self.failures:
             return ""
 
+        # Stoppwoerter die False Positives erzeugen
+        stopwords = {
+            "kein", "keine", "nicht", "und", "oder", "der", "die", "das",
+            "ein", "eine", "ist", "hat", "mit", "von", "zu", "auf", "in",
+            "fuer", "noch", "aktive", "ziele", "aktiv", "fokus", "sequenz",
+            "the", "and", "for", "not", "this", "that", "with",
+        }
+
         goal_lower = goal.lower()
-        goal_words = set(goal_lower.split())
+        goal_words = set(goal_lower.split()) - stopwords
         matches = []
+
+        if not goal_words:
+            return ""
 
         for failure in self.failures:
             # Match 1: Tool-Name im Ziel enthalten
@@ -95,13 +106,12 @@ class FailureMemory:
                 matches.append(failure)
                 continue
 
-            # Match 2: Wort-Overlap (grosszuegiger: 1 Wort reicht)
+            # Match 2: Wort-Overlap (ohne Stoppwoerter, min 2 Woerter)
             failure_goal = failure.get("goal", "").lower()
-            failure_words = set(failure_goal.split())
-            # Auch approach-Woerter einbeziehen
-            failure_words.update(approach.split())
+            failure_words = set(failure_goal.split()) - stopwords
+            failure_words.update(set(approach.split()) - stopwords)
             overlap = len(goal_words & failure_words)
-            if overlap >= 1:
+            if overlap >= 2:
                 matches.append(failure)
 
         if not matches:

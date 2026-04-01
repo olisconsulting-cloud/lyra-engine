@@ -747,15 +747,12 @@ REGELN:
             elif name == "create_tool":
                 # Skill-Komposition: Pruefen ob existierende Tools helfen
                 desc = tool_input.get("description", "")
+                # Skill-Komposition: Hint IMMER anzeigen (auch bei Fehler)
                 composition_hint = self.composer.suggest_composition(desc)
-                if composition_hint:
-                    # Hint wird als Teil des Ergebnisses zurueckgegeben
-                    pass  # Lyra sieht es im naechsten Kontext
-
                 result = self.toolchain.create_tool(
                     tool_input["name"], desc, tool_input["code"],
                 )
-                if composition_hint and "erstellt" in result.lower():
+                if composition_hint:
                     result += f"\n{composition_hint}"
                 return result
 
@@ -795,8 +792,12 @@ REGELN:
                 return self.self_modify.read_source(tool_input["path"])
 
             elif name == "modify_own_code":
-                # Alten Code lesen fuer Critic-Vergleich
-                old_code = self.self_modify.read_source(tool_input["path"])
+                # Alten Code lesen fuer Critic-Vergleich (ROHER Dateiinhalt, nicht formatiert)
+                try:
+                    raw_path = (config.ROOT_PATH / tool_input["path"]).resolve()
+                    old_code = raw_path.read_text(encoding="utf-8") if raw_path.exists() else ""
+                except Exception:
+                    old_code = ""
 
                 # Dual-Review: Syntax + Gemini pruefen
                 review_result = self.code_review.review_and_apply_fix(
@@ -811,7 +812,13 @@ REGELN:
                         tool_input["new_content"][:2000],
                         tool_input.get("reason", ""),
                     )
-                    score = critic.get("score", 5)
+                    raw_score = critic.get("score", 5)
+                    # Score validieren: Muss int/float sein, sonst Default 5
+                    try:
+                        score = int(raw_score) if not isinstance(raw_score, (int, float)) else raw_score
+                    except (ValueError, TypeError):
+                        score = 5
+                    score = max(1, min(10, score))
                     critic_note = f" | Critic: {score}/10"
                     if critic.get("side_effects"):
                         critic_note += f" | Seiteneffekte: {critic['side_effects'][:80]}"
@@ -884,7 +891,7 @@ REGELN:
                     tool_input["description"],
                     self.toolchain,
                 )
-                if composition_hint and "erstellt" in result.lower():
+                if composition_hint:
                     result += f"\n{composition_hint}"
                 return result
 

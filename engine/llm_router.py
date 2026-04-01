@@ -338,7 +338,7 @@ class LLMRouter:
             self.model_usage[model_key]["calls"] += 1
             self.model_usage[model_key]["input_tokens"] += input_tokens
             self.model_usage[model_key]["output_tokens"] += output_tokens
-        self.model_usage[model_key]["cost"] += cost
+            self.model_usage[model_key]["cost"] += cost
 
     def get_cost_summary(self) -> str:
         """Session-Kosten-Uebersicht."""
