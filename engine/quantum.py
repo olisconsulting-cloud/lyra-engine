@@ -77,18 +77,31 @@ class FailureMemory:
         """
         Prueft ob es bekannte Fehler fuer ein aehnliches Ziel gibt.
 
-        Nutzt einfaches Wort-Matching — nicht perfekt, aber schnell und kostenlos.
+        Matching-Strategie:
+        1. Tool-Name Match (approach enthält den Tool-Namen)
+        2. Wort-Overlap (mindestens 1 gemeinsames Wort reicht)
         """
         if not self.failures:
             return ""
 
-        goal_words = set(goal.lower().split())
+        goal_lower = goal.lower()
+        goal_words = set(goal_lower.split())
         matches = []
 
         for failure in self.failures:
-            failure_words = set(failure.get("goal", "").lower().split())
+            # Match 1: Tool-Name im Ziel enthalten
+            approach = failure.get("approach", "").lower()
+            if approach and approach in goal_lower:
+                matches.append(failure)
+                continue
+
+            # Match 2: Wort-Overlap (grosszuegiger: 1 Wort reicht)
+            failure_goal = failure.get("goal", "").lower()
+            failure_words = set(failure_goal.split())
+            # Auch approach-Woerter einbeziehen
+            failure_words.update(approach.split())
             overlap = len(goal_words & failure_words)
-            if overlap >= 2:  # Mindestens 2 gemeinsame Woerter
+            if overlap >= 1:
                 matches.append(failure)
 
         if not matches:

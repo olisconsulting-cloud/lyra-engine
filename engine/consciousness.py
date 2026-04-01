@@ -654,9 +654,14 @@ REGELN:
             for m in recent:
                 parts.append(f"  - {m.get('content', '')[:200]}")
 
-        # Failure-Memory: Bekannte Fehler checken
+        # Failure-Memory + Skill-Komposition: Vor jeder Sequenz checken
         focus = self.goal_stack.get_current_focus()
         failure_check = self.failure_memory.check(focus)
+
+        # Skill-Komposition: Relevante existierende Tools anzeigen
+        composition = self.composer.suggest_composition(focus)
+        if composition:
+            parts.append(f"\n{composition}")
         if failure_check:
             parts.append(f"\n{failure_check}")
 
@@ -677,11 +682,18 @@ REGELN:
             self.strategies.record_error(name, result, str(tool_input)[:200])
             self._seq_errors += 1
             # Failure-Memory: Strukturierten Fehler speichern
+            # Failure-Memory: Sinnvolle Felder statt Dict-Dump
+            # Goal = was versucht wurde (menschenlesbar)
+            goal_desc = tool_input.get("path", "") or tool_input.get("name", "") or tool_input.get("code", "")[:50] or name
+            approach_desc = f"{name}: {goal_desc}"
+            # Lektion = Fehlertyp + konkreter Vermeidungstipp
+            error_short = result.replace("FEHLER", "").replace("(Security)", "").strip()[:100]
+            lesson = self.strategies._suggest_strategy(name, self.strategies._classify_error(result), error_short)
             self.failure_memory.record(
-                goal=str(tool_input)[:150],
-                approach=f"{name}({str(tool_input)[:100]})",
-                error=result[:200],
-                lesson=f"Bei {name}: {result[:100]}",
+                goal=approach_desc,
+                approach=name,
+                error=error_short,
+                lesson=lesson,
             )
         else:
             self.skills.record_success(name)
@@ -733,11 +745,19 @@ REGELN:
                 )
 
             elif name == "create_tool":
-                return self.toolchain.create_tool(
-                    tool_input["name"],
-                    tool_input.get("description", ""),
-                    tool_input["code"],
+                # Skill-Komposition: Pruefen ob existierende Tools helfen
+                desc = tool_input.get("description", "")
+                composition_hint = self.composer.suggest_composition(desc)
+                if composition_hint:
+                    # Hint wird als Teil des Ergebnisses zurueckgegeben
+                    pass  # Lyra sieht es im naechsten Kontext
+
+                result = self.toolchain.create_tool(
+                    tool_input["name"], desc, tool_input["code"],
                 )
+                if composition_hint and "erstellt" in result.lower():
+                    result += f"\n{composition_hint}"
+                return result
 
             elif name == "use_tool":
                 return self.toolchain.use_tool(
@@ -791,9 +811,22 @@ REGELN:
                         tool_input["new_content"][:2000],
                         tool_input.get("reason", ""),
                     )
-                    critic_note = f" | Critic: {critic.get('score', '?')}/10"
+                    score = critic.get("score", 5)
+                    critic_note = f" | Critic: {score}/10"
                     if critic.get("side_effects"):
                         critic_note += f" | Seiteneffekte: {critic['side_effects'][:80]}"
+
+                    # CRITIC ENTSCHEIDET: Score < 4 = Rollback
+                    if isinstance(score, (int, float)) and score < 4:
+                        # Rollback — Critic sagt: Verschlechterung
+                        self.code_review._rollback(
+                            (config.ROOT_PATH / tool_input["path"]).resolve(),
+                            old_code,
+                        )
+                        return (
+                            f"ROLLBACK — Critic-Score zu niedrig ({score}/10): "
+                            f"{critic.get('side_effects', 'Verschlechterung')[:100]}"
+                        )
 
                     self.communication.write_journal(
                         f"Code geaendert (REVIEW OK{critic_note}): {tool_input['path']}\n"
@@ -844,11 +877,16 @@ REGELN:
             # === Task Queue ===
             # === Tool-Foundry (Meta-Tools) ===
             elif name == "generate_tool":
-                return self.foundry.generate_tool(
+                # Skill-Komposition: Existierende Tools pruefen
+                composition_hint = self.composer.suggest_composition(tool_input["description"])
+                result = self.foundry.generate_tool(
                     tool_input["name"],
                     tool_input["description"],
                     self.toolchain,
                 )
+                if composition_hint and "erstellt" in result.lower():
+                    result += f"\n{composition_hint}"
+                return result
 
             elif name == "combine_tools":
                 return self.foundry.combine_tools(
@@ -1180,6 +1218,18 @@ REGELN:
                 "Du MUSST in dieser Sequenz mindestens EINE Verbesserung an deinem eigenen Code machen. "
                 "Nutze read_own_code + modify_own_code. Das ist NICHT optional."
             )
+            # Prompt-Mutator: 3 Varianten fuer die Verbesserung generieren
+            try:
+                variants = self.mutator.generate_variants(
+                    "Welches Engine-Modul soll verbessert werden und wie?",
+                    context=f"Verfuegbare Module: actions.py, toolchain.py, web_access.py, intelligence.py, extensions.py, security.py",
+                )
+                if len(variants) > 1:
+                    best_idx = self.mutator.select_best(variants, "Groesster Impact auf Qualitaet und Sicherheit")
+                    best_variant = variants[best_idx]
+                    cached_system_prompt += f"\nEMPFOHLENER ANSATZ: {best_variant}"
+            except Exception:
+                pass
 
         print(f"  {'─' * 56}")
         print(f"  Sequenz {self.sequences_total + 1} [{mode['mode'].upper()}]")
