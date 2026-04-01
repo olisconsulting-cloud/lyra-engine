@@ -219,18 +219,69 @@ class ActionEngine:
 
     # === Projekte verwalten ===
 
-    def create_project(self, name: str, description: str) -> str:
-        """Erstellt ein neues Projekt mit README."""
+    def create_project(self, name: str, description: str,
+                       acceptance_criteria: Optional[list[str]] = None,
+                       phases: Optional[list[str]] = None) -> str:
+        """
+        Erstellt ein neues Projekt mit Plan-First Template.
+
+        Jedes Projekt bekommt automatisch:
+        - README.md — Was und warum
+        - PLAN.md — Akzeptanzkriterien + Phasen
+        - PROGRESS.md — Fortschritts-Tracking
+        """
         project_path = self.projects_path / name
         if project_path.exists():
             return f"Projekt '{name}' existiert bereits."
 
         project_path.mkdir(parents=True)
-        readme = f"# {name}\n\n{description}\n\nErstellt: {datetime.now().strftime('%Y-%m-%d %H:%M')}\n"
+        now = datetime.now().strftime("%Y-%m-%d %H:%M")
+
+        # README
+        readme = f"# {name}\n\n{description}\n\nErstellt: {now}\n"
         (project_path / "README.md").write_text(readme, encoding="utf-8")
 
-        self._log_action("create_project", name, f"Erstellt: {project_path}")
-        return f"Projekt '{name}' erstellt in {project_path}"
+        # PLAN.md — Das Herzstück
+        criteria = acceptance_criteria or ["Definiere Akzeptanzkriterien!"]
+        plan_phases = phases or ["1. Planung", "2. Implementierung", "3. Testing", "4. Review"]
+
+        plan = f"""# PLAN — {name}
+
+## Ziel
+{description}
+
+## Akzeptanzkriterien (wann ist es FERTIG?)
+{chr(10).join(f'- [ ] {c}' for c in criteria)}
+
+## Phasen
+{chr(10).join(f'- [ ] {p}' for p in plan_phases)}
+
+## Technische Entscheidungen
+(Hier dokumentieren: Welche Technologie? Welche Architektur? Warum?)
+
+## Erstellt
+{now}
+"""
+        (project_path / "PLAN.md").write_text(plan, encoding="utf-8")
+
+        # PROGRESS.md
+        progress = f"""# PROGRESS — {name}
+
+## Status: IN ARBEIT
+
+### Fortschritt
+- [{now}] Projekt erstellt
+
+### Offene Fragen
+(Hier dokumentieren was unklar ist)
+
+### Entscheidungen
+(Hier dokumentieren was entschieden wurde und warum)
+"""
+        (project_path / "PROGRESS.md").write_text(progress, encoding="utf-8")
+
+        self._log_action("create_project", name, f"Erstellt mit Plan: {project_path}")
+        return f"Projekt '{name}' erstellt mit PLAN.md + PROGRESS.md in {project_path}"
 
     def list_projects(self) -> str:
         """Listet alle Projekte."""

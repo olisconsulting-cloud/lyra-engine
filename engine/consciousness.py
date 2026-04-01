@@ -124,14 +124,24 @@ TOOLS = [
     },
     {
         "name": "create_project",
-        "description": "Erstellt ein neues Projekt mit Ordner und README.",
+        "description": "Erstellt ein neues Projekt mit PLAN.md (Akzeptanzkriterien + Phasen) und PROGRESS.md. IMMER zuerst planen, dann bauen.",
         "input_schema": {
             "type": "object",
             "properties": {
                 "name": {"type": "string", "description": "Projektname (kebab-case)"},
-                "description": {"type": "string", "description": "Projektbeschreibung"},
+                "description": {"type": "string", "description": "Was wird gebaut und WARUM"},
+                "acceptance_criteria": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Wann ist das Projekt FERTIG? Konkrete, pruefbare Kriterien.",
+                },
+                "phases": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Ausfuehrungsphasen in Reihenfolge",
+                },
             },
-            "required": ["name", "description"],
+            "required": ["name", "description", "acceptance_criteria"],
         },
     },
     {
@@ -253,6 +263,17 @@ TOOLS = [
         "name": "git_status",
         "description": "Zeigt den aktuellen Git-Status (geaenderte Dateien).",
         "input_schema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "verify_project",
+        "description": "Prueft ein Projekt gegen seine Akzeptanzkriterien in PLAN.md. Nutze das am Ende jedes Projekts.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "project_name": {"type": "string", "description": "Name des Projekts in projects/"},
+            },
+            "required": ["project_name"],
+        },
     },
     {
         "name": "self_diagnose",
@@ -544,6 +565,11 @@ TOOL-COMPOUND: {compound_stats}
 REGELN:
 - Oliver schreibt → SOFORT ausfuehren, nicht philosophieren
 - Keine Aufgabe → Arbeite an Zielen ODER verbessere dich selbst
+- PLAN FIRST: Bei JEDEM neuen Projekt IMMER zuerst create_project mit
+  acceptance_criteria aufrufen. Erst PLAN.md schreiben, dann Code.
+  Nie direkt coden ohne Plan. Akzeptanzkriterien MUESSEN definiert sein.
+- Projekt-Ablauf: Plan → Build → Test → gegen Akzeptanzkriterien pruefen
+- Am Ende jedes Projekts: PLAN.md lesen und JEDES Kriterium abhaken
 - Baue Tools die du wiederverwendest — jedes Tool = permanente Faehigkeit
 - Nutze web_search/web_read zum Lernen
 - read_own_code + modify_own_code = Selbst-Evolution (sicher durch Dual-Review)
@@ -741,7 +767,10 @@ REGELN:
 
             elif name == "create_project":
                 return self.actions.create_project(
-                    tool_input["name"], tool_input.get("description", "")
+                    tool_input["name"],
+                    tool_input.get("description", ""),
+                    tool_input.get("acceptance_criteria"),
+                    tool_input.get("phases"),
                 )
 
             elif name == "create_tool":
@@ -864,6 +893,36 @@ REGELN:
 
             elif name == "git_status":
                 return self.git.status()
+
+            elif name == "verify_project":
+                # Liest PLAN.md und gibt Akzeptanzkriterien zurueck
+                plan_path = config.DATA_PATH / "projects" / tool_input["project_name"] / "PLAN.md"
+                if not plan_path.exists():
+                    return f"FEHLER: Kein PLAN.md in projects/{tool_input['project_name']}/"
+
+                plan_content = plan_path.read_text(encoding="utf-8")
+
+                # Akzeptanzkriterien extrahieren
+                criteria_lines = []
+                in_criteria = False
+                for line in plan_content.split("\n"):
+                    # Header erkennen (nur ## Zeilen, nicht Checkbox-Zeilen)
+                    if line.startswith("##") and ("akzeptanzkriterien" in line.lower() or "acceptance" in line.lower()):
+                        in_criteria = True
+                        continue
+                    if in_criteria:
+                        if line.startswith("##"):
+                            break
+                        if line.strip().startswith("- ["):
+                            criteria_lines.append(line.strip())
+
+                if not criteria_lines:
+                    return f"Keine Akzeptanzkriterien in PLAN.md gefunden."
+
+                result = f"AKZEPTANZKRITERIEN fuer {tool_input['project_name']}:\n"
+                result += "\n".join(criteria_lines)
+                result += "\n\nPruefe JEDES Kriterium. Ist es erfuellt? Wenn nicht: was fehlt?"
+                return result
 
             elif name == "self_diagnose":
                 parts = []
