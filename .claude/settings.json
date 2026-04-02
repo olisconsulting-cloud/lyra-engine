@@ -1,0 +1,35 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(grep -o '\"[^\"]*\"$')",
+      "Bash(grep -h \"^import\\\\|^from\" /c/Users/olisc/Claude/Lyra/engine/*.py)",
+      "Bash(python3 -c \"import engine.consciousness\")",
+      "Bash(python -m py_compile engine/security.py)",
+      "Bash(python -m py_compile engine/code_review.py)",
+      "Bash(python -m py_compile engine/extensions.py)",
+      "Bash(python -m py_compile engine/actions.py)",
+      "Bash(python -m py_compile engine/self_modify.py)",
+      "Bash(python -m py_compile engine/config.py)",
+      "Bash(python -m py_compile engine/goal_stack.py)",
+      "Bash(python -m py_compile engine/intelligence.py)",
+      "Bash(python -m py_compile engine/quantum.py)",
+      "Bash(python -m py_compile engine/communication.py)",
+      "Bash(git add:*)",
+      "Bash(python -m py_compile engine/competence.py)",
+      "Bash(python -m py_compile engine/consciousness.py)",
+      "Bash(git checkout:*)",
+      "Bash(git merge:*)",
+      "Bash(ls engine/*.py)",
+      "Bash(venv/Scripts/pip.exe list:*)",
+      "Bash(venv/Scripts/python.exe -c ':*)",
+      "Bash(venv/Scripts/python.exe --version)",
+      "Bash(git push:*)",
+      "Bash(git branch:*)",
+      "Bash(python run.py --once)",
+      "Bash(python -m py_compile run_live.py)",
+      "Bash(python -m py_compile setup.py)",
+      "Bash(git commit -m ':*)",
+      "Bash(python -m py_compile engine/llm_router.py)"
+    ]
+  }
+}
