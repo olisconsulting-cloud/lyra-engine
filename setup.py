@@ -10,19 +10,147 @@ Nutzung:
 """
 
 import json
+import os
 import shutil
 import sys
 from datetime import datetime
 from pathlib import Path
+
+import httpx
 
 sys.path.insert(0, str(Path(__file__).parent))
 from engine.config import (
     DATA_PATH, GENESIS_PATH, MISSION_PATH, PREFERENCES_PATH,
     ENV_PATH, ROOT_PATH, ensure_data_dirs,
 )
+from engine.llm_router import MODELS, TASK_MODEL_MAP
 
 LINE = "=" * 60
 THIN = "-" * 60
+
+
+# === Prompt-Optimierung via LLM ===
+
+def _get_optimize_api():
+    """Holt API-Config fuer Prompt-Optimierung aus dem Router."""
+    model_key = TASK_MODEL_MAP.get("main_work", "kimi_k25")
+    config = MODELS.get(model_key, {})
+    provider = config.get("provider", "")
+    model_id = config.get("model_id", "")
+
+    if provider == "nvidia":
+        api_key = os.getenv("NVIDIA_API_KEY", "").strip()
+        url = "https://integrate.api.nvidia.com/v1/chat/completions"
+    elif provider == "google":
+        api_key = os.getenv("GOOGLE_AI_API_KEY", "").strip()
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_id}:generateContent"
+    elif provider == "deepseek":
+        api_key = os.getenv("DEEPSEEK_API_KEY", "").strip()
+        url = "https://api.deepseek.com/chat/completions"
+    else:
+        return None, None, None, None
+
+    return api_key, url, provider, model_id
+
+
+def _call_optimize_api(prompt: str, api_key: str, url: str,
+                       provider: str, model_id: str) -> str:
+    """Ruft die konfigurierte API auf fuer Prompt-Optimierung."""
+    try:
+        with httpx.Client(timeout=20.0) as client:
+            if provider == "google":
+                resp = client.post(
+                    url, params={"key": api_key},
+                    json={
+                        "systemInstruction": {"parts": [{"text": (
+                            "Du bist ein Prompt-Optimierer. Optimiere die Eingabe: "
+                            "mach sie klarer, konkreter, strukturierter. "
+                            "Ergaenze fehlende Details wenn offensichtlich. "
+                            "Antworte NUR mit dem optimierten Text. "
+                            "Gleiche Sprache wie die Eingabe."
+                        )}]},
+                        "contents": [{"parts": [{"text": prompt}]}],
+                        "generationConfig": {"maxOutputTokens": 500},
+                    },
+                )
+                if resp.status_code != 200:
+                    return ""
+                return resp.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
+            else:
+                resp = client.post(
+                    url,
+                    headers={"Authorization": f"Bearer {api_key}",
+                             "Content-Type": "application/json"},
+                    json={
+                        "model": model_id,
+                        "messages": [
+                            {"role": "system", "content": (
+                                "Du bist ein Prompt-Optimierer. Optimiere die Eingabe: "
+                                "mach sie klarer, konkreter, strukturierter. "
+                                "Ergaenze fehlende Details wenn offensichtlich. "
+                                "Antworte NUR mit dem optimierten Text. "
+                                "Gleiche Sprache wie die Eingabe."
+                            )},
+                            {"role": "user", "content": prompt},
+                        ],
+                        "max_tokens": 500,
+                    },
+                )
+                if resp.status_code != 200:
+                    return ""
+                return resp.json()["choices"][0]["message"]["content"].strip()
+    except Exception:
+        return ""
+
+
+def optimize_with_user(raw_input: str, context: str) -> str:
+    """
+    Prompt-Engineering Schleife: Optimieren -> User bestaetigen -> ggf. anpassen.
+    """
+    api_key, url, provider, model_id = _get_optimize_api()
+    if not api_key:
+        return raw_input
+
+    print(f"\n  {'·' * 40}")
+    print("  PROMPT-OPTIMIERUNG")
+    print(f"  {'·' * 40}")
+    print(f"  Deine Eingabe: {raw_input}")
+    print("\n  Optimiere...")
+
+    prompt = f"Kontext: {context}\n\nOriginal-Eingabe:\n{raw_input}"
+    optimized = _call_optimize_api(prompt, api_key, url, provider, model_id)
+
+    if not optimized or optimized == raw_input:
+        print("  (Keine Optimierung moeglich)")
+        return raw_input
+
+    print(f"\n  Optimierter Vorschlag:")
+    print(f"  {'─' * 40}")
+    for line in optimized.split("\n"):
+        print(f"    {line}")
+    print(f"  {'─' * 40}")
+
+    while True:
+        choice = input(
+            "\n  [1] Optimierte Version uebernehmen\n"
+            "  [2] Eigene Version behalten\n"
+            "  [3] Anpassen (nochmal eingeben)\n"
+            "  Wahl [1]: "
+        ).strip()
+
+        if choice in ("", "1"):
+            print("  Uebernommen.")
+            return optimized
+        elif choice == "2":
+            print("  Ok, behalte deine Version.")
+            return raw_input
+        elif choice == "3":
+            new_input = input("  Neue Eingabe: ").strip()
+            if new_input:
+                return optimize_with_user(new_input, context)
+            return optimized
+        else:
+            print("  Bitte 1, 2 oder 3.")
 
 
 def ask(prompt: str, required: bool = False, default: str = "") -> str:
@@ -100,24 +228,33 @@ def gather_pflicht() -> dict:
     data["owner_role"] = ask("Was machst du so? (Rolle/Beruf)", required=True)
     print(f"\n  Freut mich, {data['owner_name']}!\n")
 
-    # 3. Mission
+    # 3. Mission (mit Prompt-Optimierung)
     print(f"  {'─' * 40}")
     print("  Was ist meine Aufgabe?")
     print("  (Was soll ich fuer dich tun? 1-3 Saetze reichen.)\n")
-    data["mission"] = ask("", required=True)
-    print(f"\n  Verstanden.\n")
+    raw_mission = ask("", required=True)
+    data["mission"] = optimize_with_user(
+        raw_mission,
+        "Mission/Arbeitsanweisung fuer eine autonome KI. "
+        "Soll klar definieren WAS die KI tun soll, WOFUER und mit welchem ZIEL.",
+    )
+    print(f"\n  Mission gesetzt.\n")
 
-    # 4-6. Ziele
+    # 4-6. Ziele (mit Prompt-Optimierung)
     print(f"  {'─' * 40}")
     print("  Womit soll ich anfangen?")
     print("  (Gib mir 1-3 konkrete Ziele zum Start.)\n")
     data["goals"] = []
     for i in range(1, 4):
         label = ["Erstes", "Zweites", "Drittes"][i - 1]
-        suffix = "" if i > 1 else ""
-        goal = ask(f"{label} Ziel{'  (Enter = reicht)' if i > 1 else ''}", required=(i == 1))
-        if goal:
-            data["goals"].append(goal)
+        raw_goal = ask(f"{label} Ziel{'  (Enter = reicht)' if i > 1 else ''}", required=(i == 1))
+        if raw_goal:
+            optimized_goal = optimize_with_user(
+                raw_goal,
+                "Konkretes Ziel fuer eine autonome KI. "
+                "Soll messbar, spezifisch und mit klarem Done-Kriterium sein.",
+            )
+            data["goals"].append(optimized_goal)
         elif i > 1:
             break
     print(f"\n  {len(data['goals'])} Ziel{'e' if len(data['goals']) != 1 else ''} notiert.\n")
