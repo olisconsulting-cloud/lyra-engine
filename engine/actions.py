@@ -12,14 +12,15 @@ Jede Aktion wird geloggt und ist nachvollziehbar.
 
 import json
 import os
+import re
 import subprocess
-
-from .security import SecurityGateway
-from . import config
-from .config import safe_json_write, safe_json_read
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+
+from . import config
+from .config import safe_json_write, safe_json_read
+from .security import SecurityGateway
 from typing import Optional
 
 
@@ -259,9 +260,9 @@ class ActionEngine:
 
         # Aehnliche Projekte pruefen (Wort-Overlap im Namen)
         if self.projects_path.exists():
-            import re
             stop = {"und", "oder", "fuer", "mit", "der", "die", "das", "ein", "eine",
-                    "zu", "von", "in", "auf", "an", "bei", "nach", "aus", "um"}
+                    "zu", "von", "in", "auf", "an", "bei", "nach", "aus", "um",
+                    "ueber", "unter", "durch", "gegen", "ohne", "seit"}
             new_words = {w for w in re.split(r"[\s\-_:.()]+", name.lower()) if len(w) >= 2} - stop
             for existing in self.projects_path.iterdir():
                 if not existing.is_dir():
@@ -271,7 +272,7 @@ class ActionEngine:
                     continue
                 overlap = len(new_words & ex_words)
                 union = len(new_words | ex_words)
-                if union and overlap / union >= 0.3:
+                if union and overlap / union >= 0.5:
                     return (
                         f"AEHNLICHES PROJEKT EXISTIERT: '{existing.name}'. "
                         f"Arbeite am bestehenden Projekt statt ein neues zu erstellen!"

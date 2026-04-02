@@ -8,6 +8,7 @@ Echte Zielstruktur die ueber Zyklen hinweg arbeitet:
 - Abhaengigkeiten zwischen Goals werden beachtet
 """
 
+import re
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -41,9 +42,9 @@ class GoalStack:
         """
         # Stoppwoerter die keine Semantik tragen
         stop = {"und", "oder", "fuer", "mit", "der", "die", "das", "ein", "eine",
-                "zu", "von", "in", "auf", "an", "bei", "nach", "aus", "um"}
+                "zu", "von", "in", "auf", "an", "bei", "nach", "aus", "um",
+                "ueber", "unter", "durch", "gegen", "ohne", "seit"}
         # Bindestriche und Doppelpunkte auch als Trenner behandeln
-        import re
         tokens = re.split(r"[\s\-:.()/]+", title.lower())
         new_words = {w for w in tokens if len(w) >= 2} - stop
 

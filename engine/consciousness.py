@@ -998,6 +998,7 @@ REGELN:
                     pass  # Bereits genehmigt — nicht nochmal fragen
                 elif self._request_approval(name, tool_input):
                     self._approved_packages.add(pkg)
+                    self._save_all()  # Genehmigung sofort persistieren
                 else:
                     return f"FEHLER: Oliver hat '{name}' nicht genehmigt."
             elif not self._request_approval(name, tool_input):
@@ -1049,24 +1050,32 @@ REGELN:
     REQUIRED_FIELDS: dict[str, list[str]] = {
         "write_file": ["path", "content"],
         "read_file": ["path"],
+        "list_directory": [],
         "execute_python": ["code"],
         "web_search": ["query"],
         "web_read": ["url"],
         "send_telegram": ["message"],
-        "create_project": ["name"],
-        "create_tool": ["name", "code"],
+        "create_project": ["name", "description"],
+        "create_tool": ["name", "description", "code"],
         "use_tool": ["name"],
         "set_goal": ["title"],
         "complete_subgoal": ["goal_index", "subgoal_index"],
         "read_own_code": ["path"],
-        "modify_own_code": ["path", "new_content"],
+        "modify_own_code": ["path", "new_content", "reason"],
         "remember": ["query"],
         "update_memory": ["entry_id", "new_content"],
         "delete_memory": ["entry_id"],
         "pip_install": ["package"],
         "git_commit": ["message"],
+        "git_status": [],
         "verify_project": ["project_name"],
         "run_project_tests": ["project_name"],
+        "complete_project": ["project_name"],
+        "self_diagnose": [],
+        "generate_tool": ["name", "description"],
+        "combine_tools": ["tool_a", "tool_b", "new_name"],
+        "complete_task": [],
+        "finish_sequence": [],
     }
 
     def _execute_tool_inner(self, name: str, tool_input: dict) -> str:
@@ -1135,12 +1144,14 @@ REGELN:
                 title = tool_input["title"]
                 description = tool_input.get("description", "")
                 sub_goals = tool_input.get("sub_goals")
-                # Opus Goal-Planning: Wenn Sub-Goals fehlen oder wenige,
-                # Opus fuer bessere Zerlegung nutzen
-                if not sub_goals or len(sub_goals) < 2:
-                    opus_sub_goals = self._opus_goal_planning(title, description)
-                    if opus_sub_goals:
-                        sub_goals = opus_sub_goals
+                # Duplikat-Check zuerst — vor teurem Opus-Call
+                similar = self.goal_stack._find_similar_goal(title)
+                if not similar:
+                    # Nur Opus aufrufen wenn es KEIN Duplikat ist
+                    if not sub_goals or len(sub_goals) < 2:
+                        opus_sub_goals = self._opus_goal_planning(title, description)
+                        if opus_sub_goals:
+                            sub_goals = opus_sub_goals
                 return self.goal_stack.create_goal(title, description, sub_goals)
 
             elif name == "complete_subgoal":
@@ -1208,6 +1219,16 @@ REGELN:
                 return self.self_modify.read_source(tool_input["path"])
 
             elif name == "modify_own_code":
+                # Sicherheit: Max 3 modify_own_code pro Sequenz
+                if not hasattr(self, "_modify_count_this_seq"):
+                    self._modify_count_this_seq = 0
+                self._modify_count_this_seq += 1
+                if self._modify_count_this_seq > 3:
+                    return (
+                        "FEHLER: Maximum 3 Code-Aenderungen pro Sequenz erreicht. "
+                        "Beende die Sequenz und mache in der naechsten weiter."
+                    )
+
                 # Alten Code lesen fuer Critic-Vergleich (ROHER Dateiinhalt, nicht formatiert)
                 try:
                     raw_path = (config.ROOT_PATH / tool_input["path"]).resolve()
@@ -1215,7 +1236,7 @@ REGELN:
                 except Exception:
                     old_code = ""
 
-                # Dual-Review: Syntax + Gemini pruefen
+                # Dual-Review: Syntax + Opus 4.6 pruefen
                 review_result = self.code_review.review_and_apply_fix(
                     file_path=tool_input["path"],
                     new_content=tool_input["new_content"],
@@ -1292,8 +1313,10 @@ REGELN:
                 result = self.pip.install(pkg)
                 if "already satisfied" in result.lower() or "installiert" in result.lower():
                     self._installed_packages.add(pkg.lower())
+                    self._save_all()  # Installation sofort persistieren
                 elif not result.startswith("FEHLER"):
                     self._installed_packages.add(pkg.lower())
+                    self._save_all()
                 return result
 
             # === Git ===
@@ -2106,15 +2129,19 @@ REGELN:
                 }],
                 max_tokens=500,
             )
-            import json as _json
             text = ""
             for block in response["content"]:
                 if hasattr(block, "text"):
                     text += block.text
-            import re
-            match = re.search(r'\{.*\}', text, re.DOTALL)
-            if match:
-                return _json.loads(match.group())
+            # JSON-Objekt aus Antwort extrahieren
+            # Versuche vom ersten { bis zum passenden } zu parsen
+            start = text.find("{")
+            if start >= 0:
+                for end in range(len(text), start, -1):
+                    try:
+                        return json.loads(text[start:end])
+                    except json.JSONDecodeError:
+                        continue
         except Exception as e:
             print(f"  [Opus Validierung Fehler: {e}]")
         return None
@@ -2145,16 +2172,14 @@ REGELN:
                 max_tokens=1000,
             )
             # JSON-Liste aus Antwort parsen
-            import json as _json
             text = ""
             for block in response["content"]:
                 if hasattr(block, "text"):
                     text += block.text
-            # Finde JSON-Array in der Antwort
             import re
             match = re.search(r'\[.*\]', text, re.DOTALL)
             if match:
-                sub_goals = _json.loads(match.group())
+                sub_goals = json.loads(match.group())
                 if isinstance(sub_goals, list) and all(isinstance(s, str) for s in sub_goals):
                     return sub_goals[:6]
         except Exception as e:
@@ -2185,10 +2210,10 @@ REGELN:
             stripped = line.rstrip()
             if not stripped or stripped.startswith("#") or stripped.startswith("|"):
                 continue
-            if len(stripped) > 20 and stripped[-1] in (",", ":", "("):
-                # Erlaubt bei Listen-Eintraegen mit Doppelpunkt
-                if stripped[-1] != ":":
-                    broken_lines += 1
+            # Komma oder offene Klammer am Zeilenende = abgebrochener Satz
+            # Doppelpunkt ist OK (Listen-Eintraege, Ueberschriften)
+            if len(stripped) > 20 and stripped[-1] in (",", "(", "{"):
+                broken_lines += 1
         if broken_lines >= 3:
             issues.append(f"{broken_lines} abgebrochene Saetze/Zeilen")
 
@@ -2253,14 +2278,24 @@ REGELN:
         self._seq_files_written = 0
         self._seq_tools_built = 0
         self._seq_written_paths = []  # Pfade der geschriebenen Dateien
+        self._modify_count_this_seq = 0  # Max 3 modify_own_code pro Sequenz
 
         # System-Prompt einmalig pro Sequenz bauen (nicht pro Step)
         cached_system_prompt = self._build_system_prompt()
 
-        # Evolution erzwingen: Wenn Rhythmus Evolution/Sprint sagt,
-        # wird der System-Prompt verstaerkt
+        # Modus-spezifischer System-Prompt
         mode = self.rhythm.get_mode(self.state)
-        if mode["mode"] in ("evolution", "sprint"):
+        if mode["mode"] == "cooldown":
+            # Spin-Loop Cooldown: Anderen Ansatz erzwingen
+            cached_system_prompt += (
+                "\n\n=== SPIN-LOOP COOLDOWN ===\n"
+                "Die letzten Sequenzen waren unproduktiv. Du MUSST einen anderen Ansatz waehlen:\n"
+                "1. Pruefe ob deine aktuellen Goals noch sinnvoll sind (list_directory, read_file)\n"
+                "2. Wenn ja: Schreibe MINDESTENS eine Datei mit konkretem Ergebnis\n"
+                "3. Wenn nein: Nutze finish_sequence und erklaere warum kein Fortschritt moeglich ist\n"
+                "VERBOTEN: Nur lesen ohne zu schreiben. Jede Sequenz muss Output produzieren."
+            )
+        elif mode["mode"] in ("evolution", "sprint"):
             cached_system_prompt += (
                 "\n\n=== PRIORITAET DIESER SEQUENZ: SELBSTVERBESSERUNG ===\n"
                 "Du MUSST in dieser Sequenz mindestens EINE Verbesserung an deinem eigenen Code machen. "
