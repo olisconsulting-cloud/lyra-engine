@@ -189,7 +189,9 @@ class SemanticMemory:
                 entry["timestamp"] = datetime.now(timezone.utc).isoformat()
                 self._save_index()
                 return f"Erinnerung {entry_id} aktualisiert."
-        return f"FEHLER: Erinnerung {entry_id} nicht gefunden."
+        # Vorhandene IDs mitgeben damit der naechste Versuch klappt
+        recent_ids = [e["id"] for e in self.index["entries"][-5:]]
+        return f"FEHLER: Erinnerung {entry_id} nicht gefunden. Vorhandene IDs: {recent_ids}"
 
     def delete(self, entry_id: str) -> str:
         """Loescht eine Erinnerung."""
@@ -200,7 +202,8 @@ class SemanticMemory:
         if len(self.index["entries"]) < before:
             self._save_index()
             return f"Erinnerung {entry_id} geloescht."
-        return f"FEHLER: Erinnerung {entry_id} nicht gefunden."
+        recent_ids = [e["id"] for e in self.index["entries"][-5:]]
+        return f"FEHLER: Erinnerung {entry_id} nicht gefunden. Vorhandene IDs: {recent_ids}"
 
     def _compress_memories(self):
         """

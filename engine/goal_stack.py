@@ -99,12 +99,14 @@ class GoalStack:
         """Markiert ein Sub-Goal als erledigt."""
         active = self.goals.get("active", [])
         if goal_index < 0 or goal_index >= len(active):
-            return "FEHLER: Goal-Index ungueltig."
+            valid = [f"{i}: {g['title']}" for i, g in enumerate(active)]
+            return f"FEHLER: Goal-Index {goal_index} ungueltig. Aktive Goals: {valid}"
 
         goal = active[goal_index]
         sgs = goal.get("sub_goals", [])
         if subgoal_index < 0 or subgoal_index >= len(sgs):
-            return "FEHLER: SubGoal-Index ungueltig."
+            valid = [f"{sg['index']}: {sg['title']} [{sg['status']}]" for sg in sgs]
+            return f"FEHLER: SubGoal-Index {subgoal_index} ungueltig. Sub-Goals: {valid}"
 
         sgs[subgoal_index]["status"] = "done"
         sgs[subgoal_index]["result"] = result

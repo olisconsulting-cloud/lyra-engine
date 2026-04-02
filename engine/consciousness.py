@@ -243,7 +243,7 @@ TOOLS = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "entry_id": {"type": "string", "description": "ID der Erinnerung (z.B. sem_42)"},
+                "entry_id": {"type": "string", "description": "ID der Erinnerung (Format: sem_N_HHMMSS — aus remember-Ergebnis kopieren)"},
                 "new_content": {"type": "string", "description": "Neuer Inhalt"},
             },
             "required": ["entry_id", "new_content"],
@@ -255,7 +255,7 @@ TOOLS = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "entry_id": {"type": "string", "description": "ID der Erinnerung (z.B. sem_42)"},
+                "entry_id": {"type": "string", "description": "ID der Erinnerung (Format: sem_N_HHMMSS — aus remember-Ergebnis kopieren)"},
             },
             "required": ["entry_id"],
         },
