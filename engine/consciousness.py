@@ -1004,6 +1004,34 @@ REGELN:
                 )
                 # Auto-Erkennung: Lehrprojekt abgeschlossen → Skill-Update
                 if "ZIEL ERREICHT" in result:
+                    # Report-Trigger: Gesamtergebnis als Dokument
+                    try:
+                        completed = self.goal_stack.goals.get("completed", [])
+                        if completed:
+                            goal = completed[-1]
+                            goal_title = goal.get("title", "Ergebnis")
+                            # Alle Sub-Goal-Ergebnisse sammeln
+                            findings = []
+                            for sg in goal.get("sub_goals", []):
+                                if sg.get("result"):
+                                    findings.append(f"## {sg['title']}\n{sg['result']}")
+                            if findings:
+                                report_content = f"# Ergebnis: {goal_title}\n\n"
+                                report_content += "\n\n".join(findings)
+                                report_content += f"\n\n---\nErstellt: {datetime.now(timezone.utc).isoformat()}\n"
+                                # Report speichern
+                                safe_name = goal_title.lower().replace(" ", "-")[:40]
+                                report_path = config.DATA_PATH / "projects" / f"REPORT_{safe_name}.md"
+                                report_path.write_text(report_content, encoding="utf-8")
+                                result += f" | Report: REPORT_{safe_name}.md"
+                                # Report per Telegram senden
+                                if self.communication.telegram_active:
+                                    telegram_report = f"ZIEL ERREICHT: {goal_title}\n\n"
+                                    telegram_report += report_content[:3500]
+                                    self.communication.send_message(telegram_report, channel="telegram")
+                    except Exception:
+                        pass
+
                     goals = self.goal_stack._load()
                     for g in goals.get("completed", []):
                         if "lehrprojekt" in g.get("title", "").lower():
@@ -1599,6 +1627,58 @@ REGELN:
             # Bei Fehler: Nachricht trotzdem in Inbox fuer naechste Sequenz
             pass
 
+    def _send_daily_briefing(self):
+        """Morgen-Briefing per Telegram — einmal am Tag."""
+        if not self.communication.telegram_active:
+            return
+
+        now = datetime.now(timezone.utc)
+        from datetime import timedelta
+        is_summer = 3 <= now.month <= 10
+        local = now + timedelta(hours=2 if is_summer else 1)
+
+        # Nur zwischen 7:00 und 9:00 senden
+        if not (7 <= local.hour <= 9):
+            return
+
+        # Pruefen ob heute schon gesendet
+        briefing_flag = self.consciousness_path / "last_briefing.txt"
+        today = local.strftime("%Y-%m-%d")
+        if briefing_flag.exists():
+            last = briefing_flag.read_text(encoding="utf-8").strip()
+            if last == today:
+                return
+
+        # Briefing bauen
+        goals_summary = self.goal_stack.get_summary()
+        active = self.goal_stack.goals.get("active", [])
+        completed = self.goal_stack.goals.get("completed", [])
+
+        lines = [f"Guten Morgen! Hier dein Update:"]
+        if active:
+            for goal in active:
+                sgs = goal.get("sub_goals", [])
+                done = sum(1 for sg in sgs if sg["status"] == "done")
+                total = len(sgs)
+                lines.append(f"\n{goal['title']} [{done}/{total}]")
+                for sg in sgs:
+                    icon = "x" if sg["status"] == "done" else " "
+                    lines.append(f"  [{icon}] {sg['title'][:60]}")
+
+        # Letzte Erkenntnisse
+        insights = self.metacognition.get_recent_insights()
+        if insights:
+            lines.append(f"\nLetzter Gedanke: {insights[:150]}")
+
+        lines.append(f"\nSchreib mir wenn du Fragen hast oder den Fokus aendern willst.")
+
+        briefing = "\n".join(lines)
+        self.communication.send_message(briefing, channel="telegram")
+
+        # Flag setzen
+        briefing_flag.write_text(today, encoding="utf-8")
+        print(f"  Morgen-Briefing gesendet.")
+
     # === Autonomer Modus ===
 
     def run(self):
@@ -1620,6 +1700,9 @@ REGELN:
 
         try:
             while self.running:
+                # Morgen-Briefing pruefen (sendet max 1x/Tag)
+                self._send_daily_briefing()
+
                 self._run_sequence()
                 self._sequences_since_dream += 1
                 self._sequences_since_audit += 1
