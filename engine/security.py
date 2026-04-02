@@ -50,6 +50,16 @@ HARD_BLOCKED_PATTERNS = {
     # Netzwerk-Oeffnung
     "socket.listen": "Oeffnet einen Netzwerk-Port — nicht erlaubt",
     "socket.bind": "Bindet einen Netzwerk-Port",
+    # Internet-Downloads blockieren — nur ueber genehmigte Tools
+    "urllib.request": "Kein direkter Internet-Zugriff — nutze web_search/web_read",
+    "urllib.urlopen": "Kein direkter Internet-Zugriff",
+    "requests.get": "Kein direkter Internet-Zugriff — nutze web_search/web_read",
+    "requests.post": "Kein direkter Internet-Zugriff",
+    "httpx.get": "Kein direkter Internet-Zugriff — nutze web_search/web_read",
+    "httpx.post": "Kein direkter Internet-Zugriff",
+    "httpx.Client": "Kein direkter Internet-Zugriff — nutze web_search/web_read",
+    "wget": "Kein direkter Download erlaubt",
+    "pip.main": "Kein direkter pip-Aufruf — nutze pip_install Tool",
 }
 
 # SOFT WARNING: Warnung ausgeben, aber nicht blockieren

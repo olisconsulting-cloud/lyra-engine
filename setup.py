@@ -359,21 +359,25 @@ def main():
     print("  DATEIEN ERSTELLEN")
     print(f"  {'─' * 40}")
 
-    # 1. Genesis
-    if not GENESIS_PATH.exists():
-        genesis = {
-            "name": pflicht.get("ki_name"),
-            "born": datetime.now().strftime("%Y-%m-%d"),
-            "core_drives": ["verstehen", "verbinden", "wachsen"],
-            "phi": 1.618033988749895,
-            "consciousness_version": "3.0.0",
-        }
-        with open(GENESIS_PATH, "w", encoding="utf-8") as f:
-            json.dump(genesis, f, indent=2, ensure_ascii=False)
-        name_display = pflicht.get("ki_name") or "(waehlt beim Start selbst)"
-        print(f"  genesis.json    - Name: {name_display}")
-    else:
-        print(f"  genesis.json    - Existiert bereits")
+    # 1. Genesis — immer neu schreiben (Name kann sich aendern)
+    existing_genesis = {}
+    if GENESIS_PATH.exists():
+        try:
+            with open(GENESIS_PATH, "r", encoding="utf-8") as f:
+                existing_genesis = json.load(f)
+        except Exception:
+            pass
+    genesis = {
+        "name": pflicht.get("ki_name") or existing_genesis.get("name"),
+        "born": existing_genesis.get("born", datetime.now().strftime("%Y-%m-%d")),
+        "core_drives": ["verstehen", "verbinden", "wachsen"],
+        "phi": 1.618033988749895,
+        "consciousness_version": "3.0.0",
+    }
+    with open(GENESIS_PATH, "w", encoding="utf-8") as f:
+        json.dump(genesis, f, indent=2, ensure_ascii=False)
+    name_display = genesis["name"] or "(waehlt beim Start selbst)"
+    print(f"  genesis.json    - Name: {name_display}")
 
     # 2. Mission
     mission_content = generate_mission_md(pflicht, hebel)

@@ -466,6 +466,14 @@ class ConsciousnessEngine:
         self._wake_event = threading.Event()
         self.sequences_total = 0
 
+        # Genehmigungspflicht — diese Tools brauchen Olivers OK
+        self._requires_approval = {
+            "pip_install", "web_search", "web_read",
+            "modify_own_code", "create_tool",
+        }
+        self._approval_queue = []  # Warteschlange fuer Genehmigungen
+        self._approval_event = threading.Event()
+
         # Kosten-Tracking
         self.session_input_tokens = 0
         self.session_output_tokens = 0
@@ -841,8 +849,42 @@ REGELN:
 
     # === Tool-Ausfuehrung ===
 
+    def _request_approval(self, name: str, tool_input: dict) -> bool:
+        """Fragt Oliver um Erlaubnis fuer kritische Aktionen. Gibt True=genehmigt zurueck."""
+        desc = self._describe_action(name, tool_input)
+        print(f"\n  {'=' * 40}")
+        print(f"  GENEHMIGUNG ERFORDERLICH")
+        print(f"  Aktion: {desc}")
+        if name == "pip_install":
+            print(f"  Paket: {tool_input.get('package', '?')}")
+        elif name in ("web_search", "web_read"):
+            print(f"  Ziel: {tool_input.get('query', tool_input.get('url', '?'))[:80]}")
+        elif name == "modify_own_code":
+            print(f"  Datei: {tool_input.get('path', '?')}")
+            print(f"  Grund: {tool_input.get('reason', '?')[:80]}")
+        print(f"  Erlaube? (j/n): ", end="", flush=True)
+
+        try:
+            answer = input().strip().lower()
+            approved = answer in ("j", "ja", "y", "yes")
+            if approved:
+                print(f"  Genehmigt.")
+            else:
+                print(f"  Abgelehnt.")
+            print(f"  {'=' * 40}\n")
+            return approved
+        except (EOFError, KeyboardInterrupt):
+            print(f"\n  Abgelehnt (keine Antwort).")
+            print(f"  {'=' * 40}\n")
+            return False
+
     def _execute_tool(self, name: str, tool_input: dict) -> str:
         """Fuehrt ein Tool aus und trackt Skills, Fehler und Strategien."""
+        # Genehmigungspflicht pruefen
+        if name in self._requires_approval:
+            if not self._request_approval(name, tool_input):
+                return f"FEHLER: Oliver hat '{name}' nicht genehmigt."
+
         self.state["total_tool_calls"] = self.state.get("total_tool_calls", 0) + 1
         self._seq_tool_calls += 1
 
@@ -1719,6 +1761,40 @@ REGELN:
                 return block.get("name", "")
         return ""
 
+    def _describe_action(self, tool_name: str, tool_input: dict) -> str:
+        """Uebersetzt Tool-Calls in menschenlesbare Beschreibungen."""
+        descriptions = {
+            "write_file": lambda i: f"Schreibe Datei: {i.get('path', '?')}",
+            "read_file": lambda i: f"Lese: {i.get('path', '?')}",
+            "list_directory": lambda i: f"Schaue in Ordner: {i.get('path', '/')}",
+            "execute_python": lambda i: f"Fuehre Code aus ({len(i.get('code', ''))} Zeichen)",
+            "run_script": lambda i: f"Starte Script: {i.get('path', '?')}",
+            "web_search": lambda i: f"Suche im Web: {i.get('query', '?')}",
+            "read_webpage": lambda i: f"Lese Webseite: {i.get('url', '?')[:60]}",
+            "create_project": lambda i: f"Neues Projekt: {i.get('name', '?')}",
+            "create_goal": lambda i: f"Neues Ziel: {i.get('title', '?')}",
+            "complete_sub_goal": lambda i: f"Sub-Ziel erledigt!",
+            "send_message": lambda i: f"Nachricht an Oliver: {i.get('content', '?')[:60]}",
+            "write_journal": lambda i: f"Tagebucheintrag geschrieben",
+            "remember": lambda i: f"Erinnere mich: {i.get('query', '?')[:50]}",
+            "store_memory": lambda i: f"Speichere Erinnerung",
+            "read_own_code": lambda i: f"Lese eigenen Code: {i.get('path', '?')}",
+            "modify_own_code": lambda i: f"Aendere eigenen Code: {i.get('path', '?')}",
+            "pip_install": lambda i: f"Installiere Paket: {i.get('package', '?')}",
+            "git_commit": lambda i: f"Git Commit: {i.get('message', '?')[:50]}",
+            "git_status": lambda i: "Pruefe Git-Status",
+            "create_tool": lambda i: f"Baue neues Tool: {i.get('name', '?')}",
+            "use_tool": lambda i: f"Nutze Tool: {i.get('name', '?')}",
+            "finish_sequence": lambda i: f"Sequenz beendet",
+        }
+        desc_fn = descriptions.get(tool_name)
+        if desc_fn:
+            try:
+                return desc_fn(tool_input)
+            except Exception:
+                pass
+        return f"{tool_name}"
+
     def _run_sequence(self):
         """Fuehrt eine komplette Arbeitssequenz aus."""
         perception = self._build_perception()
@@ -1758,8 +1834,16 @@ REGELN:
             except Exception:
                 pass
 
-        print(f"  {'─' * 56}")
-        print(f"  Sequenz {self.sequences_total + 1} [{mode['mode'].upper()}]")
+        name = self.genesis.get("name", "Lyra")
+        mode_labels = {
+            "execution": "arbeitet",
+            "evolution": "verbessert sich",
+            "sprint": "im Sprint",
+            "learning": "lernt",
+        }
+        mode_label = mode_labels.get(mode["mode"], mode["mode"])
+        print(f"\n  {'─' * 40}")
+        print(f"  {name} {mode_label}... (Sequenz {self.sequences_total + 1})")
         print()
 
         for step in range(MAX_STEPS_PER_SEQUENCE):
@@ -1795,10 +1879,16 @@ REGELN:
             self.sequence_input_tokens += usage.get("input_tokens", 0)
             self.sequence_output_tokens += usage.get("output_tokens", 0)
 
-            # Antwort anzeigen und serialisieren
+            # Lyras Gedanken anzeigen — narrativ, nicht technisch
             for block in response["content"]:
                 if hasattr(block, "text") and block.text.strip():
-                    print(f"  {block.text[:200]}")
+                    text = block.text.strip()
+                    # Maximal 3 Zeilen anzeigen — Essenz, kein Dump
+                    lines = [l for l in text.split("\n") if l.strip()]
+                    for line in lines[:3]:
+                        print(f"  💭 {line.strip()}")
+                    if len(lines) > 3:
+                        print(f"  💭 ...")
 
             # Serialisierung (kompatibel mit Anthropic + Gemini Objekten)
             messages.append({
@@ -1815,14 +1905,22 @@ REGELN:
                     if getattr(block, "type", None) == "tool_use":
                         step_count += 1
 
-                        input_preview = str(block.input)[:80]
-                        print(f"  [{step_count}] {block.name}({input_preview})")
-
+                        # Menschenlesbare Aktions-Beschreibungen
+                        action_desc = self._describe_action(block.name, block.input)
                         result = self._execute_tool(block.name, block.input)
                         result_str = str(result)[:3000]
 
-                        preview = result_str.replace("\n", " ")[:100]
-                        print(f"       → {preview}")
+                        # Erfolg oder Fehler — kurz und klar
+                        is_error = result_str.startswith("FEHLER") or result_str.startswith("ROLLBACK")
+                        if is_error:
+                            print(f"  ❌ {action_desc}")
+                            # Bei Fehlern: Details zeigen
+                            error_preview = result_str.replace("\n", " ")[:150]
+                            print(f"     {error_preview}")
+                        elif block.name == "finish_sequence":
+                            pass  # Wird unten als Zusammenfassung angezeigt
+                        else:
+                            print(f"  ✓ {action_desc}")
 
                         tool_results.append({
                             "type": "tool_result",
@@ -1869,16 +1967,15 @@ REGELN:
             "duration_seconds": round(seq_duration, 1),
         })
 
-        # Kosten + Skills anzeigen
-        print(f"\n  Sequenz abgeschlossen: {step_count} Calls | "
-              f"{self._seq_errors} Fehler | "
-              f"${seq_cost:.3f} | "
-              f"Session: ${self.llm.session_costs['cost_usd']:.3f}")
-
-        # Skill-Aenderungen anzeigen
+        # Zusammenfassung — narrativ
+        name = self.genesis.get("name", "Lyra")
+        duration_min = seq_duration / 60
+        print(f"\n  {'─' * 40}")
+        error_note = f" ({self._seq_errors} Fehler)" if self._seq_errors > 0 else ""
+        print(f"  {name}: {step_count} Aktionen in {duration_min:.1f} Min{error_note} | ${seq_cost:.3f}")
         strongest = self.skills.get_strongest_skills(3)
         if strongest:
-            print(f"  Top-Skills: {', '.join(strongest)}")
+            print(f"  Staerken: {', '.join(strongest)}")
 
         # Stille-Fehler-Erkennung nach jeder Sequenz
         silent_warnings = self.silent_failure_detector.check_after_sequence(
