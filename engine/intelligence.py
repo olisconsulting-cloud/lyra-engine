@@ -118,28 +118,67 @@ class SemanticMemory:
         idf = self.index.get("idf", {})
         return {word: freq * idf.get(word, 1.0) for word, freq in tf.items()}
 
+    # === Importance-Scoring ===
+
+    def _compute_importance(self, content: str, metadata: dict) -> float:
+        """
+        Bewertet wie wichtig eine Erinnerung ist (0.0-1.0).
+
+        Kriterien (aus Stanford Generative Agents):
+        - Novelty: Enthaelt das seltene Woerter?
+        - Impact: Ist es ein Fehler, Erfolg oder Entscheidung?
+        - Tool-Typ: Manche Tools sind wichtiger als andere
+        """
+        score = 0.3  # Basis-Score
+
+        tool = metadata.get("tool", "")
+
+        # Impact: Fehler und Selbstverbesserung sind wichtiger
+        if "FEHLER" in content.upper():
+            score += 0.3
+        if tool in ("modify_own_code", "create_project", "create_tool"):
+            score += 0.2
+        if tool in ("write_file",):
+            score += 0.1
+
+        # Novelty: Seltene Tokens = ueberraschend = wichtig
+        tokens = self._tokenize(content)
+        idf = self.index.get("idf", {})
+        if tokens and idf:
+            avg_idf = sum(idf.get(t, 1.0) for t in tokens[:10]) / min(len(tokens), 10)
+            if avg_idf > 2.0:  # Hoher IDF = seltene Woerter
+                score += 0.2
+
+        return min(score, 1.0)
+
     # === API ===
 
     def store(self, content: str, metadata: Optional[dict] = None) -> str:
-        """Speichert eine Erinnerung mit semantischem Index."""
+        """Speichert eine Erinnerung mit semantischem Index und Importance-Score."""
         tokens = self._tokenize(content)
         if not tokens:
             return "Nichts zu speichern."
 
-        entry_id = f"sem_{len(self.index['entries'])}"
+        metadata = metadata or {}
+        importance = self._compute_importance(content, metadata)
+
+        entry_id = f"sem_{self.index.get('doc_count', 0)}"
         entry = {
             "id": entry_id,
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "content": content[:1000],
             "tokens": tokens[:100],
-            "metadata": metadata or {},
+            "metadata": metadata,
+            "importance": round(importance, 2),
+            "access_count": 0,
         }
 
         self.index["entries"].append(entry)
+        self.index["doc_count"] = self.index.get("doc_count", 0) + 1
 
-        # Limit: Max 500 Eintraege, aelteste entfernen
-        if len(self.index["entries"]) > 500:
-            self.index["entries"] = self.index["entries"][-500:]
+        # Komprimierung statt hartes Loeschen bei > 400 Eintraegen
+        if len(self.index["entries"]) > 400:
+            self._compress_memories()
 
         # IDF alle 10 Eintraege neu berechnen
         if len(self.index["entries"]) % 10 == 0:
@@ -147,6 +186,94 @@ class SemanticMemory:
 
         self._save_index()
         return entry_id
+
+    def update(self, entry_id: str, new_content: str) -> str:
+        """Aktualisiert den Inhalt einer bestehenden Erinnerung."""
+        for entry in self.index["entries"]:
+            if entry["id"] == entry_id:
+                entry["content"] = new_content[:1000]
+                entry["tokens"] = self._tokenize(new_content)[:100]
+                entry["timestamp"] = datetime.now(timezone.utc).isoformat()
+                self._save_index()
+                return f"Erinnerung {entry_id} aktualisiert."
+        return f"FEHLER: Erinnerung {entry_id} nicht gefunden."
+
+    def delete(self, entry_id: str) -> str:
+        """Loescht eine Erinnerung."""
+        before = len(self.index["entries"])
+        self.index["entries"] = [
+            e for e in self.index["entries"] if e["id"] != entry_id
+        ]
+        if len(self.index["entries"]) < before:
+            self._save_index()
+            return f"Erinnerung {entry_id} geloescht."
+        return f"FEHLER: Erinnerung {entry_id} nicht gefunden."
+
+    def _compress_memories(self):
+        """
+        Komprimiert alte Memories statt sie zu loeschen.
+
+        Strategie:
+        1. Sortiere nach Importance + Recency
+        2. Finde aehnliche Entries (Cosine > 0.6) und merge sie
+        3. Behalte max 300 Entries nach Kompression
+        """
+        entries = self.index["entries"]
+
+        # 1. Aehnliche Entries finden und mergen (nur unter den aeltesten 200)
+        old_entries = entries[:-200]  # Die aeltesten
+        recent_entries = entries[-200:]  # Die neuesten bleiben unangetastet
+
+        merged = []
+        used = set()
+
+        for i, entry_a in enumerate(old_entries):
+            if i in used:
+                continue
+
+            group = [entry_a]
+            tokens_a = entry_a.get("tokens", [])
+            vec_a = self._tfidf_vector(tokens_a)
+
+            for j, entry_b in enumerate(old_entries[i + 1:], i + 1):
+                if j in used:
+                    continue
+                tokens_b = entry_b.get("tokens", [])
+                vec_b = self._tfidf_vector(tokens_b)
+                sim = self._cosine_similarity(vec_a, vec_b)
+
+                if sim > 0.6:  # Sehr aehnlich → mergen
+                    group.append(entry_b)
+                    used.add(j)
+
+            if len(group) > 1:
+                # Merge: Behalte den wichtigsten, fuege Kontext hinzu
+                group.sort(key=lambda e: e.get("importance", 0.3), reverse=True)
+                best = group[0].copy()
+                others = [e["content"][:50] for e in group[1:]]
+                best["content"] = (
+                    best["content"][:500] +
+                    f" [+{len(group) - 1} aehnliche: {'; '.join(others)}]"
+                )[:1000]
+                best["importance"] = max(e.get("importance", 0.3) for e in group)
+                merged.append(best)
+            else:
+                merged.append(entry_a)
+
+            used.add(i)
+
+        # 2. Merged + Recent zusammenfuegen, nach Importance sortieren wenn noetig
+        all_entries = merged + recent_entries
+
+        # 3. Wenn immer noch > 400, die unwichtigsten alten entfernen
+        if len(all_entries) > 400:
+            # Nur die aeltesten (merged) nach Importance sortieren und kuerzen
+            merged.sort(key=lambda e: e.get("importance", 0.3), reverse=True)
+            keep_count = 400 - len(recent_entries)
+            merged = merged[:max(keep_count, 50)]
+            all_entries = merged + recent_entries
+
+        self.index["entries"] = all_entries
 
     def search(self, query: str, top_k: int = 5) -> list[dict]:
         """
@@ -186,12 +313,19 @@ class SemanticMemory:
 
         results = []
         for sim, entry in scored[:top_k]:
+            # Access-Counter erhoehen (haeufig abgerufene Memories bleiben laenger)
+            entry["access_count"] = entry.get("access_count", 0) + 1
             results.append({
                 "content": entry["content"],
                 "similarity": round(sim, 4),
                 "timestamp": entry.get("timestamp", ""),
                 "metadata": entry.get("metadata", {}),
+                "importance": entry.get("importance", 0.3),
             })
+
+        # Index speichern wenn Zugriffe gezaehlt wurden
+        if results:
+            self._save_index()
 
         return results
 

@@ -223,16 +223,39 @@ TOOLS = [
             "required": ["path", "new_content", "reason"],
         },
     },
-    # === Semantische Memory ===
+    # === Semantische Memory (Self-Editing) ===
     {
         "name": "remember",
         "description": "Durchsucht dein Gedaechtnis nach Bedeutung. Finde relevante Erinnerungen zu einem Thema.",
         "input_schema": {
             "type": "object",
             "properties": {
-                "query": {"type": "string", "description": "Wonach suchst du? z.B. 'Web-Scraping Erfahrungen' oder 'Lead-Generator Probleme'"},
+                "query": {"type": "string", "description": "Wonach suchst du? z.B. 'Web-Scraping Erfahrungen'"},
             },
             "required": ["query"],
+        },
+    },
+    {
+        "name": "update_memory",
+        "description": "Aktualisiert eine bestehende Erinnerung. Nutze das wenn sich Fakten geaendert haben.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "entry_id": {"type": "string", "description": "ID der Erinnerung (z.B. sem_42)"},
+                "new_content": {"type": "string", "description": "Neuer Inhalt"},
+            },
+            "required": ["entry_id", "new_content"],
+        },
+    },
+    {
+        "name": "delete_memory",
+        "description": "Loescht eine falsche oder veraltete Erinnerung. Nutze das wenn eine Erinnerung nicht mehr stimmt.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "entry_id": {"type": "string", "description": "ID der Erinnerung (z.B. sem_42)"},
+            },
+            "required": ["entry_id"],
         },
     },
     # === Package Management ===
@@ -1016,8 +1039,21 @@ REGELN:
                     return f"Keine Erinnerungen zu '{tool_input['query']}' gefunden."
                 lines = [f"Erinnerungen zu '{tool_input['query']}':"]
                 for r in results:
-                    lines.append(f"  [{r['similarity']:.0%}] {r['content'][:200]}")
+                    imp = r.get("importance", 0.3)
+                    lines.append(
+                        f"  [{r['similarity']:.2f}|imp:{imp:.1f}] "
+                        f"({r.get('metadata', {}).get('tool', '?')}) "
+                        f"{r['content'][:200]}"
+                    )
                 return "\n".join(lines)
+
+            elif name == "update_memory":
+                return self.semantic_memory.update(
+                    tool_input["entry_id"], tool_input["new_content"],
+                )
+
+            elif name == "delete_memory":
+                return self.semantic_memory.delete(tool_input["entry_id"])
 
             # === Package Management ===
             elif name == "pip_install":
