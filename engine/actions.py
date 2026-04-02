@@ -259,17 +259,19 @@ class ActionEngine:
 
         # Aehnliche Projekte pruefen (Wort-Overlap im Namen)
         if self.projects_path.exists():
-            stop = {"und", "oder", "fuer", "mit", "der", "die", "das", "ein"}
-            new_words = {w.lower().strip("-_") for w in name.replace("-", " ").replace("_", " ").split() if len(w) > 2} - stop
+            import re
+            stop = {"und", "oder", "fuer", "mit", "der", "die", "das", "ein", "eine",
+                    "zu", "von", "in", "auf", "an", "bei", "nach", "aus", "um"}
+            new_words = {w for w in re.split(r"[\s\-_:.()]+", name.lower()) if len(w) >= 2} - stop
             for existing in self.projects_path.iterdir():
                 if not existing.is_dir():
                     continue
-                ex_words = {w.lower().strip("-_") for w in existing.name.replace("-", " ").replace("_", " ").split() if len(w) > 2} - stop
+                ex_words = {w for w in re.split(r"[\s\-_:.()]+", existing.name.lower()) if len(w) >= 2} - stop
                 if not ex_words or not new_words:
                     continue
                 overlap = len(new_words & ex_words)
                 union = len(new_words | ex_words)
-                if union and overlap / union >= 0.35:
+                if union and overlap / union >= 0.3:
                     return (
                         f"AEHNLICHES PROJEKT EXISTIERT: '{existing.name}'. "
                         f"Arbeite am bestehenden Projekt statt ein neues zu erstellen!"

@@ -982,10 +982,18 @@ REGELN:
 
     def _execute_tool(self, name: str, tool_input: dict) -> str:
         """Fuehrt ein Tool aus und trackt Skills, Fehler und Strategien."""
+        # Frueher Abbruch bei Parse-Fehlern oder fehlenden Pflichtfeldern
+        if tool_input.get("_parse_error"):
+            return f"FEHLER: LLM hat unvollstaendige Parameter fuer {name} geliefert. Bitte nochmal versuchen."
+        required = self.REQUIRED_FIELDS.get(name, [])
+        missing = [f for f in required if f not in tool_input]
+        if missing:
+            return f"FEHLER: Pflichtfelder fehlen fuer {name}: {missing}. Bitte alle Felder angeben."
+
         # Genehmigungspflicht pruefen (bereits genehmigte Pakete ueberspringen)
         if name in self._requires_approval:
             if name == "pip_install":
-                pkg = tool_input.get("package", "").lower()
+                pkg = tool_input["package"].lower()
                 if pkg in self._approved_packages:
                     pass  # Bereits genehmigt — nicht nochmal fragen
                 elif self._request_approval(name, tool_input):
@@ -1062,20 +1070,19 @@ REGELN:
     }
 
     def _execute_tool_inner(self, name: str, tool_input: dict) -> str:
-        """Interne Tool-Ausfuehrung."""
-        # Parse-Fehler vom LLM-Router abfangen
-        if tool_input.get("_parse_error"):
-            return f"FEHLER: LLM hat unvollstaendige Parameter fuer {name} geliefert. Bitte nochmal versuchen."
-
-        # Pflichtfelder pruefen
-        required = self.REQUIRED_FIELDS.get(name, [])
-        missing = [f for f in required if f not in tool_input]
-        if missing:
-            return f"FEHLER: Pflichtfelder fehlen fuer {name}: {missing}. Bitte alle Felder angeben."
-
+        """Interne Tool-Ausfuehrung. Validierung passiert in _execute_tool."""
         try:
             if name == "write_file":
-                return self.actions.write_file(tool_input["path"], tool_input["content"])
+                path = tool_input["path"]
+                content = tool_input["content"]
+                # Quality Gate fuer Markdown-Dateien
+                if path.endswith(".md") and len(content) > 200:
+                    issues = self._check_markdown_quality(content)
+                    if issues:
+                        # Datei trotzdem schreiben, aber Warnung zurueckgeben
+                        result = self.actions.write_file(path, content)
+                        return f"{result}\nQUALITAETS-WARNUNG: {'; '.join(issues)}"
+                return self.actions.write_file(path, content)
 
             elif name == "read_file":
                 return self.actions.read_file(tool_input["path"])
@@ -1125,11 +1132,16 @@ REGELN:
                 )
 
             elif name == "set_goal":
-                return self.goal_stack.create_goal(
-                    tool_input["title"],
-                    tool_input.get("description", ""),
-                    tool_input.get("sub_goals"),
-                )
+                title = tool_input["title"]
+                description = tool_input.get("description", "")
+                sub_goals = tool_input.get("sub_goals")
+                # Opus Goal-Planning: Wenn Sub-Goals fehlen oder wenige,
+                # Opus fuer bessere Zerlegung nutzen
+                if not sub_goals or len(sub_goals) < 2:
+                    opus_sub_goals = self._opus_goal_planning(title, description)
+                    if opus_sub_goals:
+                        sub_goals = opus_sub_goals
+                return self.goal_stack.create_goal(title, description, sub_goals)
 
             elif name == "complete_subgoal":
                 result = self.goal_stack.complete_subgoal(
@@ -1418,8 +1430,20 @@ REGELN:
                         "\n".join(f"  - [ ] {m}" for m in missing)
                     )
 
-                # === CROSS-MODEL-REVIEW bei Projekten mit 3+ Dateien ===
+                # === OPUS ERGEBNIS-VALIDIERUNG ===
+                # Opus prueft ob die Ergebnisse inhaltlich sinnvoll sind
                 project_path = config.DATA_PATH / "projects" / project_name
+                opus_validation = self._opus_result_validation(
+                    project_name, required_criteria, verified
+                )
+                if opus_validation and not opus_validation.get("approved", True):
+                    return (
+                        f"OPUS-VALIDIERUNG FEHLGESCHLAGEN:\n"
+                        f"{opus_validation.get('reason', 'Unbekannter Grund')}\n"
+                        f"Behebe die Probleme und versuche es erneut."
+                    )
+
+                # === CROSS-MODEL-REVIEW bei Projekten mit 3+ Dateien ===
                 code_files = [f for f in project_path.iterdir()
                               if f.suffix == ".py" and f.name != "tests.py"]
                 if len(code_files) >= 3:
@@ -2038,6 +2062,151 @@ REGELN:
                 return block.get("name", "")
         return ""
 
+    def _opus_result_validation(self, project_name: str,
+                                criteria: list[str],
+                                verified: list[str]) -> Optional[dict]:
+        """
+        Nutzt Opus 4.6 zur Validierung ob Projekt-Ergebnisse inhaltlich sinnvoll sind.
+        Prueft Akzeptanzkriterien gegen tatsaechlich erstellte Dateien.
+
+        Returns:
+            {"approved": bool, "reason": str} oder None bei Fehler
+        """
+        try:
+            project_path = config.DATA_PATH / "projects" / project_name
+            # Dateien im Projekt sammeln (max 5, ohne Tests)
+            files_content = []
+            for f in sorted(project_path.iterdir()):
+                if f.is_file() and f.name != "tests.py" and f.suffix in (".py", ".md", ".json"):
+                    content = f.read_text(encoding="utf-8")[:2000]
+                    files_content.append(f"--- {f.name} ---\n{content}")
+                if len(files_content) >= 5:
+                    break
+
+            if not files_content:
+                return None
+
+            response = self.llm.call_anthropic(
+                "claude_opus",
+                system=(
+                    "Du bist ein Qualitaets-Pruefer. Bewerte ob die Projekt-Dateien "
+                    "die Akzeptanzkriterien WIRKLICH erfuellen. Pruefe auf: "
+                    "(1) Vollstaendigkeit, (2) inhaltliche Korrektheit, "
+                    "(3) abgebrochene/unvollstaendige Saetze, (4) Halluzinationen. "
+                    "Antworte NUR mit JSON: {\"approved\": true/false, \"reason\": \"...\"}"
+                ),
+                messages=[{
+                    "role": "user",
+                    "content": (
+                        f"Projekt: {project_name}\n"
+                        f"Kriterien: {criteria}\n"
+                        f"Verifiziert als: {verified}\n\n"
+                        f"Dateien:\n{''.join(files_content)}"
+                    ),
+                }],
+                max_tokens=500,
+            )
+            import json as _json
+            text = ""
+            for block in response["content"]:
+                if hasattr(block, "text"):
+                    text += block.text
+            import re
+            match = re.search(r'\{.*\}', text, re.DOTALL)
+            if match:
+                return _json.loads(match.group())
+        except Exception as e:
+            print(f"  [Opus Validierung Fehler: {e}]")
+        return None
+
+    def _opus_goal_planning(self, title: str, description: str) -> Optional[list[str]]:
+        """
+        Nutzt Opus 4.6 fuer hochwertige Goal-Zerlegung.
+        Wird nur aufgerufen wenn Sub-Goals fehlen oder zu wenige sind.
+        Ein einziger Opus-Call hier spart dutzende schlechte Kimi-Sequenzen.
+
+        Returns:
+            Liste von Sub-Goal-Titeln oder None bei Fehler
+        """
+        try:
+            response = self.llm.call_anthropic(
+                "claude_opus",
+                system=(
+                    "Du bist ein Strategie-Berater. Zerlege das gegebene Ziel in "
+                    "3-6 konkrete, sequentielle Sub-Goals. Jedes Sub-Goal muss: "
+                    "(1) ein messbares Ergebnis haben, (2) in 1-3 Sequenzen erreichbar sein, "
+                    "(3) auf dem vorherigen aufbauen. "
+                    "Antworte NUR mit einer JSON-Liste von Strings. Keine Erklaerung."
+                ),
+                messages=[{
+                    "role": "user",
+                    "content": f"Ziel: {title}\nBeschreibung: {description or 'Keine'}",
+                }],
+                max_tokens=1000,
+            )
+            # JSON-Liste aus Antwort parsen
+            import json as _json
+            text = ""
+            for block in response["content"]:
+                if hasattr(block, "text"):
+                    text += block.text
+            # Finde JSON-Array in der Antwort
+            import re
+            match = re.search(r'\[.*\]', text, re.DOTALL)
+            if match:
+                sub_goals = _json.loads(match.group())
+                if isinstance(sub_goals, list) and all(isinstance(s, str) for s in sub_goals):
+                    return sub_goals[:6]
+        except Exception as e:
+            print(f"  [Opus Goal-Planning Fehler: {e}]")
+        return None
+
+    @staticmethod
+    def _check_markdown_quality(content: str) -> list[str]:
+        """
+        Prueft Markdown-Output auf typische LLM-Halluzinations-Muster.
+        Rein regex-basiert, kein extra API-Call.
+
+        Returns:
+            Liste von gefundenen Problemen (leer = OK)
+        """
+        import re
+        issues = []
+
+        # 1. Offene Klammern ohne Schliessen
+        open_braces = content.count("{") - content.count("}")
+        if open_braces > 2:
+            issues.append(f"{open_braces} ungeschlossene Klammern")
+
+        # 2. Abgebrochene Saetze: Zeilen die mit Kleinbuchstabe oder Komma enden
+        lines = content.split("\n")
+        broken_lines = 0
+        for line in lines:
+            stripped = line.rstrip()
+            if not stripped or stripped.startswith("#") or stripped.startswith("|"):
+                continue
+            if len(stripped) > 20 and stripped[-1] in (",", ":", "("):
+                # Erlaubt bei Listen-Eintraegen mit Doppelpunkt
+                if stripped[-1] != ":":
+                    broken_lines += 1
+        if broken_lines >= 3:
+            issues.append(f"{broken_lines} abgebrochene Saetze/Zeilen")
+
+        # 3. Wiederholte Woerter (Stottern): gleiches Wort 3+ Mal hintereinander
+        stutter = re.findall(r'\b(\w+)\s+\1\s+\1\b', content, re.IGNORECASE)
+        if stutter:
+            issues.append(f"Wort-Wiederholungen: {stutter[:3]}")
+
+        # 4. Extrem kurze Zeilen nach Ueberschrift (abgebrochener Content)
+        for i, line in enumerate(lines):
+            if line.startswith("#") and i + 1 < len(lines):
+                next_line = lines[i + 1].strip()
+                if 0 < len(next_line) < 5 and not next_line.startswith("-"):
+                    issues.append(f"Abgebrochener Inhalt nach '{line.strip()[:40]}'")
+                    break
+
+        return issues
+
     def _describe_action(self, tool_name: str, tool_input: dict) -> str:
         """Uebersetzt Tool-Calls in menschenlesbare Beschreibungen."""
         descriptions = {
@@ -2137,8 +2306,18 @@ REGELN:
             # Token-Budget als Sicherheitsnetz
             if self.sequence_input_tokens >= MAX_INPUT_TOKENS_PER_SEQUENCE:
                 print(f"  [Token-Limit erreicht]")
+                # Inhaltliche Summary statt generischer Meldung
+                budget_parts = [f"{step_count} Steps (Token-Budget)."]
+                if self._seq_files_written > 0:
+                    paths_short = [p.split("/")[-1] for p in self._seq_written_paths[:5]]
+                    budget_parts.append(f"Dateien: {', '.join(paths_short)}")
+                if self._seq_tools_built > 0:
+                    budget_parts.append(f"{self._seq_tools_built} Tool(s)")
+                focus = self.goal_stack.get_current_focus()
+                if "FOKUS:" in focus:
+                    budget_parts.append(f"Fokus: {focus.split('FOKUS:')[1].strip()[:100]}")
                 self._handle_finish_sequence({
-                    "summary": f"Sequenz nach {step_count} Steps beendet (Token-Budget).",
+                    "summary": " | ".join(budget_parts),
                     "performance_rating": 5,
                 })
                 finished = True
@@ -2273,7 +2452,10 @@ REGELN:
 
         # Stille-Fehler nur wenn vorhanden
         silent_warnings = self.silent_failure_detector.check_after_sequence(
-            self.sequences_total, self._seq_tool_calls
+            self.sequences_total, self._seq_tool_calls,
+            files_written=self._seq_files_written,
+            tools_built=self._seq_tools_built,
+            errors=self._seq_errors,
         )
         if silent_warnings:
             for w in silent_warnings:

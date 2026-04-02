@@ -42,13 +42,17 @@ class GoalStack:
         # Stoppwoerter die keine Semantik tragen
         stop = {"und", "oder", "fuer", "mit", "der", "die", "das", "ein", "eine",
                 "zu", "von", "in", "auf", "an", "bei", "nach", "aus", "um"}
-        new_words = {w.lower().strip(":.-()") for w in title.split() if len(w) > 2} - stop
+        # Bindestriche und Doppelpunkte auch als Trenner behandeln
+        import re
+        tokens = re.split(r"[\s\-:.()/]+", title.lower())
+        new_words = {w for w in tokens if len(w) >= 2} - stop
 
         if not new_words:
             return None
 
         for i, goal in enumerate(self.goals.get("active", [])):
-            existing_words = {w.lower().strip(":.-()") for w in goal["title"].split() if len(w) > 2} - stop
+            ex_tokens = re.split(r"[\s\-:.()/]+", goal["title"].lower())
+            existing_words = {w for w in ex_tokens if len(w) >= 2} - stop
             if not existing_words:
                 continue
             # Jaccard-Aehnlichkeit: wie viel Overlap haben die Woerter?
