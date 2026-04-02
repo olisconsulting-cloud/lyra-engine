@@ -156,8 +156,46 @@ class CriticAgent:
     """
 
     def __init__(self):
-        self.google_key = os.getenv("GOOGLE_AI_API_KEY", "").strip()
-        self.model = MODELS[TASK_MODEL_MAP["code_review"]]["model_id"]
+        model_key = TASK_MODEL_MAP["code_review"]
+        model_config = MODELS[model_key]
+        self.provider = model_config["provider"]
+        self.model = model_config["model_id"]
+        # API-Key je nach Provider
+        if self.provider == "nvidia":
+            self.api_key = os.getenv("NVIDIA_API_KEY", "").strip()
+            self.api_url = "https://integrate.api.nvidia.com/v1/chat/completions"
+        elif self.provider == "google":
+            self.api_key = os.getenv("GOOGLE_AI_API_KEY", "").strip()
+            self.api_url = f"https://generativelanguage.googleapis.com/v1beta/models/{self.model}:generateContent"
+        else:
+            self.api_key = os.getenv("DEEPSEEK_API_KEY", "").strip()
+            self.api_url = "https://api.deepseek.com/chat/completions"
+
+    def _call_api(self, prompt: str, max_tokens: int = 500) -> str:
+        """Ruft die konfigurierte API auf und gibt den Text zurueck."""
+        with httpx.Client(timeout=30.0) as client:
+            if self.provider == "google":
+                resp = client.post(
+                    self.api_url,
+                    params={"key": self.api_key},
+                    json={"contents": [{"parts": [{"text": prompt}]}],
+                          "generationConfig": {"maxOutputTokens": max_tokens}},
+                )
+                if resp.status_code != 200:
+                    return ""
+                return resp.json()["candidates"][0]["content"]["parts"][-1]["text"]
+            else:
+                resp = client.post(
+                    self.api_url,
+                    headers={"Authorization": f"Bearer {self.api_key}",
+                             "Content-Type": "application/json"},
+                    json={"model": self.model,
+                          "messages": [{"role": "user", "content": prompt}],
+                          "max_tokens": max_tokens},
+                )
+                if resp.status_code != 200:
+                    return ""
+                return resp.json()["choices"][0]["message"]["content"]
 
     def evaluate_change(self, file_path: str, old_code: str, new_code: str,
                         reason: str) -> dict:
@@ -172,7 +210,7 @@ class CriticAgent:
                 "suggestion": str,
             }
         """
-        if not self.google_key:
+        if not self.api_key:
             return {"score": 5, "is_improvement": None, "side_effects": "Kein Critic verfuegbar — Bewertung nicht moeglich", "suggestion": ""}
 
         prompt = f"""Bewerte diese Code-Aenderung auf einer Skala von 1-10.
@@ -195,20 +233,9 @@ Antworte als JSON:
 {{"score": 1-10, "is_improvement": true/false, "side_effects": "...", "suggestion": "..."}}"""
 
         try:
-            with httpx.Client(timeout=30.0) as client:
-                resp = client.post(
-                    f"https://generativelanguage.googleapis.com/v1beta/models/{self.model}:generateContent",
-                    params={"key": self.google_key},
-                    json={
-                        "contents": [{"parts": [{"text": prompt}]}],
-                        "generationConfig": {"maxOutputTokens": 500},
-                    },
-                )
-
-            if resp.status_code != 200:
-                return {"score": 5, "is_improvement": None, "side_effects": f"API-Fehler {resp.status_code} — Bewertung nicht moeglich", "suggestion": ""}
-
-            text = resp.json()["candidates"][0]["content"]["parts"][-1]["text"]
+            text = self._call_api(prompt, max_tokens=500)
+            if not text:
+                return {"score": 5, "is_improvement": None, "side_effects": "API-Fehler — Bewertung nicht moeglich", "suggestion": ""}
 
             # JSON parsen
             import re
@@ -240,12 +267,49 @@ class PromptMutator:
     Statt: Ein Ansatz → ausfuehren
     Neu: 3 Ansaetze → bewerten → besten ausfuehren
 
-    Nutzt Gemini Flash fuer die Varianten (guenstig).
+    Nutzt das konfigurierte Haupt-Modell fuer die Varianten.
     """
 
     def __init__(self):
-        self.google_key = os.getenv("GOOGLE_AI_API_KEY", "").strip()
-        self.model = MODELS[TASK_MODEL_MAP["main_work"]]["model_id"]
+        model_key = TASK_MODEL_MAP["main_work"]
+        model_config = MODELS[model_key]
+        self.provider = model_config["provider"]
+        self.model = model_config["model_id"]
+        if self.provider == "nvidia":
+            self.api_key = os.getenv("NVIDIA_API_KEY", "").strip()
+            self.api_url = "https://integrate.api.nvidia.com/v1/chat/completions"
+        elif self.provider == "google":
+            self.api_key = os.getenv("GOOGLE_AI_API_KEY", "").strip()
+            self.api_url = f"https://generativelanguage.googleapis.com/v1beta/models/{self.model}:generateContent"
+        else:
+            self.api_key = os.getenv("DEEPSEEK_API_KEY", "").strip()
+            self.api_url = "https://api.deepseek.com/chat/completions"
+
+    def _call_api(self, prompt: str, max_tokens: int = 500) -> str:
+        """Ruft die konfigurierte API auf und gibt den Text zurueck."""
+        with httpx.Client(timeout=30.0) as client:
+            if self.provider == "google":
+                resp = client.post(
+                    self.api_url,
+                    params={"key": self.api_key},
+                    json={"contents": [{"parts": [{"text": prompt}]}],
+                          "generationConfig": {"maxOutputTokens": max_tokens}},
+                )
+                if resp.status_code != 200:
+                    return ""
+                return resp.json()["candidates"][0]["content"]["parts"][-1]["text"]
+            else:
+                resp = client.post(
+                    self.api_url,
+                    headers={"Authorization": f"Bearer {self.api_key}",
+                             "Content-Type": "application/json"},
+                    json={"model": self.model,
+                          "messages": [{"role": "user", "content": prompt}],
+                          "max_tokens": max_tokens},
+                )
+                if resp.status_code != 200:
+                    return ""
+                return resp.json()["choices"][0]["message"]["content"]
 
     def generate_variants(self, task: str, context: str = "",
                           n_variants: int = 3) -> list[str]:
@@ -255,7 +319,7 @@ class PromptMutator:
         Returns:
             Liste von Ansaetzen (Strings)
         """
-        if not self.google_key:
+        if not self.api_key:
             return [task]  # Ohne API: Original zurueckgeben
 
         prompt = f"""Generiere {n_variants} VERSCHIEDENE Ansaetze fuer diese Aufgabe:
@@ -269,20 +333,9 @@ Gib genau {n_variants} Ansaetze als JSON-Array zurueck:
 Die Ansaetze muessen WIRKLICH verschieden sein — verschiedene Strategien, nicht Variationen."""
 
         try:
-            with httpx.Client(timeout=30.0) as client:
-                resp = client.post(
-                    f"https://generativelanguage.googleapis.com/v1beta/models/{self.model}:generateContent",
-                    params={"key": self.google_key},
-                    json={
-                        "contents": [{"parts": [{"text": prompt}]}],
-                        "generationConfig": {"maxOutputTokens": 1000},
-                    },
-                )
-
-            if resp.status_code != 200:
+            text = self._call_api(prompt, max_tokens=1000)
+            if not text:
                 return [task]
-
-            text = resp.json()["candidates"][0]["content"]["parts"][-1]["text"]
 
             import re
             cleaned = text.strip()
@@ -312,7 +365,7 @@ Die Ansaetze muessen WIRKLICH verschieden sein — verschiedene Strategien, nich
         if len(variants) <= 1:
             return 0
 
-        if not self.google_key:
+        if not self.api_key:
             return 0
 
         prompt = f"""Welcher Ansatz ist der BESTE? Antworte NUR mit der Nummer (1, 2, oder 3).
@@ -322,20 +375,9 @@ Die Ansaetze muessen WIRKLICH verschieden sein — verschiedene Strategien, nich
 {f'Kriterium: {criteria}' if criteria else 'Kriterium: Effektivitaet, Einfachheit, Zuverlaessigkeit'}"""
 
         try:
-            with httpx.Client(timeout=15.0) as client:
-                resp = client.post(
-                    f"https://generativelanguage.googleapis.com/v1beta/models/{self.model}:generateContent",
-                    params={"key": self.google_key},
-                    json={
-                        "contents": [{"parts": [{"text": prompt}]}],
-                        "generationConfig": {"maxOutputTokens": 10},
-                    },
-                )
-
-            if resp.status_code != 200:
+            text = self._call_api(prompt, max_tokens=10)
+            if not text:
                 return 0
-
-            text = resp.json()["candidates"][0]["content"]["parts"][-1]["text"]
             # Extrahiere die Nummer
             import re
             match = re.search(r"(\d+)", text)

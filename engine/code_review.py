@@ -27,13 +27,25 @@ from .config import safe_json_read, safe_json_write
 from .llm_router import MODELS, TASK_MODEL_MAP
 
 
-class GeminiReviewer:
-    """Gemini Flash als unabhaengiger Code-Reviewer."""
+class CodeReviewer:
+    """Code-Reviewer — nutzt das konfigurierte Review-Modell."""
 
     def __init__(self):
-        self.api_key = os.getenv("GOOGLE_AI_API_KEY", "").strip()
-        self.model = MODELS[TASK_MODEL_MAP["code_review"]]["model_id"]
-        self.base_url = "https://generativelanguage.googleapis.com/v1beta"
+        model_key = TASK_MODEL_MAP["code_review"]
+        model_config = MODELS[model_key]
+        self.provider = model_config["provider"]
+        self.model = model_config["model_id"]
+
+        # API-Key je nach Provider
+        if self.provider == "nvidia":
+            self.api_key = os.getenv("NVIDIA_API_KEY", "").strip()
+            self.base_url = "https://integrate.api.nvidia.com/v1"
+        elif self.provider == "google":
+            self.api_key = os.getenv("GOOGLE_AI_API_KEY", "").strip()
+            self.base_url = "https://generativelanguage.googleapis.com/v1beta"
+        else:
+            self.api_key = os.getenv("DEEPSEEK_API_KEY", "").strip()
+            self.base_url = "https://api.deepseek.com"
 
     @property
     def is_configured(self) -> bool:
@@ -90,24 +102,44 @@ Sei streng aber fair. Nur echte Probleme fuehren zu Ablehnung."""
 
         try:
             with httpx.Client(timeout=30.0) as client:
-                response = client.post(
-                    f"{self.base_url}/models/{self.model}:generateContent",
-                    params={"key": self.api_key},
-                    json={
-                        "contents": [{"parts": [{"text": prompt}]}],
-                        "generationConfig": {"maxOutputTokens": 2000},
-                    },
-                )
+                if self.provider == "google":
+                    # Gemini API
+                    response = client.post(
+                        f"{self.base_url}/models/{self.model}:generateContent",
+                        params={"key": self.api_key},
+                        json={
+                            "contents": [{"parts": [{"text": prompt}]}],
+                            "generationConfig": {"maxOutputTokens": 2000},
+                        },
+                    )
+                else:
+                    # OpenAI-kompatible API (NVIDIA, DeepSeek)
+                    response = client.post(
+                        f"{self.base_url}/chat/completions",
+                        headers={
+                            "Authorization": f"Bearer {self.api_key}",
+                            "Content-Type": "application/json",
+                        },
+                        json={
+                            "model": self.model,
+                            "messages": [{"role": "user", "content": prompt}],
+                            "max_tokens": 2000,
+                        },
+                    )
 
             if response.status_code != 200:
                 return {
                     "approved": False,
-                    "reason": f"Gemini API Fehler: {response.status_code} (fail-closed)",
+                    "reason": f"Review API Fehler: {response.status_code} (fail-closed)",
                     "issues": [f"HTTP {response.status_code}"],
                 }
 
             result = response.json()
-            text = result["candidates"][0]["content"]["parts"][0]["text"]
+            # Antwort-Text extrahieren je nach Provider
+            if self.provider == "google":
+                text = result["candidates"][0]["content"]["parts"][0]["text"]
+            else:
+                text = result["choices"][0]["message"]["content"]
 
             # JSON parsen (Code-Block-Wrapper entfernen)
             cleaned = text.strip()
@@ -155,7 +187,7 @@ class DualReviewSystem:
         self.backup_path.mkdir(parents=True, exist_ok=True)
 
         self.opus = Anthropic()
-        self.gemini = GeminiReviewer()
+        self.gemini = CodeReviewer()
 
     def review_and_apply_fix(
         self,

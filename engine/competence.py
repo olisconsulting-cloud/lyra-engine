@@ -259,8 +259,19 @@ Sei STRENG aber FAIR. Finde echte Probleme, keine Stilfragen."""
         self.root_path = root_path
         self.audit_log_path = root_path / "data" / "consciousness" / "audit_log.json"
         self.opus_client = Anthropic()
-        self.gemini_key = os.getenv("GOOGLE_AI_API_KEY", "").strip()
-        self.gemini_model = MODELS[TASK_MODEL_MAP["audit_secondary"]]["model_id"]
+        audit_key = TASK_MODEL_MAP["audit_secondary"]
+        audit_config = MODELS[audit_key]
+        self.secondary_provider = audit_config["provider"]
+        self.secondary_model = audit_config["model_id"]
+        if self.secondary_provider == "nvidia":
+            self.secondary_key = os.getenv("NVIDIA_API_KEY", "").strip()
+            self.secondary_url = "https://integrate.api.nvidia.com/v1/chat/completions"
+        elif self.secondary_provider == "google":
+            self.secondary_key = os.getenv("GOOGLE_AI_API_KEY", "").strip()
+            self.secondary_url = f"https://generativelanguage.googleapis.com/v1beta/models/{self.secondary_model}:generateContent"
+        else:
+            self.secondary_key = os.getenv("DEEPSEEK_API_KEY", "").strip()
+            self.secondary_url = "https://api.deepseek.com/chat/completions"
 
     def should_audit(self, sequences_since_last: int) -> bool:
         return sequences_since_last >= 15
@@ -337,24 +348,36 @@ Sei STRENG aber FAIR. Finde echte Probleme, keine Stilfragen."""
             return {"findings": [], "overall_quality": 0, "summary": f"Opus-Fehler: {e}"}
 
     def _audit_gemini(self, code_context: str) -> dict:
-        """Gemini Flash Audit."""
-        if not self.gemini_key:
-            return {"findings": [], "overall_quality": 0, "summary": "Gemini nicht konfiguriert"}
+        """Zweites Modell Audit (Kimi/Gemini/DeepSeek)."""
+        if not self.secondary_key:
+            return {"findings": [], "overall_quality": 0, "summary": "Secondary Auditor nicht konfiguriert"}
 
         try:
+            prompt = f"{self.AUDIT_PROMPT}\n\n{code_context}"
             with httpx.Client(timeout=60.0) as client:
-                response = client.post(
-                    f"https://generativelanguage.googleapis.com/v1beta/models/{self.gemini_model}:generateContent",
-                    params={"key": self.gemini_key},
-                    json={
-                        "contents": [{"parts": [{"text": f"{self.AUDIT_PROMPT}\n\n{code_context}"}]}],
-                        "generationConfig": {"maxOutputTokens": 4000},
-                    },
-                )
+                if self.secondary_provider == "google":
+                    response = client.post(
+                        self.secondary_url,
+                        params={"key": self.secondary_key},
+                        json={"contents": [{"parts": [{"text": prompt}]}],
+                              "generationConfig": {"maxOutputTokens": 4000}},
+                    )
+                else:
+                    response = client.post(
+                        self.secondary_url,
+                        headers={"Authorization": f"Bearer {self.secondary_key}",
+                                 "Content-Type": "application/json"},
+                        json={"model": self.secondary_model,
+                              "messages": [{"role": "user", "content": prompt}],
+                              "max_tokens": 4000},
+                    )
             if response.status_code != 200:
-                return {"findings": [], "overall_quality": 0, "summary": f"Gemini HTTP {response.status_code}"}
+                return {"findings": [], "overall_quality": 0, "summary": f"Audit HTTP {response.status_code}"}
 
-            text = response.json()["candidates"][0]["content"]["parts"][0]["text"]
+            if self.secondary_provider == "google":
+                text = response.json()["candidates"][0]["content"]["parts"][0]["text"]
+            else:
+                text = response.json()["choices"][0]["message"]["content"]
             return self._parse_json(text)
         except Exception as e:
             return {"findings": [], "overall_quality": 0, "summary": f"Gemini-Fehler: {e}"}
