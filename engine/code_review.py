@@ -23,13 +23,15 @@ from typing import Optional
 import httpx
 from anthropic import Anthropic
 
+from .llm_router import MODELS, TASK_MODEL_MAP
+
 
 class GeminiReviewer:
     """Gemini Flash als unabhaengiger Code-Reviewer."""
 
     def __init__(self):
         self.api_key = os.getenv("GOOGLE_AI_API_KEY", "").strip()
-        self.model = "gemini-2.5-flash"
+        self.model = MODELS[TASK_MODEL_MAP["code_review"]]["model_id"]
         self.base_url = "https://generativelanguage.googleapis.com/v1beta"
 
     @property

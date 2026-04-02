@@ -20,6 +20,8 @@ from typing import Optional
 
 from anthropic import Anthropic
 
+from .llm_router import MODELS, TASK_MODEL_MAP
+
 
 # ============================================================
 # 1. ADAPTIVER RHYTHMUS
@@ -181,7 +183,7 @@ class AdaptiveRhythm:
 # 2. TOOL-FOUNDRY (ECHT — mit LLM-Call)
 # ============================================================
 
-FOUNDRY_MODEL = "claude-sonnet-4-6"  # Sonnet reicht fuer Tool-Generierung
+FOUNDRY_MODEL = MODELS[TASK_MODEL_MAP["tool_generation"]]["model_id"]
 
 
 class ToolFoundry:

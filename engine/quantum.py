@@ -27,6 +27,8 @@ from typing import Optional
 
 import httpx
 
+from .llm_router import MODELS, TASK_MODEL_MAP
+
 
 # ============================================================
 # 1. FAILURE-MEMORY
@@ -161,7 +163,7 @@ class CriticAgent:
 
     def __init__(self):
         self.google_key = os.getenv("GOOGLE_AI_API_KEY", "").strip()
-        self.model = "gemini-2.5-flash"
+        self.model = MODELS[TASK_MODEL_MAP["code_review"]]["model_id"]
 
     def evaluate_change(self, file_path: str, old_code: str, new_code: str,
                         reason: str) -> dict:
@@ -250,7 +252,7 @@ class PromptMutator:
 
     def __init__(self):
         self.google_key = os.getenv("GOOGLE_AI_API_KEY", "").strip()
-        self.model = "gemini-2.5-flash"
+        self.model = MODELS[TASK_MODEL_MAP["main_work"]]["model_id"]
 
     def generate_variants(self, task: str, context: str = "",
                           n_variants: int = 3) -> list[str]:

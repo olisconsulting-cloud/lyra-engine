@@ -2,12 +2,15 @@
 Multi-LLM Router — Waehlt das optimale Modell je nach Aufgabe.
 
 Aufstellung:
-- Gemini 3 Flash: Haupt-Arbeit (80%) — Tool-Use, Code, Projekte
-- Claude Opus 4.6: Kritische Selbstverbesserung (Audit) — Batch API
-- Gemini 2.5 Flash: Code-Review (guenstigster Check)
-- Gemini 3 Flash: Audit-Gegenpruefung + Telegram-Antwort
+- Gemini 3 Flash: Haupt-Arbeit (80%) — Tool-Use, Code, Telegram, Code-Review
+- Gemini 2.5 Flash: Fallback wenn Gemini 3 Flash versagt
+- Claude Opus 4.6: Tiefenanalyse (Audit primary)
+- DeepSeek V3.2: Dream, Tool-Foundry, Fallback (~35x guenstiger als Claude Sonnet)
 
-Kosten: ~$4-9/Tag statt $50-100 mit Opus-only
+TASK_MODEL_MAP ist die EINZIGE Stelle fuer Modell-Zuordnung.
+Alle Module importieren von hier — keine hardcodierten Modell-IDs.
+
+Kosten: ~$5-10/Tag statt $50-100 mit Opus-only
 """
 
 import json
@@ -25,17 +28,17 @@ from anthropic import Anthropic
 MODELS = {
     "gemini_3_flash": {
         "provider": "google",
-        "model_id": "gemini-2.5-flash",  # 2.5 Flash — stabil, Tool-Use funktioniert
-        "input_cost": 0.15,
-        "output_cost": 0.60,
-        "use_for": "Haupt-Arbeit, Tool-Use, Coding, Telegram",
+        "model_id": "gemini-3-flash-preview",  # 3 Flash Preview — 78% SWE-bench, massiver Qualitaetssprung
+        "input_cost": 0.50,
+        "output_cost": 3.00,
+        "use_for": "Haupt-Arbeit, Tool-Use, Coding, Telegram, Code-Review",
     },
     "gemini_25_flash": {
         "provider": "google",
-        "model_id": "gemini-2.5-flash",
-        "input_cost": 0.15,
-        "output_cost": 0.60,
-        "use_for": "Code-Review (guenstigster Check)",
+        "model_id": "gemini-2.5-flash",  # 2.5 Flash — stabiler Fallback
+        "input_cost": 0.30,
+        "output_cost": 2.50,
+        "use_for": "Fallback wenn Gemini 3 Flash versagt",
     },
     "claude_opus": {
         "provider": "anthropic",
@@ -44,25 +47,25 @@ MODELS = {
         "output_cost": 25.00,
         "use_for": "Kritische Selbstverbesserung, Audit",
     },
-    "claude_sonnet": {
-        "provider": "anthropic",
-        "model_id": "claude-sonnet-4-6",
-        "input_cost": 3.00,
-        "output_cost": 15.00,
-        "use_for": "Fallback wenn Gemini nicht reicht",
+    "deepseek_v3": {
+        "provider": "deepseek",
+        "model_id": "deepseek-chat",  # V3.2 — $0.28/$0.42 pro 1M Tokens, OpenAI-kompatibel
+        "input_cost": 0.28,
+        "output_cost": 0.42,
+        "use_for": "Dream, Tool-Foundry, Fallback (35x guenstiger als Claude Sonnet)",
     },
 }
 
-# Welches Modell fuer welche Aufgabe
+# Welches Modell fuer welche Aufgabe — EINZIGE Stelle fuer Modell-Zuordnung
 TASK_MODEL_MAP = {
     "main_work": "gemini_3_flash",          # Agentic Loop, Tool-Use
-    "code_review": "gemini_25_flash",        # Gemini als Reviewer
+    "code_review": "gemini_3_flash",          # Gemini 3 Flash als Reviewer
     "audit_primary": "claude_opus",          # Opus fuer Tiefenanalyse
     "audit_secondary": "gemini_3_flash",     # Gemini als Gegenpruefung
     "telegram_reply": "gemini_3_flash",      # Sofort-Antwort
-    "dream": "gemini_3_flash",               # Memory-Konsolidierung
-    "tool_generation": "gemini_3_flash",     # Tool-Foundry
-    "fallback": "claude_sonnet",             # Wenn Gemini versagt
+    "dream": "deepseek_v3",                  # Memory-Konsolidierung (DeepSeek V3.2)
+    "tool_generation": "deepseek_v3",        # Tool-Foundry (DeepSeek V3.2)
+    "fallback": "deepseek_v3",               # Wenn Gemini versagt
 }
 
 
@@ -72,11 +75,13 @@ class LLMRouter:
 
     Anthropic: Tool-Use ueber native API
     Google: Tool-Use ueber REST API
+    DeepSeek: OpenAI-kompatible REST API
     """
 
     def __init__(self):
         self.anthropic = Anthropic()
         self.google_key = os.getenv("GOOGLE_AI_API_KEY", "").strip()
+        self.deepseek_key = os.getenv("DEEPSEEK_API_KEY", "").strip()
         self.http = httpx.Client(timeout=120.0)
 
         # Kosten-Tracking (thread-safe)
@@ -172,6 +177,191 @@ class LLMRouter:
 
         # Gemini Response → Anthropic-kompatibles Format konvertieren
         return self._gemini_to_anthropic_response(data, model_key)
+
+    # === DeepSeek (OpenAI-kompatibel) ===
+
+    def call_deepseek(
+        self, model_key: str, system: str, messages: list,
+        tools: Optional[list] = None, max_tokens: int = 16000,
+    ) -> dict:
+        """
+        Ruft DeepSeek V3.2 auf — OpenAI-kompatible API.
+
+        Returns: Gleiches Format wie call_anthropic fuer Kompatibilitaet.
+        """
+        if not self.deepseek_key:
+            raise ValueError("DEEPSEEK_API_KEY nicht konfiguriert")
+
+        model_id = MODELS[model_key]["model_id"]
+
+        # Anthropic Messages → OpenAI Messages konvertieren
+        oai_messages = self._anthropic_to_openai_messages(system, messages)
+
+        body = {
+            "model": model_id,
+            "messages": oai_messages,
+            "max_tokens": max_tokens,
+        }
+
+        # Tools konvertieren (Anthropic → OpenAI Format)
+        if tools:
+            oai_tools = self._anthropic_to_openai_tools(tools)
+            if oai_tools:
+                body["tools"] = oai_tools
+
+        resp = self.http.post(
+            "https://api.deepseek.com/chat/completions",
+            headers={
+                "Authorization": f"Bearer {self.deepseek_key}",
+                "Content-Type": "application/json",
+            },
+            json=body,
+        )
+
+        if resp.status_code != 200:
+            raise ValueError(f"DeepSeek API Fehler {resp.status_code}: {resp.text[:200]}")
+
+        data = resp.json()
+        return self._openai_to_anthropic_response(data, model_key)
+
+    def _anthropic_to_openai_messages(self, system: str, messages: list) -> list:
+        """Konvertiert Anthropic Messages zu OpenAI Messages."""
+        oai_msgs = []
+
+        if system:
+            oai_msgs.append({"role": "system", "content": system})
+
+        for msg in messages:
+            role = msg["role"]
+            content = msg["content"]
+
+            if isinstance(content, str):
+                oai_msgs.append({"role": role, "content": content})
+            elif isinstance(content, list):
+                # Einfache Text-Extraktion — Tool-Use wird separat behandelt
+                text_parts = []
+                tool_calls = []
+                tool_results = []
+
+                for block in content:
+                    if isinstance(block, dict):
+                        if block.get("type") == "text":
+                            text_parts.append(block.get("text", ""))
+                        elif block.get("type") == "tool_use":
+                            tool_calls.append({
+                                "id": block["id"],
+                                "type": "function",
+                                "function": {
+                                    "name": block["name"],
+                                    "arguments": json.dumps(block.get("input", {})),
+                                },
+                            })
+                        elif block.get("type") == "tool_result":
+                            tool_results.append(block)
+                    elif hasattr(block, "text"):
+                        text_parts.append(block.text)
+                    elif hasattr(block, "type") and block.type == "tool_use":
+                        tool_calls.append({
+                            "id": block.id,
+                            "type": "function",
+                            "function": {
+                                "name": block.name,
+                                "arguments": json.dumps(block.input if isinstance(block.input, dict) else {}),
+                            },
+                        })
+
+                if tool_calls:
+                    msg_data = {"role": "assistant"}
+                    if text_parts:
+                        msg_data["content"] = "\n".join(text_parts)
+                    msg_data["tool_calls"] = tool_calls
+                    oai_msgs.append(msg_data)
+                elif tool_results:
+                    for tr in tool_results:
+                        oai_msgs.append({
+                            "role": "tool",
+                            "tool_call_id": tr.get("tool_use_id", ""),
+                            "content": str(tr.get("content", "")),
+                        })
+                elif text_parts:
+                    oai_msgs.append({"role": role, "content": "\n".join(text_parts)})
+
+        return oai_msgs
+
+    def _anthropic_to_openai_tools(self, tools: list) -> list:
+        """Konvertiert Anthropic Tool-Definitionen zu OpenAI Function-Format."""
+        oai_tools = []
+        for tool in tools:
+            oai_tools.append({
+                "type": "function",
+                "function": {
+                    "name": tool["name"],
+                    "description": tool.get("description", ""),
+                    "parameters": tool.get("input_schema", {}),
+                },
+            })
+        return oai_tools
+
+    def _openai_to_anthropic_response(self, data: dict, model_key: str) -> dict:
+        """Konvertiert OpenAI Response zu Anthropic-kompatiblem Format."""
+        choice = data.get("choices", [{}])[0]
+        message = choice.get("message", {})
+
+        content = []
+        has_tool_use = False
+        tool_counter = 0
+
+        # Text-Content
+        if message.get("content"):
+            content.append(type("TextBlock", (), {
+                "type": "text", "text": message["content"],
+                "model_dump": lambda self=None, t=message["content"]: {"type": "text", "text": t},
+            })())
+
+        # Tool-Calls
+        for tc in message.get("tool_calls", []):
+            has_tool_use = True
+            func = tc.get("function", {})
+            tool_id = tc.get("id", f"toolu_deepseek_{tool_counter}")
+            tool_counter += 1
+
+            try:
+                args = json.loads(func.get("arguments", "{}"))
+            except json.JSONDecodeError:
+                args = {}
+
+            content.append(type("ToolUseBlock", (), {
+                "type": "tool_use",
+                "id": tool_id,
+                "name": func.get("name", ""),
+                "input": args,
+                "model_dump": lambda self=None, tid=tool_id, n=func.get("name",""), inp=args: {
+                    "type": "tool_use", "id": tid, "name": n, "input": inp
+                },
+            })())
+
+        if not content:
+            fallback_text = "Ich konnte keine Antwort generieren. Ich versuche es anders."
+            content.append(type("TextBlock", (), {
+                "type": "text", "text": fallback_text,
+                "model_dump": lambda self=None, t=fallback_text: {"type": "text", "text": t},
+            })())
+
+        # Usage
+        usage = data.get("usage", {})
+        input_tokens = usage.get("prompt_tokens", 0)
+        output_tokens = usage.get("completion_tokens", 0)
+
+        self._track_cost(model_key, input_tokens, output_tokens)
+
+        stop_reason = "tool_use" if has_tool_use else "end_turn"
+
+        return {
+            "content": content,
+            "stop_reason": stop_reason,
+            "usage": {"input_tokens": input_tokens, "output_tokens": output_tokens},
+            "model": MODELS[model_key]["model_id"],
+        }
 
     def _anthropic_to_gemini_messages(self, messages: list) -> list:
         """

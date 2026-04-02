@@ -22,6 +22,8 @@ from typing import Optional
 import httpx
 from anthropic import Anthropic
 
+from .llm_router import MODELS, TASK_MODEL_MAP
+
 
 # === KOMPETENZ-MATRIX ===
 
@@ -167,8 +169,9 @@ class CompetenceMatrix:
         return suggestion
 
     def get_overview(self) -> str:
-        """Kompakte Uebersicht aller Ziel-Skills mit Status."""
-        lines = []
+        """Kompakte Uebersicht — nur Gaps und erreichte Skills, kein Volllisting."""
+        gaps = []
+        reached = []
         for skill_id, target in TARGET_SKILLS.items():
             current_data = self.skills.get(skill_id, {})
             current_level = current_data.get("level", "novice")
@@ -178,24 +181,21 @@ class CompetenceMatrix:
             target_rank = LEVEL_ORDER.get(target_level, 0)
 
             if current_rank >= target_rank:
-                icon = "✓"
-            elif current_rank >= target_rank - 1:
-                icon = "~"  # Fast da
+                reached.append(skill_id)
             else:
-                icon = "✗"
+                gaps.append(f"{skill_id}({current_level}→{target_level})")
 
-            successes = current_data.get("successes", 0)
-            lines.append(
-                f"  {icon} {target['name']}: {current_level} → {target_level} "
-                f"({successes} Nutzungen)"
-            )
-
-        return "\n".join(lines)
+        parts = []
+        if gaps:
+            parts.append(f"GAPS: {', '.join(gaps)}")
+        if reached:
+            parts.append(f"OK: {', '.join(reached)}")
+        return " | ".join(parts) if parts else "Alle Skills erreicht"
 
 
 # === SELBST-AUDIT ===
 
-AUDIT_MODEL = "claude-opus-4-6"  # Opus fuer tiefste Code-Analyse
+AUDIT_MODEL = MODELS[TASK_MODEL_MAP["audit_primary"]]["model_id"]
 
 # Dateien die beim Audit geprueft werden
 AUDIT_FILES = [
@@ -259,6 +259,7 @@ Sei STRENG aber FAIR. Finde echte Probleme, keine Stilfragen."""
         self.audit_log_path = root_path / "data" / "consciousness" / "audit_log.json"
         self.opus_client = Anthropic()
         self.gemini_key = os.getenv("GOOGLE_AI_API_KEY", "").strip()
+        self.gemini_model = MODELS[TASK_MODEL_MAP["audit_secondary"]]["model_id"]
 
     def should_audit(self, sequences_since_last: int) -> bool:
         return sequences_since_last >= 15
@@ -342,7 +343,7 @@ Sei STRENG aber FAIR. Finde echte Probleme, keine Stilfragen."""
         try:
             client = httpx.Client(timeout=60.0)
             response = client.post(
-                "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent",
+                f"https://generativelanguage.googleapis.com/v1beta/models/{self.gemini_model}:generateContent",
                 params={"key": self.gemini_key},
                 json={
                     "contents": [{"parts": [{"text": f"{self.AUDIT_PROMPT}\n\n{code_context}"}]}],

@@ -18,8 +18,7 @@ from pathlib import Path
 
 from anthropic import Anthropic
 
-
-DREAM_MODEL = "claude-sonnet-4-6"  # Sonnet reicht fuer Konsolidierung
+from .llm_router import MODELS, TASK_MODEL_MAP
 
 
 class DreamEngine:
@@ -30,6 +29,7 @@ class DreamEngine:
         self.consciousness_path = base_path / "consciousness"
         self.dream_log_path = self.consciousness_path / "dream_log.json"
         self.client = Anthropic()
+        self.model = MODELS[TASK_MODEL_MAP["dream"]]["model_id"]
 
     def should_dream(self, sequences_since_last: int) -> bool:
         """Prueft ob eine Konsolidierung faellig ist."""
@@ -69,7 +69,7 @@ Antworte als JSON:
 
         try:
             response = self.client.messages.create(
-                model=DREAM_MODEL,
+                model=self.model,
                 max_tokens=4000,
                 system=system_prompt,
                 messages=[{"role": "user", "content": context}],
