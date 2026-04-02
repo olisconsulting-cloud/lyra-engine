@@ -206,14 +206,14 @@ class ActionEngine:
         if not target.exists():
             return f"FEHLER: {relative_path} existiert nicht."
 
-        # Security-Scan auf Script-Inhalt (FIX: Security-Bypass)
+        # Security-Scan auf Script-Inhalt
         try:
             script_content = target.read_text(encoding="utf-8")
             code_check = self.security.check_code_execution(script_content)
             if not code_check["allowed"]:
                 return f"FEHLER (Security): {'; '.join(code_check['hard_blocks'][:2])}"
-        except Exception:
-            pass
+        except Exception as e:
+            return f"FEHLER (Security): Script konnte nicht geprueft werden: {e}"
 
         venv_python = Path(config.ROOT_PATH) / "venv" / "Scripts" / "python.exe"
         python_cmd = str(venv_python) if venv_python.exists() else sys.executable
