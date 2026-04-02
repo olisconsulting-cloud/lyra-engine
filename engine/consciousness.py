@@ -1831,7 +1831,19 @@ REGELN:
                 pass
 
         name = self.genesis.get("name", "Phi")
-        print(f"\n  --- Sequenz {self.sequences_total + 1} ---")
+
+        # Sequenz-Header: Nummer + aktueller Fokus
+        focus = self.goal_stack.get_current_focus()
+        focus_short = focus.split("\n")[0].replace("FOKUS: ", "") if "FOKUS:" in focus else ""
+        print(f"\n  --- Sequenz {self.sequences_total + 1}: {focus_short} ---" if focus_short
+              else f"\n  --- Sequenz {self.sequences_total + 1} ---")
+
+        # Alle 5 Sequenzen: Gesamtplan mit Checkmarks anzeigen
+        if self.sequences_total % 5 == 0:
+            summary = self.goal_stack.get_summary()
+            if summary and "Keine aktiven" not in summary:
+                for line in summary.split("\n"):
+                    print(f"  {line}")
 
         for step in range(MAX_STEPS_PER_SEQUENCE):
             # Token-Budget pruefen bevor neuer Call
