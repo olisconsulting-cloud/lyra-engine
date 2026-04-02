@@ -38,8 +38,8 @@ from .quantum import FailureMemory, CriticAgent, PromptMutator, SkillComposer
 from . import config
 from .config import safe_json_write, safe_json_read
 
-MAX_STEPS_PER_SEQUENCE = 25          # Max Tool-Calls pro Sequenz (fokussiert)
-MAX_INPUT_TOKENS_PER_SEQUENCE = 100_000  # Kuerzere Sequenzen = klarerer Fokus
+MAX_STEPS_PER_SEQUENCE = 25          # Max Tool-Calls pro Sequenz (Sicherheitsnetz)
+MAX_INPUT_TOKENS_PER_SEQUENCE = 150_000  # ~10-12 Schritte, Soft-Warning bei 80% (120k)
 MAX_TOKENS = 16000                    # Max Output-Tokens pro LLM-Call
 
 
