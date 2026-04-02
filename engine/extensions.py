@@ -250,45 +250,6 @@ class TaskQueue:
         return "\n".join(lines) if lines else "Keine Aufgaben."
 
 
-class ErrorMemory:
-    """Trackt Fehler damit Lyra aus ihnen lernt."""
-
-    def __init__(self, base_path: Path):
-        self.errors_path = base_path / "consciousness" / "errors.json"
-        self.errors = self._load()
-
-    def _load(self) -> list:
-        if self.errors_path.exists():
-            with open(self.errors_path, "r", encoding="utf-8") as f:
-                return json.load(f)
-        return []
-
-    def _save(self):
-        with open(self.errors_path, "w", encoding="utf-8") as f:
-            json.dump(self.errors[-30:], f, indent=2, ensure_ascii=False)
-
-    def record_error(self, tool_name: str, error: str, context: str = ""):
-        """Speichert einen Fehler."""
-        self.errors.append({
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-            "tool": tool_name,
-            "error": error[:300],
-            "context": context[:200],
-        })
-        self.errors = self.errors[-30:]
-        self._save()
-
-    def get_recent_errors(self, n: int = 5) -> str:
-        """Letzte n Fehler als Kontext."""
-        if not self.errors:
-            return ""
-        recent = self.errors[-n:]
-        lines = ["LETZTE FEHLER (vermeide diese):"]
-        for e in recent:
-            lines.append(f"  [{e.get('tool', '?')}] {e.get('error', '')[:100]}")
-        return "\n".join(lines)
-
-
 class SelfRating:
     """Selbstbewertung — Lyra bewertet ihre Leistung nach jeder Sequenz."""
 
