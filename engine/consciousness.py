@@ -1574,12 +1574,7 @@ REGELN:
         self.running = True
         name = self.genesis.get("name", "Lyra")
 
-        print(f"\n{'=' * 60}")
-        print(f"  {name} — Agentic Mode")
-        print(f"  Sequenzen bisher: {self.sequences_total}")
-        print(f"  Tool-Calls bisher: {self.state.get('total_tool_calls', 0)}")
-        print(f"  Telegram: {'aktiv' if self.communication.telegram_active else 'aus'}")
-        print(f"  Ctrl+C = Pausieren")
+        print(f"\n  {name} laeuft. Telegram zum Schreiben, Ctrl+C zum Stoppen.")
         print(f"{'=' * 60}\n")
 
         try:
@@ -1835,17 +1830,8 @@ REGELN:
             except Exception:
                 pass
 
-        name = self.genesis.get("name", "Lyra")
-        mode_labels = {
-            "execution": "arbeitet",
-            "evolution": "verbessert sich",
-            "sprint": "im Sprint",
-            "learning": "lernt",
-        }
-        mode_label = mode_labels.get(mode["mode"], mode["mode"])
-        print(f"\n  {'─' * 40}")
-        print(f"  {name} {mode_label}... (Sequenz {self.sequences_total + 1})")
-        print()
+        name = self.genesis.get("name", "Phi")
+        print(f"\n  --- Sequenz {self.sequences_total + 1} ---")
 
         for step in range(MAX_STEPS_PER_SEQUENCE):
             # Token-Budget pruefen bevor neuer Call
@@ -1880,16 +1866,12 @@ REGELN:
             self.sequence_input_tokens += usage.get("input_tokens", 0)
             self.sequence_output_tokens += usage.get("output_tokens", 0)
 
-            # Lyras Gedanken anzeigen — narrativ, nicht technisch
+            # Lyras Gedanken — nur erste sinnvolle Zeile
             for block in response["content"]:
                 if hasattr(block, "text") and block.text.strip():
-                    text = block.text.strip()
-                    # Maximal 3 Zeilen anzeigen — Essenz, kein Dump
-                    lines = [l for l in text.split("\n") if l.strip()]
-                    for line in lines[:3]:
-                        print(f"  💭 {line.strip()}")
-                    if len(lines) > 3:
-                        print(f"  💭 ...")
+                    first_line = block.text.strip().split("\n")[0].strip()
+                    if first_line and len(first_line) > 5:
+                        print(f"  💭 {first_line[:120]}")
 
             # Serialisierung (kompatibel mit Anthropic + Gemini Objekten)
             messages.append({
@@ -1911,17 +1893,20 @@ REGELN:
                         result = self._execute_tool(block.name, block.input)
                         result_str = str(result)[:3000]
 
-                        # Erfolg oder Fehler — kurz und klar
+                        # Erfolg oder Fehler
                         is_error = result_str.startswith("FEHLER") or result_str.startswith("ROLLBACK")
                         if is_error:
                             print(f"  ❌ {action_desc}")
-                            # Bei Fehlern: Details zeigen
-                            error_preview = result_str.replace("\n", " ")[:150]
+                            error_preview = result_str.replace("\n", " ")[:120]
                             print(f"     {error_preview}")
                         elif block.name == "finish_sequence":
-                            pass  # Wird unten als Zusammenfassung angezeigt
-                        else:
+                            pass
+                        elif block.name in ("web_search", "create_project", "send_telegram",
+                                            "create_goal", "modify_own_code", "create_tool",
+                                            "write_file", "git_commit"):
+                            # Wichtige Aktionen immer anzeigen
                             print(f"  ✓ {action_desc}")
+                        # Alles andere (list_directory, read_file, etc.) still
 
                         tool_results.append({
                             "type": "tool_result",
@@ -1968,26 +1953,18 @@ REGELN:
             "duration_seconds": round(seq_duration, 1),
         })
 
-        # Zusammenfassung — narrativ
-        name = self.genesis.get("name", "Lyra")
+        # Kompakte Zusammenfassung
         duration_min = seq_duration / 60
-        print(f"\n  {'─' * 40}")
-        error_note = f" ({self._seq_errors} Fehler)" if self._seq_errors > 0 else ""
-        print(f"  {name}: {step_count} Aktionen in {duration_min:.1f} Min{error_note} | ${seq_cost:.3f}")
-        strongest = self.skills.get_strongest_skills(3)
-        if strongest:
-            print(f"  Staerken: {', '.join(strongest)}")
+        error_note = f", {self._seq_errors} Fehler" if self._seq_errors > 0 else ""
+        print(f"  [{step_count} Aktionen, {duration_min:.1f} Min{error_note}]")
 
-        # Stille-Fehler-Erkennung nach jeder Sequenz
+        # Stille-Fehler nur wenn vorhanden
         silent_warnings = self.silent_failure_detector.check_after_sequence(
             self.sequences_total, self._seq_tool_calls
         )
         if silent_warnings:
-            print(f"  STILLE FEHLER:")
             for w in silent_warnings:
-                print(f"    {w}")
-
-        print()
+                print(f"  ⚠ {w}")
 
         self.sequence_input_tokens = 0
         self.sequence_output_tokens = 0
