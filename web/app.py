@@ -15,21 +15,18 @@ from typing import Any
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
-from fastapi.staticfiles import StaticFiles
 
 from engine.config import (
     CONSCIOUSNESS_PATH,
-    DATA_PATH,
     JOURNAL_PATH,
     MEMORY_PATH,
     MESSAGES_PATH,
+    PROJECTS_PATH,
 )
 
 app = FastAPI(title="Phi Dashboard", docs_url=None, redoc_url=None)
 
-# Statische Dateien
 WEB_PATH = Path(__file__).parent
-app.mount("/static", StaticFiles(directory=str(WEB_PATH / "static")), name="static")
 
 
 # --- Hilfsfunktionen ---
@@ -62,6 +59,8 @@ def time_ago(iso_str: str) -> str:
         then = datetime.fromisoformat(iso_str)
         now = datetime.now(timezone.utc)
         seconds = (now - then).total_seconds()
+        if seconds < 0:
+            return "gerade eben"
         if seconds < 60:
             return f"vor {seconds:.0f}s"
         elif seconds < 3600:
@@ -85,46 +84,6 @@ def get_unread_count() -> int:
         if not msg.get("read", True):
             count += 1
     return count
-
-
-def get_recent_experiences(limit: int = 10) -> list[dict]:
-    """Holt die letzten Erfahrungen."""
-    exp_path = MEMORY_PATH / "experiences"
-    if not exp_path.exists():
-        return []
-    files = sorted(exp_path.glob("*.json"))[-limit:]
-    experiences = []
-    for f in files:
-        exp = read_json(f)
-        if exp:
-            experiences.append({
-                "type": exp.get("type", "?"),
-                "content": exp.get("content", "")[:200],
-                "valence": exp.get("valence", 0),
-                "timestamp": exp.get("timestamp", ""),
-            })
-    return experiences
-
-
-def get_journal_entries(limit: int = 5) -> list[dict]:
-    """Holt die letzten Journal-Eintraege."""
-    if not JOURNAL_PATH.exists():
-        return []
-    files = sorted(JOURNAL_PATH.glob("*.md"))[-limit:]
-    entries = []
-    for f in files:
-        content = read_text(f)
-        # Letzte Sektion extrahieren
-        sections = content.split("\n## ")
-        last_sections = sections[-3:] if len(sections) > 3 else sections
-        preview = "\n## ".join(last_sections)
-        if len(preview) > 2000:
-            preview = preview[-2000:]
-        entries.append({
-            "date": f.stem,
-            "content": preview,
-        })
-    return entries
 
 
 # --- API Endpunkte ---
@@ -238,6 +197,107 @@ async def get_state() -> dict[str, Any]:
     }
 
 
+@app.get("/api/journal")
+async def get_journal() -> list[dict]:
+    """Journal-Eintraege — Phis Tagebuch."""
+    if not JOURNAL_PATH.exists():
+        return []
+    entries = []
+    for f in sorted(JOURNAL_PATH.glob("*.md")):
+        content = read_text(f)
+        # Sektionen aufsplitten (## Zyklus ...)
+        sections = content.split("\n## ")
+        for i, section in enumerate(sections):
+            if not section.strip():
+                continue
+            # Erste Sektion hat den # Header, danach ## Sektionen
+            text = section if i == 0 else f"## {section}"
+            entries.append({
+                "date": f.stem,
+                "content": text.strip()[:1000],
+            })
+    return entries[-30:]  # Letzte 30 Sektionen
+
+
+@app.get("/api/experiences")
+async def get_experiences() -> list[dict]:
+    """Erfahrungen — was Phi erlebt hat, mit Valence und Emotionen."""
+    exp_path = MEMORY_PATH / "experiences"
+    if not exp_path.exists():
+        return []
+    experiences = []
+    for f in sorted(exp_path.glob("*.json"))[-30:]:
+        exp = read_json(f)
+        if exp:
+            experiences.append({
+                "id": exp.get("id", "?"),
+                "timestamp": exp.get("timestamp", ""),
+                "type": exp.get("type", "?"),
+                "content": exp.get("content", "")[:300],
+                "valence": exp.get("valence", 0),
+                "emotions": exp.get("emotions", {}),
+                "tags": exp.get("tags", []),
+            })
+    return experiences
+
+
+@app.get("/api/projects")
+async def get_projects() -> list[dict]:
+    """Projekte — von Phi erstellte Projekte."""
+    if not PROJECTS_PATH.exists():
+        return []
+    projects = []
+    for d in sorted(PROJECTS_PATH.iterdir()):
+        if not d.is_dir() or d.name.startswith("_"):
+            continue
+        # README oder PLAN lesen fuer Beschreibung
+        desc = ""
+        for readme_name in ("README.md", "PLAN.md", "PROGRESS.md"):
+            readme = d / readme_name
+            if readme.exists():
+                desc = read_text(readme)[:500]
+                break
+        # Dateien zaehlen
+        files = [f.name for f in d.iterdir() if f.is_file() and not f.name.startswith("_")]
+        projects.append({
+            "name": d.name,
+            "description": desc,
+            "files": files,
+            "file_count": len(files),
+        })
+    return projects
+
+
+@app.post("/api/message")
+async def send_message(body: dict) -> dict:
+    """Nachricht an Phi senden — wird in die Inbox geschrieben."""
+    content = body.get("content", "").strip()
+    if not content:
+        return {"ok": False, "error": "Leere Nachricht"}
+    if len(content) > 2000:
+        return {"ok": False, "error": "Nachricht zu lang (max 2000 Zeichen)"}
+
+    inbox = MESSAGES_PATH / "inbox"
+    inbox.mkdir(parents=True, exist_ok=True)
+
+    timestamp = datetime.now(timezone.utc)
+    msg = {
+        "from": "oliver",
+        "timestamp": timestamp.isoformat(),
+        "content": content,
+        "channel": "dashboard",
+        "read": False,
+    }
+
+    # Dateiname mit Mikrosekunden gegen Kollisionen bei schnellen Klicks
+    filename = f"{timestamp.strftime('%Y%m%d_%H%M%S_%f')}_dashboard.json"
+    msg_path = inbox / filename
+
+    msg_path.write_text(json.dumps(msg, indent=2, ensure_ascii=False), encoding="utf-8")
+
+    return {"ok": True, "message_id": filename}
+
+
 # --- WebSocket fuer Live-Updates ---
 
 class ConnectionManager:
@@ -284,8 +344,6 @@ async def websocket_endpoint(ws: WebSocket):
 
             if current_hash != last_hash and current_hash:
                 last_hash = current_hash
-                # Vollen State senden
-                from starlette.testclient import TestClient
                 state = read_json(state_path)
                 await ws.send_json({"type": "state_changed", "sequences_total": state.get("sequences_total", 0)})
 

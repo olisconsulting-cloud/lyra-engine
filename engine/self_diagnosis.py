@@ -398,7 +398,9 @@ class SilentFailureDetector:
         self.data_path = data_path
         self.detector_log_path = data_path / "consciousness" / "silent_failures.json"
 
-    def check_after_sequence(self, sequence_num: int, tool_calls: int) -> list[str]:
+    def check_after_sequence(self, sequence_num: int, tool_calls: int,
+                             files_written: int = 0, tools_built: int = 0,
+                             errors: int = 0) -> list[str]:
         """
         Prueft nach einer Sequenz ob alles gelaufen ist was haette laufen sollen.
 
@@ -406,6 +408,23 @@ class SilentFailureDetector:
             Liste von Warnungen (leer = alles OK)
         """
         warnings = []
+
+        # 0. Spin-Loop Detection: Unproduktive Sequenz erkennen
+        # Kriterium: Keine Output-Artefakte UND sehr wenige Tool-Calls (<=1)
+        # Sequenzen mit 2+ Calls sind oft legitime Recherche (web_search, read_file)
+        is_unproductive = (files_written == 0 and tools_built == 0
+                           and errors == 0 and tool_calls <= 1)
+        if is_unproductive:
+            self._record_unproductive()
+            streak = self._get_unproductive_streak()
+            if streak >= 3:
+                warnings.append(
+                    f"SPIN-LOOP: {streak} unproduktive Sequenzen in Folge "
+                    f"(0 Dateien, 0 Tools, <=2 Calls). "
+                    f"Entweder konkreten Fortschritt machen oder Modus wechseln!"
+                )
+        else:
+            self._reset_unproductive()
 
         # 1. Wenn Tool-Calls > 0 aber keine Skills getrackt → Tracking kaputt
         if tool_calls > 0:
@@ -461,6 +480,45 @@ class SilentFailureDetector:
             self._log_warnings(warnings, sequence_num)
 
         return warnings
+
+    def _record_unproductive(self):
+        """Zaehlt unproduktive Sequenz hoch."""
+        spin_path = self.data_path / "consciousness" / "spin_loop_counter.json"
+        try:
+            data = {"streak": 0}
+            if spin_path.exists():
+                with open(spin_path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+            data["streak"] = data.get("streak", 0) + 1
+            data["last_update"] = datetime.now(timezone.utc).isoformat()
+            with open(spin_path, "w", encoding="utf-8") as f:
+                json.dump(data, f)
+        except Exception:
+            pass
+
+    def _reset_unproductive(self):
+        """Setzt Spin-Loop-Counter zurueck nach produktiver Sequenz."""
+        spin_path = self.data_path / "consciousness" / "spin_loop_counter.json"
+        try:
+            with open(spin_path, "w", encoding="utf-8") as f:
+                json.dump({"streak": 0}, f)
+        except Exception:
+            pass
+
+    def _get_unproductive_streak(self) -> int:
+        """Gibt aktuelle Anzahl unproduktiver Sequenzen in Folge zurueck."""
+        spin_path = self.data_path / "consciousness" / "spin_loop_counter.json"
+        try:
+            if spin_path.exists():
+                with open(spin_path, "r", encoding="utf-8") as f:
+                    return json.load(f).get("streak", 0)
+        except Exception:
+            pass
+        return 0
+
+    def get_spin_loop_streak(self) -> int:
+        """Oeffentlicher Zugriff auf Spin-Loop-Streak fuer AdaptiveRhythm."""
+        return self._get_unproductive_streak()
 
     def _log_warnings(self, warnings: list, sequence: int):
         try:

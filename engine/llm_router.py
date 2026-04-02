@@ -2,10 +2,9 @@
 Multi-LLM Router — Waehlt das optimale Modell je nach Aufgabe.
 
 Aufstellung:
-- Gemini 3 Flash: Haupt-Arbeit (80%) — Tool-Use, Code, Telegram, Code-Review
-- Gemini 2.5 Flash: Fallback wenn Gemini 3 Flash versagt
-- Claude Opus 4.6: Tiefenanalyse (Audit primary)
-- DeepSeek V3.2: Dream, Tool-Foundry, Fallback (~35x guenstiger als Claude Sonnet)
+- Kimi K2.5 (NVIDIA): Haupt-Arbeit (80%) — Tool-Use, Code, Telegram
+- Claude Opus 4.6: Code-Review, Tiefenanalyse, Audit (unabhaengiger Reviewer)
+- DeepSeek V3.2: Fallback (~35x guenstiger als Claude Sonnet)
 
 TASK_MODEL_MAP ist die EINZIGE Stelle fuer Modell-Zuordnung.
 Alle Module importieren von hier — keine hardcodierten Modell-IDs.
@@ -55,12 +54,14 @@ MODELS = {
 # Welches Modell fuer welche Aufgabe — EINZIGE Stelle fuer Modell-Zuordnung
 TASK_MODEL_MAP = {
     "main_work": "kimi_k25",                 # Agentic Loop, Tool-Use (Kimi K2.5 via NVIDIA)
-    "code_review": "kimi_k25",               # Kimi K2.5 als Reviewer
+    "code_review": "claude_opus",              # Opus 4.6 als unabhaengiger Reviewer (echtes Dual-Review)
     "audit_primary": "claude_opus",          # Opus fuer Tiefenanalyse
     "audit_secondary": "kimi_k25",           # Kimi als Gegenpruefung
     "telegram_reply": "kimi_k25",            # Sofort-Antwort
     "dream": "kimi_k25",                     # Memory-Konsolidierung
     "tool_generation": "kimi_k25",           # Tool-Foundry
+    "goal_planning": "claude_opus",          # Opus fuer Goal-Zerlegung (bestimmt nachfolgende Arbeit)
+    "result_validation": "claude_opus",      # Opus fuer Ergebnis-Pruefung bei Projekt-Abschluss
     "fallback": "deepseek_v3",               # Fallback wenn Kimi versagt
 }
 

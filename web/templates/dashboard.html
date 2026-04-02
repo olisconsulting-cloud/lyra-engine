@@ -95,6 +95,17 @@
             background: #222230 !important;
             border-bottom: 1px solid #2a2a3a !important;
         }
+
+        /* Alpine x-cloak: versteckt bis Alpine initialisiert */
+        [x-cloak] { display: none !important; }
+
+        /* Line-Clamp fuer Projektbeschreibungen */
+        .line-clamp-4 {
+            display: -webkit-box;
+            -webkit-line-clamp: 4;
+            -webkit-box-orient: vertical;
+            overflow: hidden;
+        }
     </style>
 </head>
 
@@ -138,6 +149,22 @@
 
     <!-- Hauptinhalt -->
     <main class="max-w-[1600px] mx-auto px-6 py-6">
+
+        <!-- Tab-Navigation -->
+        <div class="flex gap-1 mb-6 border-b border-surface-3 pb-px">
+            <template x-for="tab in tabs" :key="tab.id">
+                <button @click="activeTab = tab.id; if (tab.id === 'overview') $nextTick(() => { Object.values(charts).forEach(c => c.resize && c.resize()) })"
+                        class="px-4 py-2 text-xs font-medium rounded-t-lg transition-colors"
+                        :class="activeTab === tab.id
+                            ? 'bg-surface-2 text-white border border-surface-3 border-b-surface-2 -mb-px'
+                            : 'text-gray-500 hover:text-gray-300'">
+                    <span x-text="tab.label"></span>
+                </button>
+            </template>
+        </div>
+
+        <!-- ==================== TAB: UEBERSICHT ==================== -->
+        <div x-show="activeTab === 'overview'">
 
         <!-- Status-Karten (obere Reihe) -->
         <div class="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4 mb-6">
@@ -329,13 +356,122 @@
                 </div>
             </div>
         </div>
+        </div><!-- /overview tab -->
+
+        <!-- ==================== TAB: JOURNAL ==================== -->
+        <div x-show="activeTab === 'journal'" x-cloak>
+            <div class="card p-6">
+                <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-4">Phis Tagebuch</h2>
+                <div class="space-y-4 max-h-[70vh] overflow-y-auto pr-2">
+                    <template x-for="(entry, i) in [...journal].reverse()" :key="i">
+                        <div class="border-l-2 border-phi-700/50 pl-4 pb-4">
+                            <p class="text-[10px] mono text-gray-500 mb-1" x-text="entry.date"></p>
+                            <div class="text-sm text-gray-300 leading-relaxed whitespace-pre-wrap" x-text="entry.content"></div>
+                        </div>
+                    </template>
+                    <p x-show="!journal.length" class="text-gray-600 text-sm">Noch keine Journal-Eintraege.</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- ==================== TAB: ERFAHRUNGEN ==================== -->
+        <div x-show="activeTab === 'experiences'" x-cloak>
+            <div class="card p-6">
+                <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-4">Erfahrungen</h2>
+                <div class="space-y-3 max-h-[70vh] overflow-y-auto pr-2">
+                    <template x-for="exp in [...experiences].reverse()" :key="exp.id">
+                        <div class="bg-surface-2 rounded-lg p-4 flex gap-4">
+                            <!-- Valence-Indikator -->
+                            <div class="flex flex-col items-center flex-shrink-0">
+                                <div class="w-10 h-10 rounded-full flex items-center justify-center text-lg"
+                                     :class="exp.valence > 0.5 ? 'bg-green-900/30' : exp.valence < -0.2 ? 'bg-red-900/30' : 'bg-surface-3'"
+                                     x-text="exp.valence > 0.5 ? '+' : exp.valence < -0.2 ? '-' : '~'"></div>
+                                <span class="text-[10px] mono mt-1"
+                                      :class="exp.valence > 0.5 ? 'text-green-400' : exp.valence < -0.2 ? 'text-red-400' : 'text-gray-500'"
+                                      x-text="exp.valence.toFixed(1)"></span>
+                            </div>
+                            <!-- Inhalt -->
+                            <div class="flex-1 min-w-0">
+                                <div class="flex items-center gap-2 mb-1">
+                                    <span class="text-[10px] px-1.5 py-0.5 bg-surface-4 rounded text-gray-400" x-text="exp.type"></span>
+                                    <span class="text-[10px] mono text-gray-600" x-text="formatTime(exp.timestamp)"></span>
+                                </div>
+                                <p class="text-sm text-gray-300 leading-relaxed" x-text="exp.content"></p>
+                                <div class="flex flex-wrap gap-1 mt-1.5" x-show="exp.tags.length > 0">
+                                    <template x-for="tag in exp.tags" :key="tag">
+                                        <span class="text-[10px] px-1.5 py-0.5 bg-phi-900/30 text-phi-300 rounded" x-text="tag"></span>
+                                    </template>
+                                </div>
+                            </div>
+                        </div>
+                    </template>
+                    <p x-show="!experiences.length" class="text-gray-600 text-sm">Noch keine Erfahrungen.</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- ==================== TAB: PROJEKTE ==================== -->
+        <div x-show="activeTab === 'projects'" x-cloak>
+            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                <template x-for="project in projects" :key="project.name">
+                    <div class="card p-5">
+                        <div class="flex items-start justify-between mb-3">
+                            <h3 class="text-sm font-medium text-white" x-text="project.name"></h3>
+                            <span class="text-[10px] mono text-gray-500 bg-surface-3 px-1.5 py-0.5 rounded" x-text="project.file_count + ' Dateien'"></span>
+                        </div>
+                        <p class="text-xs text-gray-400 leading-relaxed mb-3 line-clamp-4" x-text="project.description.slice(0, 200) || '(keine Beschreibung)'"></p>
+                        <div class="flex flex-wrap gap-1">
+                            <template x-for="file in project.files.slice(0, 6)" :key="file">
+                                <span class="text-[10px] mono px-1.5 py-0.5 bg-surface-3 rounded text-gray-500" x-text="file"></span>
+                            </template>
+                            <span x-show="project.files.length > 6" class="text-[10px] text-gray-600" x-text="'+' + (project.files.length - 6) + ' mehr'"></span>
+                        </div>
+                    </div>
+                </template>
+                <p x-show="!projects.length" class="text-gray-600 text-sm col-span-3">Noch keine Projekte.</p>
+            </div>
+        </div>
+
+        <!-- ==================== TAB: NACHRICHT ==================== -->
+        <div x-show="activeTab === 'message'" x-cloak>
+            <div class="max-w-2xl mx-auto">
+                <div class="card p-6">
+                    <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-4">Nachricht an Phi</h2>
+                    <div class="space-y-4">
+                        <textarea x-model="messageText"
+                                  @keydown.ctrl.enter="sendMessage()"
+                                  placeholder="Schreibe Phi eine Nachricht... (Ctrl+Enter zum Senden)"
+                                  class="w-full h-32 bg-surface-2 border border-surface-4 rounded-lg px-4 py-3 text-sm text-gray-200 placeholder-gray-600 focus:outline-none focus:border-phi-600 resize-none"></textarea>
+                        <div class="flex items-center justify-between">
+                            <span class="text-[10px] text-gray-600" x-text="messageText.length + '/2000'"></span>
+                            <div class="flex items-center gap-3">
+                                <span x-show="messageSent" x-transition class="text-xs text-green-400">Gesendet!</span>
+                                <button @click="sendMessage()"
+                                        :disabled="!messageText.trim() || sendingMessage"
+                                        class="px-4 py-2 bg-phi-600 hover:bg-phi-500 disabled:bg-surface-3 disabled:text-gray-600 text-white text-sm rounded-lg transition-colors">
+                                    <span x-text="sendingMessage ? 'Sende...' : 'Senden'"></span>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Ungelesene Nachrichten -->
+                <div class="card p-6 mt-4" x-show="state.unread_messages > 0">
+                    <p class="text-xs text-gray-400">
+                        <span class="text-phi-400 font-medium" x-text="state.unread_messages"></span> ungelesene Nachrichten von Phi in der Outbox.
+                    </p>
+                </div>
+            </div>
+        </div>
+
     </main>
 
     <!-- Footer -->
     <footer class="border-t border-surface-3 mt-12 py-4">
         <div class="max-w-[1600px] mx-auto px-6 flex items-center justify-between text-xs text-gray-600">
             <span>Phi Engine v1.0 &middot; Geboren <span x-text="state.born"></span></span>
-            <span>Auto-Refresh alle 5s &middot; <span class="mono" x-text="new Date().toLocaleTimeString('de-DE')"></span></span>
+            <span>Auto-Refresh alle 5s &middot; <span class="mono" x-text="clockTime"></span></span>
         </div>
     </footer>
 
@@ -369,6 +505,27 @@
             ws: null,
             charts: {},
             refreshTimer: null,
+            clockTime: new Date().toLocaleTimeString('de-DE'),
+
+            // Tabs
+            activeTab: 'overview',
+            tabs: [
+                { id: 'overview', label: 'Uebersicht' },
+                { id: 'journal', label: 'Journal' },
+                { id: 'experiences', label: 'Erfahrungen' },
+                { id: 'projects', label: 'Projekte' },
+                { id: 'message', label: 'Nachricht' },
+            ],
+
+            // Neue Daten
+            journal: [],
+            experiences: [],
+            projects: [],
+
+            // Nachricht senden
+            messageText: '',
+            sendingMessage: false,
+            messageSent: false,
 
             get statusMetrics() {
                 return [
@@ -388,9 +545,48 @@
 
             async init() {
                 await this.fetchState();
+                await this.fetchTabData();
                 this.connectWebSocket();
                 // Auto-Refresh alle 5 Sekunden
-                this.refreshTimer = setInterval(() => this.fetchState(), 5000);
+                this.refreshTimer = setInterval(() => {
+                    this.fetchState();
+                    // Tab-Daten nur laden wenn aktiver Tab es braucht
+                    if (this.activeTab !== 'overview') this.fetchTabData();
+                }, 5000);
+                // Uhr jede Sekunde aktualisieren
+                setInterval(() => { this.clockTime = new Date().toLocaleTimeString('de-DE'); }, 1000);
+            },
+
+            async fetchTabData() {
+                try {
+                    const [j, e, p] = await Promise.all([
+                        fetch('/api/journal').then(r => r.ok ? r.json() : []),
+                        fetch('/api/experiences').then(r => r.ok ? r.json() : []),
+                        fetch('/api/projects').then(r => r.ok ? r.json() : []),
+                    ]);
+                    this.journal = j;
+                    this.experiences = e;
+                    this.projects = p;
+                } catch (e) { console.warn('Tab-Daten fehlgeschlagen:', e); }
+            },
+
+            async sendMessage() {
+                if (!this.messageText.trim() || this.sendingMessage) return;
+                this.sendingMessage = true;
+                try {
+                    const res = await fetch('/api/message', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ content: this.messageText }),
+                    });
+                    const data = await res.json();
+                    if (data.ok) {
+                        this.messageText = '';
+                        this.messageSent = true;
+                        setTimeout(() => { this.messageSent = false; }, 3000);
+                    }
+                } catch (e) { console.warn('Nachricht fehlgeschlagen:', e); }
+                this.sendingMessage = false;
             },
 
             async fetchState() {
@@ -405,15 +601,19 @@
                 }
             },
 
+            wsRetries: 0,
+
             connectWebSocket() {
                 const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
                 this.ws = new WebSocket(`${proto}//${location.host}/ws`);
 
-                this.ws.onopen = () => { this.connected = true; };
+                this.ws.onopen = () => { this.connected = true; this.wsRetries = 0; };
                 this.ws.onclose = () => {
                     this.connected = false;
-                    // Reconnect nach 3 Sekunden
-                    setTimeout(() => this.connectWebSocket(), 3000);
+                    // Exponentieller Backoff: 3s, 6s, 12s, max 30s
+                    const delay = Math.min(3000 * Math.pow(2, this.wsRetries), 30000);
+                    this.wsRetries++;
+                    setTimeout(() => this.connectWebSocket(), delay);
                 };
                 this.ws.onmessage = (e) => {
                     const data = JSON.parse(e.data);

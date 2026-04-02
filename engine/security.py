@@ -28,7 +28,9 @@ PROTECTED_FILES = {
 # Engine-Dateien: Aenderungen NUR durch Dual-Review
 ENGINE_PATHS = {
     "engine/",
+    "web/",
     "run.py",
+    "run_dashboard_web.py",
     "interact.py",
     "setup.py",
 }

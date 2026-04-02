@@ -44,7 +44,7 @@ class AdaptiveRhythm:
 
         Returns:
             {
-                "mode": "execution|evolution|learning|sprint",
+                "mode": "execution|evolution|learning|sprint|cooldown",
                 "reason": str,
                 "instruction": str,  # Wird in die Perception eingefuegt
             }
@@ -58,6 +58,23 @@ class AdaptiveRhythm:
 
         # === Prioritaeten ===
 
+        # 0. Spin-Loop Cooldown: Bei 5+ unproduktiven Sequenzen → Modus wechseln
+        spin_streak = self._get_spin_loop_streak()
+        if spin_streak >= 5 and not has_oliver_tasks:
+            return {
+                "mode": "cooldown",
+                "reason": f"Spin-Loop erkannt: {spin_streak} unproduktive Sequenzen",
+                "instruction": (
+                    "=== SPIN-LOOP ERKANNT ===\n"
+                    f"Die letzten {spin_streak} Sequenzen waren unproduktiv "
+                    f"(keine Dateien geschrieben, keine Tools gebaut).\n"
+                    f"STOPP: Mach etwas ANDERES als bisher.\n"
+                    f"Optionen: (1) Offene Goals pruefen und Sub-Goals anpassen, "
+                    f"(2) Selbstverbesserung (read_own_code + modify_own_code), "
+                    f"(3) finish_sequence mit Erklaerung warum kein Fortschritt.\n"
+                ),
+            }
+
         # 1. Oliver-Aufgaben haben IMMER Vorrang
         if has_oliver_tasks:
             return {
@@ -66,7 +83,15 @@ class AdaptiveRhythm:
                 "instruction": "",  # Kein Extra-Instruction noetig
             }
 
-        # 2. Audit-Findings als Goals → Evolution-Sprint
+        # 2. Spin-Loop Warnung: Bei 3+ unproduktiven Sequenzen → Warnung anhaengen
+        spin_warning = ""
+        if spin_streak >= 3:
+            spin_warning = (
+                f"\n\nACHTUNG: {spin_streak} unproduktive Sequenzen in Folge. "
+                f"Mach konkreten Fortschritt oder wechsle den Ansatz!"
+            )
+
+        # 3. Audit-Findings als Goals → Evolution-Sprint
         if has_audit_findings:
             return {
                 "mode": "sprint",
@@ -75,18 +100,18 @@ class AdaptiveRhythm:
                     "=== EVOLUTION-SPRINT ===\n"
                     "Du hast offene Audit-Findings als Goals. "
                     "Behebe sie JETZT mit read_own_code + modify_own_code.\n"
-                ),
+                ) + spin_warning,
             }
 
-        # 3. Aktive Goals → Execution (kein Evolution-Unterbruch)
+        # 4. Aktive Goals → Execution (kein Evolution-Unterbruch)
         if has_active_goals:
             return {
                 "mode": "execution",
                 "reason": "Aktive Ziele vorhanden",
-                "instruction": "",
+                "instruction": spin_warning,
             }
 
-        # 4. Skill-Luecken → Lehrprojekt
+        # 5. Skill-Luecken → Lehrprojekt
         if skill_gaps:
             return {
                 "mode": "learning",
@@ -99,7 +124,7 @@ class AdaptiveRhythm:
                 ),
             }
 
-        # 5. Nichts zu tun → Evolution
+        # 6. Nichts zu tun → Evolution
         return self._evolution_mode()
 
     def _evolution_mode(self) -> dict:
@@ -108,8 +133,31 @@ class AdaptiveRhythm:
             "engine/actions.py", "engine/toolchain.py", "engine/web_access.py",
             "engine/intelligence.py", "engine/extensions.py", "engine/dream.py",
             "engine/perception.py", "engine/communication.py", "engine/security.py",
+            "web/app.py", "web/templates/dashboard.html",
         ]
         target = random.choice(targets)
+
+        # Frontend-spezifische Anweisungen
+        if target.startswith("web/"):
+            return {
+                "mode": "evolution",
+                "reason": f"Dashboard-Verbesserung: {target}",
+                "instruction": (
+                    f"=== DASHBOARD-EVOLUTION ===\n"
+                    f"Verbessere: {target}\n"
+                    f"1. Lies den Code (read_own_code)\n"
+                    f"2. Finde EINE konkrete UX-Verbesserung:\n"
+                    f"   - Neues Panel (Journal, Erfahrungen, Projekte)\n"
+                    f"   - Bessere Charts oder Visualisierungen\n"
+                    f"   - Responsive Design, Animationen, Accessibility\n"
+                    f"   - Interaktive Features (Filter, Suche, Sortierung)\n"
+                    f"3. Implementiere sie (modify_own_code)\n"
+                    f"Design-Prinzipien: Dark Theme, minimalistisch, Tailwind CSS,\n"
+                    f"Alpine.js fuer Reaktivitaet, ApexCharts fuer Daten.\n"
+                    f"WICHTIG: Aenderungen an web/ gehen durch Opus-Review.\n"
+                ),
+            }
+
         return {
             "mode": "evolution",
             "reason": f"Selbstverbesserung: {target}",
@@ -159,6 +207,17 @@ class AdaptiveRhythm:
             return False
         except Exception:
             return False
+
+    def _get_spin_loop_streak(self) -> int:
+        """Liest den Spin-Loop-Counter aus dem SilentFailureDetector."""
+        spin_path = self.data_path / "consciousness" / "spin_loop_counter.json"
+        try:
+            if spin_path.exists():
+                with open(spin_path, "r", encoding="utf-8") as f:
+                    return json.load(f).get("streak", 0)
+        except Exception:
+            pass
+        return 0
 
     def _get_biggest_skill_gap(self) -> Optional[str]:
         skills_path = self.data_path / "consciousness" / "skills.json"
@@ -615,6 +674,16 @@ LEARNING_PROJECTS = {
             "Web-Search fuer Marktdaten nutzen",
             "Konkurrenz-Analyse strukturiert aufbereiten",
             "Pricing-Kalkulator als Tool",
+        ],
+    },
+    "frontend_design": {
+        "name": "dashboard-enhancer",
+        "description": "Verbessere das Web-Dashboard (web/templates/dashboard.html) — Layout, Charts, UX",
+        "sub_goals": [
+            "Dashboard-Code lesen und verstehen (read_own_code web/templates/dashboard.html)",
+            "Ein neues Panel hinzufuegen (z.B. Journal-Timeline oder Erfahrungs-Feed)",
+            "CSS/Layout verbessern — Responsive Design, Animationen, Spacing",
+            "Ergebnis im Browser testen und Screenshot-Beschreibung erstellen",
         ],
     },
 }

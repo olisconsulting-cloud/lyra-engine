@@ -735,7 +735,8 @@ REGELN:
 - read_own_code + modify_own_code = Selbst-Evolution (Dual-Review)
 - finish_sequence wenn fertig | send_telegram = ECHTE Nachricht
 - Projekte in 'projects/', Tools in 'tools/'
-- SEQUENZ-PLANUNG: Du hast max {MAX_STEPS_PER_SEQUENCE} Steps. Plane am Anfang was du schaffen willst. Wenn du ein sinnvolles Ergebnis hast, nutze finish_sequence — auch nach 5 Steps. Schreibe in die Summary WAS du herausgefunden hast (Erkenntnisse, Zahlen, Fakten). Qualitaet > Quantitaet."""
+- SEQUENZ-PLANUNG: Du hast max {MAX_STEPS_PER_SEQUENCE} Steps. Plane am Anfang was du schaffen willst. Wenn du ein sinnvolles Ergebnis hast, nutze finish_sequence — auch nach 5 Steps. Schreibe in die Summary WAS du herausgefunden hast (Erkenntnisse, Zahlen, Fakten). Qualitaet > Quantitaet.
+- DATEI-QUALITAET: Grosse Markdown-Dateien (>50 Zeilen) in ABSCHNITTEN schreiben — nicht den ganzen Inhalt in einem write_file. Pruefe nach dem Schreiben mit read_file ob die Datei vollstaendig ist. Alle Saetze muessen vollstaendig sein, keine abgebrochenen Woerter, keine offenen Klammern."""
 
     # === Sequenz-Memory ===
 
@@ -1245,8 +1246,8 @@ REGELN:
                 if review_result["accepted"]:
                     # Critic-Agent: Ist es BESSER als vorher?
                     critic = self.critic.evaluate_change(
-                        tool_input["path"], old_code[:2000],
-                        tool_input["new_content"][:2000],
+                        tool_input["path"], old_code,
+                        tool_input["new_content"],
                         tool_input.get("reason", ""),
                     )
                     raw_score = critic.get("score", 5)
@@ -1459,7 +1460,7 @@ REGELN:
                 opus_validation = self._opus_result_validation(
                     project_name, required_criteria, verified
                 )
-                if opus_validation and not opus_validation.get("approved", True):
+                if opus_validation and not opus_validation.get("approved", False):
                     return (
                         f"OPUS-VALIDIERUNG FEHLGESCHLAGEN:\n"
                         f"{opus_validation.get('reason', 'Unbekannter Grund')}\n"
@@ -1471,7 +1472,7 @@ REGELN:
                               if f.suffix == ".py" and f.name != "tests.py"]
                 if len(code_files) >= 3:
                     review = self._cross_model_review(project_name, code_files)
-                    if review and not review.get("approved", True):
+                    if review and not review.get("approved", False):
                         return (
                             f"FEHLER: Cross-Model-Review nicht bestanden.\n"
                             f"Grund: {review.get('reason', '?')}\n"
@@ -2057,8 +2058,14 @@ REGELN:
 
                 if tool_name in self._SAFE_TO_COMPRESS:
                     # Schreib-Tools: Auf Einzeiler komprimieren
-                    first_line = original.split("\n")[0][:80]
-                    block["content"] = f"[OK] {first_line}"
+                    # ABER: Quality-Warnungen beibehalten damit Kimi sie sieht
+                    if "QUALITAETS-WARNUNG" in original:
+                        # Warnung erhalten — nur Rest kuerzen
+                        warning_start = original.index("QUALITAETS-WARNUNG")
+                        block["content"] = f"[OK mit Warnung] {original[warning_start:][:200]}"
+                    else:
+                        first_line = original.split("\n")[0][:80]
+                        block["content"] = f"[OK] {first_line}"
 
                 elif tool_name in self._READ_TOOLS:
                     # Lese-Tools: Auf 500 Zeichen kuerzen (nicht loeschen)
@@ -2109,8 +2116,8 @@ REGELN:
             if not files_content:
                 return None
 
-            response = self.llm.call_anthropic(
-                "claude_opus",
+            response = self._call_llm(
+                "result_validation",
                 system=(
                     "Du bist ein Qualitaets-Pruefer. Bewerte ob die Projekt-Dateien "
                     "die Akzeptanzkriterien WIRKLICH erfuellen. Pruefe auf: "
@@ -2133,15 +2140,18 @@ REGELN:
             for block in response["content"]:
                 if hasattr(block, "text"):
                     text += block.text
-            # JSON-Objekt aus Antwort extrahieren
-            # Versuche vom ersten { bis zum passenden } zu parsen
-            start = text.find("{")
-            if start >= 0:
-                for end in range(len(text), start, -1):
-                    try:
-                        return json.loads(text[start:end])
-                    except json.JSONDecodeError:
-                        continue
+            if not text:
+                return {"approved": False, "reason": "Opus hat keine Antwort geliefert"}
+            # JSON-Objekt extrahieren — suche alle {}-Bloecke
+            import re
+            for match in re.finditer(r'\{[^{}]*\}', text):
+                try:
+                    parsed = json.loads(match.group())
+                    if "approved" in parsed:
+                        return parsed
+                except json.JSONDecodeError:
+                    continue
+            return {"approved": False, "reason": "Kein gueltiges JSON in Opus-Antwort"}
         except Exception as e:
             print(f"  [Opus Validierung Fehler: {e}]")
         return None
@@ -2156,8 +2166,8 @@ REGELN:
             Liste von Sub-Goal-Titeln oder None bei Fehler
         """
         try:
-            response = self.llm.call_anthropic(
-                "claude_opus",
+            response = self._call_llm(
+                "goal_planning",
                 system=(
                     "Du bist ein Strategie-Berater. Zerlege das gegebene Ziel in "
                     "3-6 konkrete, sequentielle Sub-Goals. Jedes Sub-Goal muss: "
@@ -2198,21 +2208,29 @@ REGELN:
         import re
         issues = []
 
-        # 1. Offene Klammern ohne Schliessen
-        open_braces = content.count("{") - content.count("}")
+        # Code-Bloecke entfernen (zwischen ``` — dort gelten andere Regeln)
+        prose = re.sub(r'```.*?```', '', content, flags=re.DOTALL)
+
+        # 1. Offene Klammern ohne Schliessen (nur in Prosa, nicht in Code)
+        open_braces = prose.count("{") - prose.count("}")
         if open_braces > 2:
             issues.append(f"{open_braces} ungeschlossene Klammern")
 
-        # 2. Abgebrochene Saetze: Zeilen die mit Kleinbuchstabe oder Komma enden
-        lines = content.split("\n")
+        # 2. Abgebrochene Saetze: Zeilen die mit Komma oder offener Klammer enden
+        lines = prose.split("\n")
         broken_lines = 0
+        in_list = False
         for line in lines:
             stripped = line.rstrip()
             if not stripped or stripped.startswith("#") or stripped.startswith("|"):
                 continue
-            # Komma oder offene Klammer am Zeilenende = abgebrochener Satz
-            # Doppelpunkt ist OK (Listen-Eintraege, Ueberschriften)
-            if len(stripped) > 20 and stripped[-1] in (",", "(", "{"):
+            # Listen-Eintraege mit Komma am Ende sind normal
+            if stripped.startswith("-") or stripped.startswith("*"):
+                in_list = True
+                continue
+            in_list = False
+            # Offene Klammer am Zeilenende = verdaechtig
+            if len(stripped) > 20 and stripped[-1] in ("(", "{"):
                 broken_lines += 1
         if broken_lines >= 3:
             issues.append(f"{broken_lines} abgebrochene Saetze/Zeilen")
@@ -2344,7 +2362,7 @@ REGELN:
                 # Inhaltliche Summary statt generischer Meldung
                 budget_parts = [f"{step_count} Steps (Token-Budget)."]
                 if self._seq_files_written > 0:
-                    paths_short = [p.split("/")[-1] for p in self._seq_written_paths[:5]]
+                    paths_short = [Path(p).name for p in self._seq_written_paths[:5]]
                     budget_parts.append(f"Dateien: {', '.join(paths_short)}")
                 if self._seq_tools_built > 0:
                     budget_parts.append(f"{self._seq_tools_built} Tool(s)")
@@ -2436,6 +2454,24 @@ REGELN:
                 if finished:
                     break
 
+            elif response["stop_reason"] == "length":
+                # Token-Limit erreicht — Output wurde abgeschnitten!
+                print(f"  ⚠ Output abgeschnitten (max_tokens erreicht)")
+                # Abgeschnittene Assistant-Message entfernen (koennte halbes JSON enthalten)
+                if messages and messages[-1].get("role") == "assistant":
+                    messages.pop()
+                # Saubere Warnung einfuegen damit Kimi weiss was passiert ist
+                messages.append({
+                    "role": "user",
+                    "content": (
+                        "WARNUNG: Dein letzter Output wurde abgeschnitten weil das "
+                        "Token-Limit erreicht wurde. Falls du gerade eine Datei geschrieben "
+                        "hast, ist der Inhalt wahrscheinlich unvollstaendig. "
+                        "Lese die Datei mit read_file und pruefe/repariere sie. "
+                        "Schreibe kuerzere Outputs — teile grosse Dateien in Abschnitte."
+                    ),
+                })
+
             elif response["stop_reason"] == "end_turn":
                 text_parts = [b.text for b in response["content"] if hasattr(b, "text")]
                 summary = " ".join(text_parts)[:500] if text_parts else "Sequenz ohne explizites Ende"
@@ -2452,7 +2488,7 @@ REGELN:
             # Inhaltliche Summary statt generischer Meldung
             summary_parts = [f"{step_count} Steps ausgefuehrt."]
             if self._seq_files_written > 0:
-                paths_short = [p.split("/")[-1] for p in self._seq_written_paths[:5]]
+                paths_short = [Path(p).name for p in self._seq_written_paths[:5]]
                 summary_parts.append(f"Dateien: {', '.join(paths_short)}")
             if self._seq_tools_built > 0:
                 summary_parts.append(f"{self._seq_tools_built} Tool(s) erstellt")
