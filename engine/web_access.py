@@ -31,6 +31,14 @@ class WebAccess:
             follow_redirects=True,
         )
 
+    def close(self):
+        """Schliesst den HTTP-Client sauber."""
+        if self.client:
+            self.client.close()
+
+    def __del__(self):
+        self.close()
+
     # === Web-Suche ===
 
     def search(self, query: str, max_results: int = 5) -> str:

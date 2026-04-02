@@ -34,7 +34,8 @@ class TelegramBridge:
         self.base_url = f"https://api.telegram.org/bot{token}"
         self.client = httpx.Client(timeout=30.0)
         self._polling_thread: Optional[threading.Thread] = None
-        self._polling_active = False
+        self._polling_active: bool = False
+        self._polling_lock = threading.Lock()
         self._last_update_id = 0
         self._consecutive_errors = 0
 
@@ -171,7 +172,14 @@ class TelegramBridge:
 
     def stop_polling(self):
         """Stoppt den Polling-Thread."""
-        self._polling_active = False
+        with self._polling_lock:
+            self._polling_active = False
+
+    def close(self):
+        """Stoppt Polling und schliesst den HTTP-Client sauber."""
+        self.stop_polling()
+        if self.client:
+            self.client.close()
 
     def _polling_loop(self, on_message=None):
         """Interner Polling-Loop — laeuft als Daemon-Thread."""

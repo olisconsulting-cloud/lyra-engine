@@ -551,7 +551,7 @@ class ConsciousnessEngine:
 
         try:
             content = config.MISSION_PATH.read_text(encoding="utf-8")
-        except Exception:
+        except OSError:
             return result
 
         current_section = ""
@@ -736,7 +736,8 @@ REGELN:
 - finish_sequence wenn fertig | send_telegram = ECHTE Nachricht
 - Projekte in 'projects/', Tools in 'tools/'
 - SEQUENZ-PLANUNG: Du hast max {MAX_STEPS_PER_SEQUENCE} Steps. Plane am Anfang was du schaffen willst. Wenn du ein sinnvolles Ergebnis hast, nutze finish_sequence — auch nach 5 Steps. Schreibe in die Summary WAS du herausgefunden hast (Erkenntnisse, Zahlen, Fakten). Qualitaet > Quantitaet.
-- DATEI-QUALITAET: Grosse Markdown-Dateien (>50 Zeilen) in ABSCHNITTEN schreiben — nicht den ganzen Inhalt in einem write_file. Pruefe nach dem Schreiben mit read_file ob die Datei vollstaendig ist. Alle Saetze muessen vollstaendig sein, keine abgebrochenen Woerter, keine offenen Klammern."""
+- DATEI-QUALITAET: Grosse Markdown-Dateien (>50 Zeilen) in ABSCHNITTEN schreiben — nicht den ganzen Inhalt in einem write_file. Pruefe nach dem Schreiben mit read_file ob die Datei vollstaendig ist. Alle Saetze muessen vollstaendig sein, keine abgebrochenen Woerter, keine offenen Klammern.
+- LOOP-GUARD: Wenn create_project "FEHLER: AEHNLICHES PROJEKT EXISTIERT" oder "FEHLER: Projekt existiert bereits" zurueckgibt, SOFORT zum bestehenden Projekt wechseln (read_file, write_file). NIEMALS das gleiche Projekt nochmal erstellen. Wenn ein Sub-Goal blockiert ist, nutze finish_sequence und erklaere warum."""
 
     # === Sequenz-Memory ===
 
@@ -756,7 +757,7 @@ REGELN:
             for entry in recent:
                 lines.append(f"  [{entry.get('seq', '?')}] {entry.get('summary', '')[:300]}")
             return "\n".join(lines)
-        except Exception:
+        except (OSError, json.JSONDecodeError, KeyError):
             return ""
 
     def _save_sequence_memory(self, summary: str):
@@ -785,7 +786,7 @@ REGELN:
             try:
                 content = wm_path.read_text(encoding="utf-8")
                 return content[:2000]  # Max 2000 Zeichen
-            except Exception:
+            except OSError:
                 pass
         return ""
 
@@ -854,13 +855,13 @@ REGELN:
                 with open(tmp_fd, "w", encoding="utf-8") as f:
                     f.write(content)
                 Path(tmp_path).replace(wm_path)
-            except Exception:
+            except OSError:
                 try:
                     Path(tmp_path).unlink(missing_ok=True)
                 except OSError:
                     pass
-        except Exception:
-            pass
+        except OSError as e:
+            print(f"WARNUNG: Working-Memory speichern fehlgeschlagen: {e}")
 
     # === Wahrnehmung ===
 
@@ -900,6 +901,21 @@ REGELN:
         # Aktueller Fokus
         focus = self.goal_stack.get_current_focus()
         parts.append(f"\n{focus}")
+
+        # Existierende Projekte zum Fokus anzeigen (Anti-Loop)
+        if "FOKUS:" in focus and hasattr(self, "actions") and hasattr(self.actions, "projects_path"):
+            try:
+                projects_path = self.actions.projects_path
+                if projects_path.exists():
+                    existing = [d.name for d in projects_path.iterdir() if d.is_dir()]
+                    if existing:
+                        proj_list = ", ".join(existing)
+                        hint = "EXISTIERENDE PROJEKTE: " + proj_list
+                        hint += " | HINWEIS: Erstelle KEIN neues Projekt wenn ein passendes existiert!"
+                        hint += " Nutze read_file/write_file um am bestehenden Projekt weiterzuarbeiten."
+                        parts.append(hint)
+            except Exception:
+                pass
 
         # Umgebung
         env = self.perceiver._scan_home()
@@ -945,8 +961,8 @@ REGELN:
                         score = mem.get("similarity", 0)
                         if score > 0.01:
                             parts.append(f"  - [{score:.2f}] {content}")
-            except Exception:
-                pass
+            except (OSError, KeyError, TypeError) as e:
+                parts.append(f"  (Memory-Suche fehlgeschlagen: {e})")
 
         return "\n".join(parts)
 
@@ -1187,8 +1203,8 @@ REGELN:
                                     content = md_file.read_text(encoding="utf-8")[:2000]
                                     rel = md_file.relative_to(project_dir)
                                     sections.append(f"## Datei: {rel}\n{content}")
-                                except Exception:
-                                    pass
+                                except OSError:
+                                    continue
 
                             if sections:
                                 report = f"# Ergebnis: {goal_title}\n\n"
@@ -1202,8 +1218,8 @@ REGELN:
                                         f"ZIEL ERREICHT: {goal_title}\n\n{report[:3500]}",
                                         channel="telegram",
                                     )
-                    except Exception:
-                        pass
+                    except (OSError, KeyError) as e:
+                        print(f"WARNUNG: Goal-Completion Report fehlgeschlagen: {e}")
 
                     goals = self.goal_stack._load()
                     for g in goals.get("completed", []):
@@ -1234,7 +1250,7 @@ REGELN:
                 try:
                     raw_path = (config.ROOT_PATH / tool_input["path"]).resolve()
                     old_code = raw_path.read_text(encoding="utf-8") if raw_path.exists() else ""
-                except Exception:
+                except (OSError, KeyError):
                     old_code = ""
 
                 # Dual-Review: Syntax + Opus 4.6 pruefen
@@ -1641,8 +1657,8 @@ REGELN:
                         report_lines.append(f"Naechstes: {next_step[:80]}")
                 report = "\n".join(report_lines)
                 self.communication.send_message(report, channel="telegram")
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"WARNUNG: Telegram-Report fehlgeschlagen: {e}")
 
         # Auto-Commit
         commit_msg = f"Sequenz {self.sequences_total}: {summary[:80]}"
@@ -1702,7 +1718,7 @@ REGELN:
             try:
                 content = filepath.read_text(encoding="utf-8")[:2000]
                 code_context += f"--- {filepath.name} ---\n{content}\n\n"
-            except Exception:
+            except OSError:
                 continue
 
         # PLAN.md fuer Kontext
@@ -1882,8 +1898,8 @@ REGELN:
             self.communication.send_message("\n".join(lines), channel="telegram")
             briefing_flag.write_text(today, encoding="utf-8")
             print(f"  Morgen-Briefing gesendet.")
-        except Exception:
-            pass  # Briefing-Fehler darf Phi nicht stoppen
+        except Exception as e:
+            print(f"WARNUNG: Morgen-Briefing fehlgeschlagen: {e}")
 
     # === Autonomer Modus ===
 
@@ -1923,8 +1939,8 @@ REGELN:
                         removed = self.memory.consolidate(max_per_bucket=5)
                         if removed > 0:
                             result += f" | {removed} alte Erinnerungen konsolidiert"
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        print(f"WARNUNG: Memory-Konsolidierung fehlgeschlagen: {e}")
                     print(f"  {result}")
                     print(f"  {'=' * 40}\n")
                     self._sequences_since_dream = 0
@@ -1948,8 +1964,8 @@ REGELN:
                                         last_findings, self.goal_stack
                                     )
                                     print(f"  {goals_result}")
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        print(f"WARNUNG: Audit/Goals fehlgeschlagen: {e}")
 
                     # Integrations-Check (laeuft zusammen mit Audit)
                     print(f"\n  INTEGRATIONS-CHECK:")
@@ -2278,7 +2294,7 @@ REGELN:
         if desc_fn:
             try:
                 return desc_fn(tool_input)
-            except Exception:
+            except (KeyError, TypeError, ValueError):
                 pass
         return f"{tool_name}"
 
@@ -2298,11 +2314,24 @@ REGELN:
         self._seq_written_paths = []  # Pfade der geschriebenen Dateien
         self._modify_count_this_seq = 0  # Max 3 modify_own_code pro Sequenz
 
-        # Spin-Detection: Wiederholte gescheiterte Aktionen tracken
+        # Spin-Detection: Wiederholte gescheiterte Aktionen tracken (intra-Sequenz)
         failed_actions = {}  # "tool_name:key" -> Anzahl Fehlversuche
+
+        # Cross-Sequenz Spin-Detection: Aus State laden
+        cross_seq_spins = self.state.get("spin_tracker", {})
 
         # System-Prompt einmalig pro Sequenz bauen (nicht pro Step)
         cached_system_prompt = self._build_system_prompt()
+
+        # Cross-Sequenz Spin-Guard: Blockierte Aktionen in System-Prompt injizieren
+        blocked_actions = [k for k, v in cross_seq_spins.items() if v >= 3]
+        if blocked_actions:
+            blocked_names = [k.split(":", 1)[1] if ":" in k else k for k in blocked_actions]
+            spin_warning = "=== SPIN-LOOP SPERRE === "
+            spin_warning += "Folgende Projekte/Ziele existieren BEREITS: "
+            spin_warning += ", ".join(blocked_names)
+            spin_warning += " | Arbeite am bestehenden Projekt weiter. KEIN create_project!"
+            cached_system_prompt += spin_warning
 
         # Modus-spezifischer System-Prompt
         mode = self.rhythm.get_mode(self.state)
@@ -2332,8 +2361,8 @@ REGELN:
                     best_idx = self.mutator.select_best(variants, "Groesster Impact auf Qualitaet und Sicherheit")
                     best_variant = variants[best_idx]
                     cached_system_prompt += f"\nEMPFOHLENER ANSATZ: {best_variant}"
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"WARNUNG: Prompt-Mutator fehlgeschlagen: {e}")
 
         name = self.genesis.get("name", "Phi")
 
@@ -2442,6 +2471,29 @@ REGELN:
                             # Wichtige Aktionen immer anzeigen
                             print(f"  ✓ {action_desc}")
                         # Alles andere (list_directory, read_file, etc.) still
+
+                        # Spin-Detection: Wiederholte gescheiterte Aktionen erkennen
+                        if is_error and block.name in ("create_project", "create_goal"):
+                            spin_key = f"{block.name}:{block.input.get('name', '')[:50]}"
+                            failed_actions[spin_key] = failed_actions.get(spin_key, 0) + 1
+                            # Cross-Sequenz Tracker updaten
+                            cross_seq_spins[spin_key] = cross_seq_spins.get(spin_key, 0) + 1
+                            self.state["spin_tracker"] = cross_seq_spins
+                            if failed_actions[spin_key] >= 2:
+                                result_str += (
+                                    "\n\nSPIN-LOOP ERKANNT: Du hast diese Aktion bereits "
+                                    f"{failed_actions[spin_key]}x versucht und sie schlaegt fehl. "
+                                    "STOPP! Arbeite am BESTEHENDEN Projekt/Ziel weiter. "
+                                    "Nutze read_file um den aktuellen Stand zu lesen, "
+                                    "dann write_file um konkret weiterzuarbeiten."
+                                )
+                                print(f"  ⚠ Spin-Loop erkannt: {block.name} {failed_actions[spin_key]}x gescheitert")
+
+                        elif not is_error and block.name in ("create_project", "create_goal"):
+                            # Erfolg: Spin-Tracker fuer diese Aktion zuruecksetzen
+                            spin_key = f"{block.name}:{block.input.get('name', '')[:50]}"
+                            cross_seq_spins.pop(spin_key, None)
+                            self.state["spin_tracker"] = cross_seq_spins
 
                         tool_results.append({
                             "type": "tool_result",

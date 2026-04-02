@@ -81,11 +81,20 @@ class LLMRouter:
         self.deepseek_key = os.getenv("DEEPSEEK_API_KEY", "").strip()
         self.nvidia_key = os.getenv("NVIDIA_API_KEY", "").strip()
         self.http = httpx.Client(timeout=120.0)
+        self._http_owned = True  # Marker fuer Cleanup
 
         # Kosten-Tracking (thread-safe)
         self._cost_lock = threading.Lock()
         self.session_costs = {"input_tokens": 0, "output_tokens": 0, "cost_usd": 0.0}
         self.model_usage = {}  # {model: {calls, input_tokens, output_tokens, cost}}
+
+    def close(self):
+        """Schliesst den HTTP-Client sauber."""
+        if self._http_owned and self.http:
+            self.http.close()
+
+    def __del__(self):
+        self.close()
 
     def get_model_for_task(self, task: str) -> str:
         """Gibt den Modell-Key fuer eine Aufgabe zurueck."""

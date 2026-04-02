@@ -136,7 +136,7 @@ class Perceiver:
                             try:
                                 mtime = datetime.fromtimestamp(item.stat().st_mtime).strftime('%Y-%m-%d %H:%M')
                                 results.append(f" {kind} {item.name} {size} [{mtime}]")
-                            except:
+                            except OSError:
                                 results.append(f" {kind} {item.name} {size}")
                         if len(items) > 15:
                             results.append(f"... und {len(items) - 15} weitere")
