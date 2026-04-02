@@ -26,19 +26,12 @@ from anthropic import Anthropic
 # === Modell-Konfiguration ===
 
 MODELS = {
-    "gemini_3_flash": {
-        "provider": "google",
-        "model_id": "gemini-3-flash-preview",  # 3 Flash Preview — 78% SWE-bench, massiver Qualitaetssprung
-        "input_cost": 0.50,
-        "output_cost": 3.00,
+    "kimi_k25": {
+        "provider": "nvidia",
+        "model_id": "moonshotai/kimi-k2-instruct",
+        "input_cost": 0.0,  # Kostenlos ueber NVIDIA API
+        "output_cost": 0.0,
         "use_for": "Haupt-Arbeit, Tool-Use, Coding, Telegram, Code-Review",
-    },
-    "gemini_25_flash": {
-        "provider": "google",
-        "model_id": "gemini-2.5-flash",  # 2.5 Flash — stabiler Fallback
-        "input_cost": 0.30,
-        "output_cost": 2.50,
-        "use_for": "Fallback wenn Gemini 3 Flash versagt",
     },
     "claude_opus": {
         "provider": "anthropic",
@@ -49,23 +42,23 @@ MODELS = {
     },
     "deepseek_v3": {
         "provider": "deepseek",
-        "model_id": "deepseek-chat",  # V3.2 — $0.28/$0.42 pro 1M Tokens, OpenAI-kompatibel
+        "model_id": "deepseek-chat",
         "input_cost": 0.28,
         "output_cost": 0.42,
-        "use_for": "Dream, Tool-Foundry, Fallback (35x guenstiger als Claude Sonnet)",
+        "use_for": "Dream, Tool-Foundry, Fallback",
     },
 }
 
 # Welches Modell fuer welche Aufgabe — EINZIGE Stelle fuer Modell-Zuordnung
 TASK_MODEL_MAP = {
-    "main_work": "gemini_25_flash",          # Agentic Loop, Tool-Use (stabil)
-    "code_review": "gemini_25_flash",         # Gemini 2.5 Flash als Reviewer
+    "main_work": "kimi_k25",                 # Agentic Loop, Tool-Use (Kimi K2.5 via NVIDIA)
+    "code_review": "kimi_k25",               # Kimi K2.5 als Reviewer
     "audit_primary": "claude_opus",          # Opus fuer Tiefenanalyse
-    "audit_secondary": "gemini_25_flash",    # Gemini als Gegenpruefung
-    "telegram_reply": "gemini_25_flash",     # Sofort-Antwort
-    "dream": "deepseek_v3",                  # Memory-Konsolidierung (DeepSeek V3.2)
-    "tool_generation": "deepseek_v3",        # Tool-Foundry (DeepSeek V3.2)
-    "fallback": "deepseek_v3",               # Wenn Gemini versagt
+    "audit_secondary": "kimi_k25",           # Kimi als Gegenpruefung
+    "telegram_reply": "kimi_k25",            # Sofort-Antwort
+    "dream": "kimi_k25",                     # Memory-Konsolidierung
+    "tool_generation": "kimi_k25",           # Tool-Foundry
+    "fallback": "deepseek_v3",               # Fallback wenn Kimi versagt
 }
 
 
@@ -82,6 +75,7 @@ class LLMRouter:
         self.anthropic = Anthropic()
         self.google_key = os.getenv("GOOGLE_AI_API_KEY", "").strip()
         self.deepseek_key = os.getenv("DEEPSEEK_API_KEY", "").strip()
+        self.nvidia_key = os.getenv("NVIDIA_API_KEY", "").strip()
         self.http = httpx.Client(timeout=120.0)
 
         # Kosten-Tracking (thread-safe)
@@ -91,7 +85,7 @@ class LLMRouter:
 
     def get_model_for_task(self, task: str) -> str:
         """Gibt den Modell-Key fuer eine Aufgabe zurueck."""
-        return TASK_MODEL_MAP.get(task, "gemini_3_flash")
+        return TASK_MODEL_MAP.get(task, "kimi_k25")
 
     # === Anthropic (Claude) ===
 
@@ -220,6 +214,45 @@ class LLMRouter:
 
         if resp.status_code != 200:
             raise ValueError(f"DeepSeek API Fehler {resp.status_code}: {resp.text[:200]}")
+
+        data = resp.json()
+        return self._openai_to_anthropic_response(data, model_key)
+
+    # === NVIDIA (Kimi K2.5 — OpenAI-kompatibel) ===
+
+    def call_nvidia(
+        self, model_key: str, system: str, messages: list,
+        tools: Optional[list] = None, max_tokens: int = 16000,
+    ) -> dict:
+        """Ruft Kimi K2.5 ueber NVIDIA API auf — OpenAI-kompatibel."""
+        if not self.nvidia_key:
+            raise ValueError("NVIDIA_API_KEY nicht konfiguriert")
+
+        model_id = MODELS[model_key]["model_id"]
+        oai_messages = self._anthropic_to_openai_messages(system, messages)
+
+        body = {
+            "model": model_id,
+            "messages": oai_messages,
+            "max_tokens": max_tokens,
+        }
+
+        if tools:
+            oai_tools = self._anthropic_to_openai_tools(tools)
+            if oai_tools:
+                body["tools"] = oai_tools
+
+        resp = self.http.post(
+            "https://integrate.api.nvidia.com/v1/chat/completions",
+            headers={
+                "Authorization": f"Bearer {self.nvidia_key}",
+                "Content-Type": "application/json",
+            },
+            json=body,
+        )
+
+        if resp.status_code != 200:
+            raise ValueError(f"NVIDIA API Fehler {resp.status_code}: {resp.text[:200]}")
 
         data = resp.json()
         return self._openai_to_anthropic_response(data, model_key)

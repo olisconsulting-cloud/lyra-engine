@@ -1404,6 +1404,8 @@ REGELN:
             return self.llm.call_anthropic(model_key, system, messages, tools, max_tokens)
         elif provider == "deepseek":
             return self.llm.call_deepseek(model_key, system, messages, tools, max_tokens)
+        elif provider == "nvidia":
+            return self.llm.call_nvidia(model_key, system, messages, tools, max_tokens)
         else:
             return self.llm.call_gemini(model_key, system, messages, tools, max_tokens)
 
