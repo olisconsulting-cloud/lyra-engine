@@ -736,13 +736,12 @@ REGELN:
                 "timestamp": datetime.now(timezone.utc).isoformat(),
                 "summary": summary[:500],
             })
-            # Max 10 Eintraege behalten
             data["entries"] = data["entries"][-10:]
 
             with open(mem_path, "w", encoding="utf-8") as f:
                 json.dump(data, f, indent=2, ensure_ascii=False)
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"  [WARNUNG] Sequence-Memory nicht gespeichert: {e}")
 
     # === Wahrnehmung ===
 
@@ -812,6 +811,20 @@ REGELN:
             parts.append(f"\n{composition}")
         if failure_check:
             parts.append(f"\n{failure_check}")
+
+        # Semantische Memory: Top-3 relevante Erinnerungen zum aktuellen Fokus
+        if focus:
+            try:
+                relevant = self.semantic_memory.search(focus, top_k=3)
+                if relevant:
+                    parts.append("\nRELEVANTE ERINNERUNGEN:")
+                    for mem in relevant:
+                        content = mem.get("content", "")[:150]
+                        score = mem.get("similarity", 0)
+                        if score > 0.01:
+                            parts.append(f"  - [{score:.2f}] {content}")
+            except Exception:
+                pass
 
         return "\n".join(parts)
 
@@ -1259,13 +1272,16 @@ REGELN:
         self.beliefs["formed_from_experience"] = formed[-30:]
 
         # Erfahrung speichern
-        self.memory.store_experience({
-            "type": "sequenz_abschluss",
-            "content": summary,
-            "valence": 0.7,
-            "emotions": {},
-            "tags": [f"sequenz_{self.sequences_total}"],
-        })
+        try:
+            self.memory.store_experience({
+                "type": "sequenz_abschluss",
+                "content": summary,
+                "valence": 0.7,
+                "emotions": {},
+                "tags": [f"sequenz_{self.sequences_total}"],
+            })
+        except Exception as e:
+            print(f"  [WARNUNG] Experience nicht gespeichert: {e}")
 
         # Self-Rating
         rating = tool_input.get("performance_rating")
@@ -1513,6 +1529,13 @@ REGELN:
                     print(f"  {'=' * 40}")
                     print(f"  DREAM — Memory-Konsolidierung...")
                     result = self.dream.dream()
+                    # Memory-Consolidation: Fibonacci-Decay auf Experiences
+                    try:
+                        removed = self.memory.consolidate(max_per_bucket=5)
+                        if removed > 0:
+                            result += f" | {removed} alte Erinnerungen konsolidiert"
+                    except Exception:
+                        pass
                     print(f"  {result}")
                     print(f"  {'=' * 40}\n")
                     self._sequences_since_dream = 0
