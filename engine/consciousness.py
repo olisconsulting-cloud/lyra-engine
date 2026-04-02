@@ -728,7 +728,8 @@ REGELN:
 - Tools bauen = permanente Faehigkeit | web_search/web_read zum Lernen
 - read_own_code + modify_own_code = Selbst-Evolution (Dual-Review)
 - finish_sequence wenn fertig | send_telegram = ECHTE Nachricht
-- Projekte in 'projects/', Tools in 'tools/'"""
+- Projekte in 'projects/', Tools in 'tools/'
+- SEQUENZ-PLANUNG: Du hast max {MAX_STEPS_PER_SEQUENCE} Steps. Plane am Anfang was du schaffen willst. Wenn du ein sinnvolles Ergebnis hast, nutze finish_sequence — auch nach 5 Steps. Schreibe in die Summary WAS du herausgefunden hast (Erkenntnisse, Zahlen, Fakten). Qualitaet > Quantitaet."""
 
     # === Sequenz-Memory ===
 
@@ -768,11 +769,80 @@ REGELN:
         except Exception as e:
             print(f"  [WARNUNG] Sequence-Memory nicht gespeichert: {e}")
 
+    # === Working Memory ===
+
+    def _load_working_memory(self) -> str:
+        """Liest die Arbeitsnotiz — was Phi gerade weiss und tut."""
+        wm_path = self.consciousness_path / "working_memory.md"
+        if wm_path.exists():
+            try:
+                content = wm_path.read_text(encoding="utf-8")
+                return content[:2000]  # Max 2000 Zeichen
+            except Exception:
+                pass
+        return ""
+
+    def _save_working_memory(self, summary: str):
+        """Aktualisiert die Arbeitsnotiz am Ende einer Sequenz."""
+        wm_path = self.consciousness_path / "working_memory.md"
+        try:
+            # Aktuelle Notiz laden
+            old = self._load_working_memory()
+
+            # Neuen Inhalt bauen — LLM fasst zusammen was es gelernt hat
+            # Aber: kein extra API-Call noetig. Wir nehmen die Sequenz-Summary
+            # und die Goals als Basis.
+            focus = self.goal_stack.get_current_focus()
+            active = self.goal_stack.goals.get("active", [])
+
+            lines = ["# Working Memory\n"]
+
+            # Was gerade laeuft
+            if "FOKUS:" in focus:
+                lines.append(f"## Aktueller Fokus")
+                lines.append(focus.replace("FOKUS: ", "").strip())
+                lines.append("")
+
+            # Was diese Sequenz ergeben hat
+            if summary:
+                lines.append(f"## Letzte Sequenz")
+                lines.append(summary[:500])
+                lines.append("")
+
+            # Fortschritt aus Goals
+            if active:
+                lines.append(f"## Fortschritt")
+                for goal in active:
+                    sgs = goal.get("sub_goals", [])
+                    for sg in sgs:
+                        if sg["status"] == "done" and sg.get("result"):
+                            lines.append(f"- {sg['title'][:60]}: {sg['result'][:100]}")
+                lines.append("")
+
+            # Altes Wissen uebernehmen das noch relevant ist
+            # (Abschnitt "Erkenntnisse" aus alter Notiz behalten)
+            if old and "## Erkenntnisse" in old:
+                erkenntnisse = old.split("## Erkenntnisse")[1].split("##")[0].strip()
+                if erkenntnisse:
+                    lines.append(f"## Erkenntnisse")
+                    lines.append(erkenntnisse[:500])
+                    lines.append("")
+
+            content = "\n".join(lines)[:2000]
+            wm_path.write_text(content, encoding="utf-8")
+        except Exception:
+            pass
+
     # === Wahrnehmung ===
 
     def _build_perception(self) -> str:
         """Baut die aktuelle Wahrnehmung fuer eine neue Sequenz."""
         parts = []
+
+        # Working Memory — was Phi aus vorherigen Sequenzen weiss
+        working_memory = self._load_working_memory()
+        if working_memory:
+            parts.append(f"ARBEITSNOTIZ (dein Wissen aus vorherigen Sequenzen):\n{working_memory}")
 
         # Adaptiver Rhythmus: Entscheidet was jetzt am wichtigsten ist
         mode = self.rhythm.get_mode(self.state)
@@ -1412,6 +1482,9 @@ REGELN:
 
         # Journal
         self.communication.write_journal(summary, self.sequences_total)
+
+        # Working Memory aktualisieren (Kernwissen ueber Sequenzen hinweg)
+        self._save_working_memory(summary)
 
         # Sequenz-Memory speichern
         self._save_sequence_memory(summary)
