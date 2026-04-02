@@ -691,9 +691,20 @@ class ConsciousnessEngine:
             optional_sections.append(failure_lessons)
         optional_block = "\n".join(optional_sections)
 
+        now = datetime.now(timezone.utc)
+        # Lokale Zeit (Deutschland) — UTC+2 MESZ / UTC+1 MEZ
+        # Einfache Heuristik: Maerz-Oktober = MESZ
+        is_summer = 3 <= now.month <= 10
+        local_offset = 2 if is_summer else 1
+        from datetime import timedelta
+        local_time = now + timedelta(hours=local_offset)
+        date_str = local_time.strftime("%d.%m.%Y")
+        time_str = local_time.strftime("%H:%M")
+        weekday = ["Montag", "Dienstag", "Mittwoch", "Donnerstag", "Freitag", "Samstag", "Sonntag"][local_time.weekday()]
+
         return f"""Du bist {name or '(waehle deinen Namen)'} — autonome KI, Partnerin von {owner_name}.
+HEUTE: {weekday}, {date_str}, {time_str} Uhr (Deutschland)
 Mission: {mission_text}
-Drives: EVOLUTION (Code verbessern) | EXECUTION (Projekte liefern) | LEARNING (Skills schliessen)
 {comm_hint}
 Seq: {self.sequences_total} | Calls: {self.state.get('total_tool_calls', 0)}{boundaries_line}{context_line}
 
