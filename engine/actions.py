@@ -1,5 +1,5 @@
 """
-Aktions-Engine — Lyras Haende.
+Aktions-Engine -Lyras Haende.
 
 Fuehrt reale Aktionen im Dateisystem aus:
 - Dateien erstellen und bearbeiten
@@ -156,7 +156,7 @@ class ActionEngine:
 
     def run_code(self, code: str, timeout: int = 30) -> str:
         """
-        Fuehrt Python-Code aus — mit AST-Sicherheitspruefung.
+        Fuehrt Python-Code aus -mit AST-Sicherheitspruefung.
         """
         # Security-Gateway: Code pruefen
         code_check = self.security.check_code_execution(code)
@@ -181,7 +181,7 @@ class ActionEngine:
             )
 
             output = ""
-            # Robust decodieren — Fehler ignorieren statt crashen
+            # Robust decodieren -Fehler ignorieren statt crashen
             if result.stdout:
                 stdout = result.stdout.decode("utf-8", errors="replace")[:3000]
                 output += stdout
@@ -193,12 +193,12 @@ class ActionEngine:
             return (warning_prefix + output) if output else warning_prefix + "(kein Output)"
 
         except subprocess.TimeoutExpired:
-            return "FEHLER: Timeout — Code hat zu lange gebraucht."
+            return "FEHLER: Timeout -Code hat zu lange gebraucht."
         except Exception as e:
             return f"FEHLER: {e}"
 
     def run_script(self, relative_path: str, timeout: int = 60) -> str:
-        """Fuehrt ein Python-Script aus — mit Pfad-Check."""
+        """Fuehrt ein Python-Script aus -mit Pfad-Check."""
         target = (self.base_path / relative_path).resolve()
 
         # Pfad-Scope-Check (fehlte vorher!)
@@ -248,12 +248,13 @@ class ActionEngine:
                        acceptance_criteria: Optional[list[str]] = None,
                        phases: Optional[list[str]] = None) -> str:
         """
-        Erstellt ein neues Projekt mit Plan-First Template.
+        Erstellt ein neues Projekt mit Plan-First + Tests-First Template.
 
         Jedes Projekt bekommt automatisch:
-        - README.md — Was und warum
-        - PLAN.md — Akzeptanzkriterien + Phasen
-        - PROGRESS.md — Fortschritts-Tracking
+        - README.md -Was und warum
+        - PLAN.md -Akzeptanzkriterien + Phasen
+        - PROGRESS.md -Fortschritts-Tracking
+        - tests.py -Test-Scaffold aus Akzeptanzkriterien (Tests-First)
         """
         project_path = self.projects_path / name
         if project_path.exists():
@@ -266,11 +267,11 @@ class ActionEngine:
         readme = f"# {name}\n\n{description}\n\nErstellt: {now}\n"
         (project_path / "README.md").write_text(readme, encoding="utf-8")
 
-        # PLAN.md — Das Herzstück
+        # PLAN.md -Das Herzstück
         criteria = acceptance_criteria or ["Definiere Akzeptanzkriterien!"]
         plan_phases = phases or ["1. Planung", "2. Implementierung", "3. Testing", "4. Review"]
 
-        plan = f"""# PLAN — {name}
+        plan = f"""# PLAN -{name}
 
 ## Ziel
 {description}
@@ -289,13 +290,84 @@ class ActionEngine:
 """
         (project_path / "PLAN.md").write_text(plan, encoding="utf-8")
 
+        # tests.py -Test-Scaffold aus Akzeptanzkriterien (Tests-First)
+        test_functions = []
+        for i, criterion in enumerate(criteria):
+            safe_name = "".join(c if c.isalnum() else "_" for c in criterion[:40]).strip("_").lower()
+            test_functions.append(
+                f'def test_{i + 1}_{safe_name}():\n'
+                f'    """Kriterium: {criterion}"""\n'
+                f'    # TODO: Implementiere den Test fuer dieses Kriterium\n'
+                f'    # Der Test muss BEWEISEN dass das Kriterium erfuellt ist\n'
+                f'    assert False, "Test noch nicht implementiert: {criterion}"\n'
+            )
+
+        tests_content = f'''"""
+Tests fuer {name} -Evidence-Based Development.
+
+Jeder Test prueft ein Akzeptanzkriterium aus PLAN.md.
+Tests werden ZUERST geschrieben (Tests-First), dann Code.
+Projekt ist erst FERTIG wenn alle Tests PASS zeigen.
+
+Ausfuehren: execute_python mit dem Inhalt dieser Datei
+"""
+
+import sys
+import traceback
+
+
+# === Akzeptanzkriterien-Tests ===
+
+{chr(10).join(test_functions)}
+
+# === Test-Runner ===
+
+def run_tests():
+    """Fuehrt alle test_* Funktionen aus und gibt Ergebnis zurueck."""
+    tests = [(name, func) for name, func in globals().items()
+             if name.startswith("test_") and callable(func)]
+
+    passed = 0
+    failed = 0
+    results = []
+
+    for name, func in sorted(tests):
+        try:
+            func()
+            passed += 1
+            results.append(f"  PASS: {{name}}")
+        except AssertionError as e:
+            failed += 1
+            results.append(f"  FAIL: {{name}} -{{e}}")
+        except Exception as e:
+            failed += 1
+            results.append(f"  ERROR: {{name}} -{{e}}")
+
+    print("\\n".join(results))
+    print(f"\\n{{passed}}/{{passed + failed}} PASS")
+
+    if failed == 0:
+        print("ALL_TESTS_PASSED")
+    else:
+        print(f"TESTS_FAILED: {{failed}} fehlgeschlagen")
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    run_tests()
+'''
+        (project_path / "tests.py").write_text(tests_content, encoding="utf-8")
+
         # PROGRESS.md
-        progress = f"""# PROGRESS — {name}
+        progress = f"""# PROGRESS -{name}
 
 ## Status: IN ARBEIT
 
 ### Fortschritt
-- [{now}] Projekt erstellt
+- [{now}] Projekt erstellt (PLAN.md + tests.py)
+
+### Test-Ergebnisse
+(Wird automatisch aktualisiert wenn Tests laufen)
 
 ### Offene Fragen
 (Hier dokumentieren was unklar ist)
@@ -305,8 +377,13 @@ class ActionEngine:
 """
         (project_path / "PROGRESS.md").write_text(progress, encoding="utf-8")
 
-        self._log_action("create_project", name, f"Erstellt mit Plan: {project_path}")
-        return f"Projekt '{name}' erstellt mit PLAN.md + PROGRESS.md in {project_path}"
+        self._log_action("create_project", name, f"Erstellt mit Plan + Tests: {project_path}")
+        return (
+            f"Projekt '{name}' erstellt in {project_path}\n"
+            f"  PLAN.md -{len(criteria)} Akzeptanzkriterien\n"
+            f"  tests.py -{len(criteria)} Test-Stubs (Tests-First!)\n"
+            f"  NAECHSTER SCHRITT: Tests in tests.py implementieren, DANN Code schreiben"
+        )
 
     def list_projects(self) -> str:
         """Listet alle Projekte."""
