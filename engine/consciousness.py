@@ -1977,23 +1977,16 @@ REGELN:
                 for line in summary.split("\n"):
                     print(f"  {line}")
 
-        budget_warning_sent = False
-
         for step in range(MAX_STEPS_PER_SEQUENCE):
-            # Soft-Warning bei 80% — Phi soll sich sauber abschliessen
-            if (not budget_warning_sent
-                    and self.sequence_input_tokens >= MAX_INPUT_TOKENS_PER_SEQUENCE * 0.8):
-                budget_warning_sent = True
-                messages.append({
-                    "role": "user",
-                    "content": (
-                        "HINWEIS: Du hast 80% deines Token-Budgets verbraucht. "
-                        "Schliesse deine aktuelle Aufgabe ab und nutze finish_sequence. "
-                        "Speichere wichtige Zwischenergebnisse JETZT."
-                    ),
-                })
+            # Step-basierte Warnung: 3 Steps vor Schluss → System-Prompt ergaenzen
+            steps_remaining = MAX_STEPS_PER_SEQUENCE - step
+            if steps_remaining == 3:
+                cached_system_prompt += (
+                    "\n\nACHTUNG: Noch 3 Steps uebrig. "
+                    "Sichere deine Zwischenergebnisse und nutze finish_sequence."
+                )
 
-            # Hard-Cutoff bei 100% — nur als Sicherheitsnetz
+            # Token-Budget als Sicherheitsnetz
             if self.sequence_input_tokens >= MAX_INPUT_TOKENS_PER_SEQUENCE:
                 print(f"  [Token-Limit erreicht]")
                 self._handle_finish_sequence({

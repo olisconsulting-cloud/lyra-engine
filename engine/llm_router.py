@@ -235,6 +235,8 @@ class LLMRouter:
             "model": model_id,
             "messages": oai_messages,
             "max_tokens": max_tokens,
+            "temperature": 0.6,  # Konsistente Tool-Calls, aber kreativ genug
+            "top_p": 0.9,
         }
 
         if tools:
@@ -242,14 +244,21 @@ class LLMRouter:
             if oai_tools:
                 body["tools"] = oai_tools
 
-        resp = self.http.post(
-            "https://integrate.api.nvidia.com/v1/chat/completions",
-            headers={
-                "Authorization": f"Bearer {self.nvidia_key}",
-                "Content-Type": "application/json",
-            },
-            json=body,
-        )
+        # Retry mit Backoff (NVIDIA gibt gelegentlich 429 zurueck)
+        for attempt in range(3):
+            resp = self.http.post(
+                "https://integrate.api.nvidia.com/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {self.nvidia_key}",
+                    "Content-Type": "application/json",
+                },
+                json=body,
+            )
+            if resp.status_code == 429:
+                import time
+                time.sleep(2 ** attempt)  # 1s, 2s, 4s
+                continue
+            break
 
         if resp.status_code != 200:
             raise ValueError(f"NVIDIA API Fehler {resp.status_code}: {resp.text[:200]}")
