@@ -32,10 +32,38 @@ class GoalStack:
 
     # === Ziel erstellen ===
 
+    def _find_similar_goal(self, title: str) -> Optional[tuple[int, dict]]:
+        """
+        Prueft ob ein aehnliches aktives Ziel existiert (Wort-Overlap).
+
+        Returns:
+            (index, goal) Tuple oder None
+        """
+        # Stoppwoerter die keine Semantik tragen
+        stop = {"und", "oder", "fuer", "mit", "der", "die", "das", "ein", "eine",
+                "zu", "von", "in", "auf", "an", "bei", "nach", "aus", "um"}
+        new_words = {w.lower().strip(":.-()") for w in title.split() if len(w) > 2} - stop
+
+        if not new_words:
+            return None
+
+        for i, goal in enumerate(self.goals.get("active", [])):
+            existing_words = {w.lower().strip(":.-()") for w in goal["title"].split() if len(w) > 2} - stop
+            if not existing_words:
+                continue
+            # Jaccard-Aehnlichkeit: wie viel Overlap haben die Woerter?
+            overlap = len(new_words & existing_words)
+            union = len(new_words | existing_words)
+            similarity = overlap / union if union else 0
+            if similarity >= 0.4:  # 40% Wort-Overlap = wahrscheinlich gleich
+                return (i, goal)
+        return None
+
     def create_goal(self, title: str, description: str = "",
                     sub_goals: Optional[list[str]] = None) -> str:
         """
         Erstellt ein neues Ziel mit optionalen Sub-Goals.
+        Prueft vorher ob ein aehnliches Ziel bereits existiert.
 
         Args:
             title: Ziel-Titel
@@ -45,6 +73,38 @@ class GoalStack:
         Returns:
             Bestaetigungs-Nachricht
         """
+        # Deduplizierung: Aehnliches Ziel vorhanden?
+        similar = self._find_similar_goal(title)
+        if similar:
+            idx, existing_goal = similar
+            # Sub-Goals in existierendes Ziel mergen statt nur abweisen
+            merged_count = 0
+            if sub_goals:
+                existing_titles_lower = {
+                    sg["title"].lower() for sg in existing_goal.get("sub_goals", [])
+                }
+                next_index = len(existing_goal.get("sub_goals", []))
+                for sg_title in sub_goals:
+                    if sg_title.lower() not in existing_titles_lower:
+                        existing_goal.setdefault("sub_goals", []).append({
+                            "index": next_index,
+                            "title": sg_title,
+                            "status": "pending",
+                            "result": None,
+                        })
+                        next_index += 1
+                        merged_count += 1
+                if merged_count:
+                    self._save()
+            existing_sgs = [sg["title"] for sg in existing_goal.get("sub_goals", [])
+                           if sg["status"] != "done"]
+            merge_info = f" {merged_count} neue Sub-Goals gemerged." if merged_count else ""
+            return (
+                f"AEHNLICHES ZIEL EXISTIERT: '{existing_goal['title']}' (Index {idx}).{merge_info} "
+                f"Offene Sub-Goals: {existing_sgs}. "
+                f"Arbeite am bestehenden Ziel weiter!"
+            )
+
         goal = {
             "id": str(uuid.uuid4())[:8],
             "title": title,

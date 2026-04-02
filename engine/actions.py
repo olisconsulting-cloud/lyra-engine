@@ -257,6 +257,24 @@ class ActionEngine:
         if project_path.exists():
             return f"Projekt '{name}' existiert bereits."
 
+        # Aehnliche Projekte pruefen (Wort-Overlap im Namen)
+        if self.projects_path.exists():
+            stop = {"und", "oder", "fuer", "mit", "der", "die", "das", "ein"}
+            new_words = {w.lower().strip("-_") for w in name.replace("-", " ").replace("_", " ").split() if len(w) > 2} - stop
+            for existing in self.projects_path.iterdir():
+                if not existing.is_dir():
+                    continue
+                ex_words = {w.lower().strip("-_") for w in existing.name.replace("-", " ").replace("_", " ").split() if len(w) > 2} - stop
+                if not ex_words or not new_words:
+                    continue
+                overlap = len(new_words & ex_words)
+                union = len(new_words | ex_words)
+                if union and overlap / union >= 0.35:
+                    return (
+                        f"AEHNLICHES PROJEKT EXISTIERT: '{existing.name}'. "
+                        f"Arbeite am bestehenden Projekt statt ein neues zu erstellen!"
+                    )
+
         project_path.mkdir(parents=True)
         now = datetime.now().strftime("%Y-%m-%d %H:%M")
 

@@ -612,10 +612,15 @@ class ConsciousnessEngine:
         self.beliefs = safe_json_read(self.beliefs_path, default={})
         self.state["awake_since"] = datetime.now(timezone.utc).isoformat()
         self.sequences_total = self.state.get("sequences_total", 0)
+        self._installed_packages = set(self.state.get("installed_packages", []))
+        self._approved_packages = set(self.state.get("approved_packages", []))
         self.preferences = self._load_preferences()
 
     def _save_all(self):
         self.consciousness_path.mkdir(parents=True, exist_ok=True)
+        # Installierte/genehmigte Pakete im State persistieren
+        self.state["installed_packages"] = sorted(self._installed_packages)
+        self.state["approved_packages"] = sorted(self._approved_packages)
         for path, data in [
             (self.state_path, self.state),
             (self.beliefs_path, self.beliefs),
@@ -977,9 +982,17 @@ REGELN:
 
     def _execute_tool(self, name: str, tool_input: dict) -> str:
         """Fuehrt ein Tool aus und trackt Skills, Fehler und Strategien."""
-        # Genehmigungspflicht pruefen
+        # Genehmigungspflicht pruefen (bereits genehmigte Pakete ueberspringen)
         if name in self._requires_approval:
-            if not self._request_approval(name, tool_input):
+            if name == "pip_install":
+                pkg = tool_input.get("package", "").lower()
+                if pkg in self._approved_packages:
+                    pass  # Bereits genehmigt — nicht nochmal fragen
+                elif self._request_approval(name, tool_input):
+                    self._approved_packages.add(pkg)
+                else:
+                    return f"FEHLER: Oliver hat '{name}' nicht genehmigt."
+            elif not self._request_approval(name, tool_input):
                 return f"FEHLER: Oliver hat '{name}' nicht genehmigt."
 
         self.state["total_tool_calls"] = self.state.get("total_tool_calls", 0) + 1
@@ -1018,13 +1031,48 @@ REGELN:
             # Output-Tracking
             if name == "write_file":
                 self._seq_files_written += 1
+                self._seq_written_paths.append(tool_input.get("path", "?"))
             elif name == "create_tool":
                 self._seq_tools_built += 1
 
         return result
 
+    # Pflichtfelder pro Tool — verhindert KeyErrors bei abgeschnittenen LLM-Antworten
+    REQUIRED_FIELDS: dict[str, list[str]] = {
+        "write_file": ["path", "content"],
+        "read_file": ["path"],
+        "execute_python": ["code"],
+        "web_search": ["query"],
+        "web_read": ["url"],
+        "send_telegram": ["message"],
+        "create_project": ["name"],
+        "create_tool": ["name", "code"],
+        "use_tool": ["name"],
+        "set_goal": ["title"],
+        "complete_subgoal": ["goal_index", "subgoal_index"],
+        "read_own_code": ["path"],
+        "modify_own_code": ["path", "new_content"],
+        "remember": ["query"],
+        "update_memory": ["entry_id", "new_content"],
+        "delete_memory": ["entry_id"],
+        "pip_install": ["package"],
+        "git_commit": ["message"],
+        "verify_project": ["project_name"],
+        "run_project_tests": ["project_name"],
+    }
+
     def _execute_tool_inner(self, name: str, tool_input: dict) -> str:
         """Interne Tool-Ausfuehrung."""
+        # Parse-Fehler vom LLM-Router abfangen
+        if tool_input.get("_parse_error"):
+            return f"FEHLER: LLM hat unvollstaendige Parameter fuer {name} geliefert. Bitte nochmal versuchen."
+
+        # Pflichtfelder pruefen
+        required = self.REQUIRED_FIELDS.get(name, [])
+        missing = [f for f in required if f not in tool_input]
+        if missing:
+            return f"FEHLER: Pflichtfelder fehlen fuer {name}: {missing}. Bitte alle Felder angeben."
+
         try:
             if name == "write_file":
                 return self.actions.write_file(tool_input["path"], tool_input["content"])
@@ -1227,8 +1275,6 @@ REGELN:
             elif name == "pip_install":
                 pkg = tool_input["package"]
                 # Bereits installierte Pakete ueberspringen
-                if not hasattr(self, "_installed_packages"):
-                    self._installed_packages = set()
                 if pkg.lower() in self._installed_packages:
                     return f"Bereits installiert: {pkg}"
                 result = self.pip.install(pkg)
@@ -2037,6 +2083,7 @@ REGELN:
         self._seq_errors = 0
         self._seq_files_written = 0
         self._seq_tools_built = 0
+        self._seq_written_paths = []  # Pfade der geschriebenen Dateien
 
         # System-Prompt einmalig pro Sequenz bauen (nicht pro Step)
         cached_system_prompt = self._build_system_prompt()
@@ -2188,8 +2235,21 @@ REGELN:
 
         if not finished and step_count >= MAX_STEPS_PER_SEQUENCE:
             print(f"\n  Max Steps ({MAX_STEPS_PER_SEQUENCE}) erreicht — Sequenz beendet.")
+            # Inhaltliche Summary statt generischer Meldung
+            summary_parts = [f"{step_count} Steps ausgefuehrt."]
+            if self._seq_files_written > 0:
+                paths_short = [p.split("/")[-1] for p in self._seq_written_paths[:5]]
+                summary_parts.append(f"Dateien: {', '.join(paths_short)}")
+            if self._seq_tools_built > 0:
+                summary_parts.append(f"{self._seq_tools_built} Tool(s) erstellt")
+            if self._seq_errors > 0:
+                summary_parts.append(f"{self._seq_errors} Fehler")
+            # Erledigte Sub-Goals dieser Sequenz aus Goal-Stack
+            focus = self.goal_stack.get_current_focus()
+            if "FOKUS:" in focus:
+                summary_parts.append(f"Fokus: {focus.split('FOKUS:')[1].strip()[:100]}")
             self._handle_finish_sequence({
-                "summary": f"Sequenz nach {step_count} Steps automatisch beendet."
+                "summary": " | ".join(summary_parts),
             })
 
         # Effizienz tracken

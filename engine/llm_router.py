@@ -14,10 +14,13 @@ Kosten: ~$5-10/Tag statt $50-100 mit Opus-only
 """
 
 import json
+import logging
 import os
 import re
 import threading
 from typing import Optional
+
+logger = logging.getLogger(__name__)
 
 import httpx
 from anthropic import Anthropic
@@ -370,7 +373,11 @@ class LLMRouter:
             try:
                 args = json.loads(func.get("arguments", "{}"))
             except json.JSONDecodeError:
-                args = {}
+                logger.warning(
+                    "LLM-Router: Unvollstaendiges Tool-JSON fuer %s: %s",
+                    func.get("name", "?"), func.get("arguments", "")[:200],
+                )
+                args = {"_parse_error": True}
 
             content.append(type("ToolUseBlock", (), {
                 "type": "tool_use",
