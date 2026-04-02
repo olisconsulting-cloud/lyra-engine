@@ -467,12 +467,11 @@ class ConsciousnessEngine:
         self.sequences_total = 0
 
         # Genehmigungspflicht — diese Tools brauchen Olivers OK
-        self._requires_approval = {
-            "pip_install", "web_search", "web_read",
-            "modify_own_code", "create_tool",
-        }
-        self._approval_queue = []  # Warteschlange fuer Genehmigungen
-        self._approval_event = threading.Event()
+        # NUR pip_install braucht Genehmigung (laedt aus dem Internet)
+        # web_search/web_read = lesen ist ok fuer Recherche
+        # modify_own_code = hat eigenes Code-Review-System
+        # create_tool = normaler Arbeitsfluss
+        self._requires_approval = {"pip_install"}
 
         # Kosten-Tracking
         self.session_input_tokens = 0
