@@ -186,6 +186,11 @@ class TelegramBridge:
                     timeout=15,
                 )
 
+                # Erfolgreicher Poll — Fehler-Zaehler zuruecksetzen
+                if self._consecutive_errors > 0:
+                    logger.info("Telegram: Polling wieder stabil nach %d Fehlern", self._consecutive_errors)
+                self._consecutive_errors = 0
+
                 for update in updates:
                     self._last_update_id = update.get("update_id", 0)
                     message = update.get("message", {})
@@ -193,10 +198,16 @@ class TelegramBridge:
                     # Nur Nachrichten vom konfigurierten Chat
                     msg_chat_id = str(message.get("chat", {}).get("id", ""))
                     if msg_chat_id != str(self.chat_id):
+                        logger.debug("Telegram: Nachricht von fremdem Chat %s ignoriert", msg_chat_id)
                         continue
 
                     text = message.get("text", "")
                     if not text:
+                        msg_type = next(
+                            (k for k in ("photo", "voice", "document", "sticker", "video")
+                             if k in message), "unbekannt"
+                        )
+                        logger.debug("Telegram: Nicht-Text-Nachricht ignoriert (Typ: %s)", msg_type)
                         continue
 
                     # Kommando oder normale Nachricht?
@@ -209,29 +220,41 @@ class TelegramBridge:
                     if on_message:
                         on_message(text)
 
-            except Exception:
-                time.sleep(5)
+            except Exception as e:
+                self._consecutive_errors += 1
+                logger.error(
+                    "Telegram: Polling-Fehler #%d: %s",
+                    self._consecutive_errors, e,
+                )
+                # Exponentielles Backoff: 5s, 10s, 20s, max 60s
+                wait = min(5 * (2 ** (self._consecutive_errors - 1)), 60)
+                time.sleep(wait)
 
     def _save_to_inbox(self, text: str):
         """Speichert eine eingehende Nachricht in der Inbox."""
         if not self.inbox_path:
+            logger.warning("Telegram: inbox_path nicht gesetzt — Nachricht verworfen: %s", text[:50])
             return
 
-        self.inbox_path.mkdir(parents=True, exist_ok=True)
-        timestamp = datetime.now(timezone.utc).isoformat()
+        try:
+            self.inbox_path.mkdir(parents=True, exist_ok=True)
+            timestamp = datetime.now(timezone.utc).isoformat()
 
-        msg = {
-            "from": "oliver",
-            "timestamp": timestamp,
-            "content": text,
-            "channel": "telegram",
-            "read": False,
-        }
+            msg = {
+                "from": "oliver",
+                "timestamp": timestamp,
+                "content": text,
+                "channel": "telegram",
+                "read": False,
+            }
 
-        filename = f"{timestamp[:19].replace(':', '-')}.json"
-        filepath = self.inbox_path / filename
-        with open(filepath, "w", encoding="utf-8") as f:
-            json.dump(msg, f, indent=2, ensure_ascii=False)
+            filename = f"{timestamp[:19].replace(':', '-')}.json"
+            filepath = self.inbox_path / filename
+            with open(filepath, "w", encoding="utf-8") as f:
+                json.dump(msg, f, indent=2, ensure_ascii=False)
+            logger.debug("Telegram: Nachricht gespeichert → %s", filename)
+        except Exception as e:
+            logger.error("Telegram: Nachricht konnte nicht gespeichert werden: %s — Text: %s", e, text[:100])
 
     def _handle_command(self, command: str):
         """
@@ -395,3 +418,13 @@ class TelegramBridge:
     def is_configured(self) -> bool:
         """Prueft ob Token und Chat-ID vorhanden sind."""
         return bool(self.token and self.chat_id)
+
+    def is_polling_healthy(self) -> bool:
+        """Prueft ob der Polling-Thread noch laeuft und keine Dauerfehler hat."""
+        alive = self._polling_thread is not None and self._polling_thread.is_alive()
+        healthy = self._consecutive_errors < 5
+        if not alive and self._polling_active:
+            logger.error("Telegram: Polling-Thread ist gestorben!")
+        elif not healthy:
+            logger.warning("Telegram: %d aufeinanderfolgende Polling-Fehler", self._consecutive_errors)
+        return alive and healthy
