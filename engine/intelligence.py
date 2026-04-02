@@ -318,28 +318,35 @@ class SkillTracker:
         return self.LEVELS[0]
 
     def get_summary(self) -> str:
-        """Kompakte Skill-Uebersicht."""
+        """Kompakte Skill-Uebersicht — Top 5 + schwache Skills."""
         if not self.skills:
             return "Noch keine Skills getrackt."
 
-        # Nach Level sortieren
         sorted_skills = sorted(
             self.skills.items(),
             key=lambda x: self.LEVELS.index(x[1].get("level", "novice")),
             reverse=True,
         )
 
-        lines = []
-        for skill, data in sorted_skills:
+        # Top 5 (staerkste)
+        top = []
+        for skill, data in sorted_skills[:5]:
             level = data.get("level", "novice")
             s = data.get("successes", 0)
-            f = data.get("failures", 0)
-            rate = s / max(s + f, 1) * 100
-            icon = {"expert": "★", "advanced": "◆", "intermediate": "●",
-                    "beginner": "○", "novice": "·"}.get(level, "·")
-            lines.append(f"  {icon} {skill}: {level} ({s} OK, {f} Fehler, {rate:.0f}%)")
+            top.append(f"{skill}:{level}({s})")
 
-        return "\n".join(lines)
+        # Schwache Skills (beginner/novice mit > 0 Nutzungen)
+        weak = []
+        for skill, data in sorted_skills:
+            level = data.get("level", "novice")
+            if level in ("novice", "beginner") and data.get("successes", 0) > 0:
+                weak.append(f"{skill}:{level}")
+
+        parts = [f"Top: {', '.join(top)}"]
+        if weak:
+            parts.append(f"Schwach: {', '.join(weak[:3])}")
+        parts.append(f"Gesamt: {len(self.skills)} Skills")
+        return " | ".join(parts)
 
     def get_strongest_skills(self, n: int = 3) -> list[str]:
         """Die n staerksten Skills."""
@@ -636,11 +643,7 @@ class EfficiencyTracker:
         total_tokens = sum(s.get("tokens_used", 0) for s in recent) or 1
         value_per_1k_tokens = (total_output / total_tokens) * 1000
 
-        lines = [
-            f"  Trend: {trend} (letzte {len(recent)} Sequenzen)",
-            f"  Durchschnitt: {avg_calls:.0f} Calls/Seq, {avg_errors:.1f} Fehler, ${avg_cost:.3f}",
-            f"  Fehlerrate: {error_rate:.1f}%",
-            f"  Output: {total_files} Dateien, {total_tools} Tools, {total_goals} Ziele",
-            f"  Produktivitaet: {productivity:.1f} Output/$ | {value_per_1k_tokens:.2f} Output/1K Tokens",
-        ]
-        return "\n".join(lines)
+        return (
+            f"{trend} | {avg_calls:.0f} Calls/Seq, {error_rate:.0f}% Fehler, ${avg_cost:.3f}/Seq | "
+            f"Output: {total_files}F {total_tools}T {total_goals}G | {productivity:.1f} Output/$"
+        )

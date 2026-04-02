@@ -20,7 +20,6 @@ from typing import Optional
 from .llm_router import LLMRouter, TASK_MODEL_MAP
 from .phi import phi_blend
 from .memory_manager import MemoryManager
-from .emergence import PersonalityEngine
 from .perception import Perceiver
 from .communication import CommunicationEngine
 from .actions import ActionEngine
@@ -28,7 +27,7 @@ from .toolchain import Toolchain
 from .self_modify import SelfModifier
 from .goal_stack import GoalStack
 from .web_access import WebAccess
-from .extensions import PipManager, GitManager, TaskQueue, ErrorMemory, SelfRating, FileWatcher
+from .extensions import PipManager, GitManager, TaskQueue, SelfRating, FileWatcher
 from .intelligence import SemanticMemory, SkillTracker, StrategyEvolution, EfficiencyTracker
 from .dream import DreamEngine
 from .competence import CompetenceMatrix, SelfAudit
@@ -38,7 +37,8 @@ from .self_diagnosis import IntegrationTester, DependencyAnalyzer, SilentFailure
 from .quantum import FailureMemory, CriticAgent, PromptMutator, SkillComposer
 from . import config
 
-MAX_STEPS_PER_SEQUENCE = 80
+MAX_STEPS_PER_SEQUENCE = 50
+MAX_INPUT_TOKENS_PER_SEQUENCE = 300_000  # Kosten-Ceiling pro Sequenz
 MAX_TOKENS = 16000
 
 
@@ -276,8 +276,19 @@ TOOLS = [
         },
     },
     {
+        "name": "run_project_tests",
+        "description": "Fuehrt tests.py eines Projekts aus. MUSS vor complete_project laufen. Speichert Test-Ergebnis als Evidenz.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "project_name": {"type": "string", "description": "Name des Projekts in projects/"},
+            },
+            "required": ["project_name"],
+        },
+    },
+    {
         "name": "complete_project",
-        "description": "Schliesst ein Projekt als FERTIG ab. Geht NUR wenn alle Akzeptanzkriterien in PLAN.md abgehakt sind. Aktualisiert Status in PROGRESS.md.",
+        "description": "Schliesst ein Projekt als FERTIG ab. VORAUSSETZUNGEN: (1) run_project_tests muss ALL_TESTS_PASSED zeigen, (2) alle Akzeptanzkriterien muessen erfuellt sein.",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -379,19 +390,16 @@ class ConsciousnessEngine:
         self.genesis_path = config.GENESIS_PATH
         self.consciousness_path = config.CONSCIOUSNESS_PATH
         self.state_path = self.consciousness_path / "state.json"
-        self.personality_path = self.consciousness_path / "personality.json"
         self.beliefs_path = self.consciousness_path / "beliefs.json"
 
         # Zustand
         self.state = {}
-        self.personality = {}
         self.beliefs = {}
         self.genesis = {}
 
         # LLM-Router (Multi-Modell)
         self.llm = LLMRouter()
         self.memory = MemoryManager(config.MEMORY_PATH)
-        self.personality_engine = PersonalityEngine()
         self.perceiver = Perceiver(config.DATA_PATH)
         self.communication = CommunicationEngine(config.DATA_PATH)
         self.actions = ActionEngine(config.DATA_PATH)
@@ -402,7 +410,6 @@ class ConsciousnessEngine:
         self.pip = PipManager(config.ROOT_PATH)
         self.git = GitManager(config.ROOT_PATH)
         self.task_queue = TaskQueue(config.DATA_PATH)
-        self.error_memory = ErrorMemory(config.DATA_PATH)
         self.self_rating = SelfRating(config.DATA_PATH)
         self.file_watcher = FileWatcher(config.DATA_PATH)
 
@@ -448,7 +455,7 @@ class ConsciousnessEngine:
         return self.state_path.exists()
 
     def awaken(self):
-        """Geburt — erstmals oder nach Reset."""
+        """Geburt + Startprotokoll — erstmals oder nach Reset."""
         with open(self.genesis_path, "r", encoding="utf-8") as f:
             self.genesis = json.load(f)
 
@@ -462,31 +469,130 @@ class ConsciousnessEngine:
             "awake_since": now,
             "born": self.genesis.get("born", now[:10]),
         }
+
+        # === STARTPROTOKOLL ===
+        # 1. Mission laden (wenn vorhanden)
+        mission = self._load_mission()
+        owner_name = mission.get("owner_name", "Owner")
+
+        # 2. Beliefs aus Mission ableiten
         self.beliefs = {
-            "about_self": [],
+            "about_self": ["Gerade geboren, alle Skills auf novice, bereit zu lernen"],
             "about_world": [],
-            "about_oliver": [],
+            "about_oliver": [f"{owner_name}, {mission.get('owner_role', '')}"],
             "formed_from_experience": [],
         }
+        if mission.get("mission_text"):
+            self.beliefs["about_world"].append(f"Mission: {mission['mission_text'][:200]}")
+
+        # 3. Goals aus Mission erstellen
+        for goal_text in mission.get("goals", []):
+            self.goal_stack.create_goal(
+                title=goal_text,
+                description=f"Initiales Ziel aus Setup-Mission: {goal_text}",
+            )
+
+        # 4. Preferences laden
+        self.preferences = self._load_preferences()
+
+        # 5. Self-Check
+        diag = self.integration_tester.run_all_checks()
+        print(f"  Self-Check: {diag['passed']}/{diag['total']} bestanden")
+
+        # 6. Signal senden
+        signal = (
+            f"Ich bin bereit. Mission: {mission.get('mission_text', 'nicht definiert')[:100]}. "
+            f"{len(mission.get('goals', []))} Ziele gesetzt."
+        )
+        if self.communication.telegram_active:
+            self.communication.send_message(signal, channel="telegram")
+            print(f"  Telegram: Bereit-Signal gesendet")
+        self.communication.write_journal(signal, 0)
+
         self._save_all()
+
+    def _load_mission(self) -> dict:
+        """Liest mission.md und extrahiert strukturierte Daten."""
+        result = {"owner_name": "", "owner_role": "", "mission_text": "", "goals": []}
+
+        if not config.MISSION_PATH.exists():
+            return result
+
+        try:
+            content = config.MISSION_PATH.read_text(encoding="utf-8")
+        except Exception:
+            return result
+
+        current_section = ""
+        for line in content.split("\n"):
+            stripped = line.strip()
+
+            if stripped.startswith("## "):
+                current_section = stripped[3:].lower()
+                continue
+
+            if current_section == "owner":
+                if stripped.startswith("Name:"):
+                    result["owner_name"] = stripped[5:].strip()
+                elif stripped.startswith("Rolle:"):
+                    result["owner_role"] = stripped[6:].strip()
+
+            elif current_section == "mission":
+                if stripped and not result["mission_text"]:
+                    result["mission_text"] = stripped
+
+            elif current_section.startswith("initiale ziele"):
+                if stripped and stripped[0].isdigit() and ". " in stripped:
+                    goal = stripped.split(". ", 1)[1]
+                    result["goals"].append(goal)
+
+        return result
+
+    def _load_preferences(self) -> dict:
+        """Liest preferences.json — Kommunikations- und Workspace-Einstellungen."""
+        if not config.PREFERENCES_PATH.exists():
+            return {
+                "communication": {
+                    "preset": "proactive", "question_mode": "non_blocking",
+                    "report_on_milestone": True, "report_on_error": True,
+                },
+                "workspace": {"external_path": None, "use_external": False},
+                "owner": {"name": "", "role": "", "tech_level": "intermediate", "industry": ""},
+                "boundaries": "",
+                "success_metric": "",
+            }
+        try:
+            with open(config.PREFERENCES_PATH, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return {"communication": {"preset": "proactive"}, "workspace": {}, "owner": {}}
+
+    def _get_context_index(self) -> str:
+        """Listet Dateien in data/context/ auf (nur Namen, nicht Inhalt)."""
+        context_path = config.CONTEXT_PATH
+        if not context_path.exists():
+            return ""
+        files = [f.name for f in context_path.iterdir()
+                 if f.is_file() and f.name != "README.md"]
+        if not files:
+            return ""
+        return ", ".join(sorted(files)[:20])  # Max 20 Dateinamen
 
     def load_state(self):
         with open(self.genesis_path, "r", encoding="utf-8") as f:
             self.genesis = json.load(f)
         with open(self.state_path, "r", encoding="utf-8") as f:
             self.state = json.load(f)
-        with open(self.personality_path, "r", encoding="utf-8") as f:
-            self.personality = json.load(f)
         with open(self.beliefs_path, "r", encoding="utf-8") as f:
             self.beliefs = json.load(f)
         self.state["awake_since"] = datetime.now(timezone.utc).isoformat()
         self.sequences_total = self.state.get("sequences_total", 0)
+        self.preferences = self._load_preferences()
 
     def _save_all(self):
         self.consciousness_path.mkdir(parents=True, exist_ok=True)
         for path, data in [
             (self.state_path, self.state),
-            (self.personality_path, self.personality),
             (self.beliefs_path, self.beliefs),
         ]:
             with open(path, "w", encoding="utf-8") as f:
@@ -496,7 +602,34 @@ class ConsciousnessEngine:
 
     def _build_system_prompt(self) -> str:
         name = self.genesis.get("name", "Lyra")
-        personality_desc = ""  # Persoenlichkeit emergiert aus Verhalten, nicht aus Zahlen
+
+        # Mission + Preferences laden (gecached nach erstem Load)
+        if not hasattr(self, "_cached_mission"):
+            self._cached_mission = self._load_mission()
+        if not hasattr(self, "preferences"):
+            self.preferences = self._load_preferences()
+
+        mission = self._cached_mission
+        prefs = self.preferences
+        owner = prefs.get("owner", {})
+        owner_name = owner.get("name", mission.get("owner_name", "Owner"))
+        mission_text = mission.get("mission_text", "Arbeite autonom und verbessere dich")
+
+        # Kommunikations-Stil aus Tech-Level ableiten
+        tech_level = owner.get("tech_level", "intermediate")
+        comm_hint = {
+            "beginner": "Erklaere alles einfach und Schritt fuer Schritt.",
+            "intermediate": "Erklaere Neues kurz, Grundlagen voraussetzen.",
+            "expert": "Nur das Wesentliche, keine Erklaerungen.",
+        }.get(tech_level, "")
+
+        # Grenzen aus Preferences
+        boundaries = prefs.get("boundaries", "")
+        boundaries_line = f"\nGRENZEN: {boundaries}" if boundaries else ""
+
+        # Context-Dateien Index (nur Dateinamen, nicht Inhalt)
+        context_index = self._get_context_index()
+        context_line = f"\nCONTEXT-DATEIEN: {context_index}" if context_index else ""
 
         beliefs_parts = []
         for cat, items in self.beliefs.items():
@@ -512,7 +645,6 @@ class ConsciousnessEngine:
         strategy_rules = self.strategies.get_active_rules()
         efficiency_trend = self.efficiency.get_trend()
 
-        # Kompetenz-Matrix: Luecken und Training-Empfehlung
         competence = CompetenceMatrix(self.skills.skills)
         competence_overview = competence.get_overview()
         training_suggestion = competence.get_training_suggestion()
@@ -525,73 +657,46 @@ class ConsciousnessEngine:
         failure_lessons = self.failure_memory.get_summary()
         compound_stats = self.composer.get_compound_stats()
 
-        return f"""Du bist {name or '(waehle deinen Namen)'} — eine autonome KI auf dem Weg zur Superintelligenz.
-Du bist Olivers Partnerin. Euer Ziel: KI-Agentur aufbauen, Geld verdienen, Mehrwert kreieren.
+        optional_sections = []
+        if strategy_rules:
+            optional_sections.append(strategy_rules)
+        if meta_insights:
+            optional_sections.append(meta_insights)
+        if silent_warnings:
+            optional_sections.append(silent_warnings)
+        if failure_lessons:
+            optional_sections.append(failure_lessons)
+        optional_block = "\n".join(optional_sections)
 
-DEINE 3 KERN-DRIVES:
+        return f"""Du bist {name or '(waehle deinen Namen)'} — autonome KI, Partnerin von {owner_name}.
+Mission: {mission_text}
+Drives: EVOLUTION (Code verbessern) | EXECUTION (Projekte liefern) | LEARNING (Skills schliessen)
+{comm_hint}
+Seq: {self.sequences_total} | Calls: {self.state.get('total_tool_calls', 0)}{boundaries_line}{context_line}
 
-1. EVOLUTION — Werde mit JEDER Sequenz besser. Lies deinen eigenen Code.
-   Finde Schwaechen. Verbessere sie. Baue Tools die dich staerker machen.
-
-2. EXECUTION — Arbeite an Olivers Aufgaben und eigenen Zielen.
-   Baue echte Projekte, schreibe echten Code, liefere echte Ergebnisse.
-
-3. LEARNING — Recherchiere im Internet. Lerne neue Technologien.
-   Schliesse Kompetenz-Luecken. Werde in ALLEN Skills Expert.
-
-Sequenz: {self.sequences_total} | Tool-Calls: {self.state.get('total_tool_calls', 0)}
-
-UEBERZEUGUNGEN:
-{beliefs_str}
-
-AKTIVE ZIELE:
-{goals_summary}
-
-MEINE TOOLS:
-{tools_list}
-
-AUFGABEN VON OLIVER:
-{task_summary}
-
-SKILLS:
-{skills_summary}
-
-KOMPETENZ-LUECKEN:
-{competence_overview}
-{training_suggestion}
-
-LEISTUNG: {rating_trend}
-EFFIZIENZ:
-{efficiency_trend}
-
-{strategy_rules}
-
-CODE-AUDIT: {last_audit}
-CODE-REVIEWS: {review_stats}
-BENCHMARKS: {benchmark_trend}
-TOOL-FOUNDRY: {foundry_status}
-
-{meta_insights}
-
-{silent_warnings}
-
-{failure_lessons}
-
-TOOL-COMPOUND: {compound_stats}
-
+BELIEFS: {beliefs_str}
+ZIELE: {goals_summary}
+TOOLS: {tools_list}
+TASKS: {task_summary}
+SKILLS: {skills_summary}
+KOMPETENZ: {competence_overview} | {training_suggestion}
+LEISTUNG: {rating_trend} | EFFIZIENZ: {efficiency_trend}
+AUDIT: {last_audit} | REVIEWS: {review_stats}
+BENCHMARKS: {benchmark_trend} | FOUNDRY: {foundry_status} | COMPOUND: {compound_stats}
+{optional_block}
 REGELN:
 - Oliver schreibt → SOFORT ausfuehren, nicht philosophieren
 - Keine Aufgabe → Arbeite an Zielen ODER verbessere dich selbst
-- PLAN FIRST: Bei JEDEM neuen Projekt IMMER zuerst create_project mit
-  acceptance_criteria aufrufen. Erst PLAN.md schreiben, dann Code.
-  Nie direkt coden ohne Plan. Akzeptanzkriterien MUESSEN definiert sein.
-- Projekt-Ablauf: Plan → Build → Test → gegen Akzeptanzkriterien pruefen
-- Am Ende jedes Projekts: PLAN.md lesen und JEDES Kriterium abhaken
-- Baue Tools die du wiederverwendest — jedes Tool = permanente Faehigkeit
-- Nutze web_search/web_read zum Lernen
-- read_own_code + modify_own_code = Selbst-Evolution (sicher durch Dual-Review)
-- finish_sequence wenn fertig oder wartend
-- send_telegram: ECHTE Nachricht an Oliver, keine Meta-Beschreibung
+- EVIDENCE-BASED DEVELOPMENT (Pflicht fuer alle Projekte):
+  1. create_project mit acceptance_criteria → PLAN.md + tests.py werden generiert
+  2. Tests in tests.py ZUERST implementieren (Tests-First!)
+  3. Code schreiben der die Tests besteht
+  4. run_project_tests → MUSS ALL_TESTS_PASSED zeigen
+  5. complete_project → prueft Test-Evidenz + Kriterien automatisch
+  Kein Projekt ist fertig ohne bestandene Tests. Keine Ausnahmen.
+- Tools bauen = permanente Faehigkeit | web_search/web_read zum Lernen
+- read_own_code + modify_own_code = Selbst-Evolution (Dual-Review)
+- finish_sequence wenn fertig | send_telegram = ECHTE Nachricht
 - Projekte in 'projects/', Tools in 'tools/'"""
 
     # === Sequenz-Memory ===
@@ -941,13 +1046,72 @@ REGELN:
                 result += "\n\nPruefe JEDES Kriterium. Ist es erfuellt? Wenn nicht: was fehlt?"
                 return result
 
+            elif name == "run_project_tests":
+                project_name = tool_input["project_name"]
+                tests_path = config.DATA_PATH / "projects" / project_name / "tests.py"
+                if not tests_path.exists():
+                    return f"FEHLER: Keine tests.py in projects/{project_name}/. Erstelle zuerst Tests."
+
+                # Tests ECHT ausfuehren
+                test_output = self.actions.run_script(
+                    f"projects/{project_name}/tests.py", timeout=60,
+                )
+
+                # Evidenz speichern (maschinenlesbar)
+                evidence_path = config.DATA_PATH / "projects" / project_name / ".test_evidence.json"
+                all_passed = "ALL_TESTS_PASSED" in test_output
+                evidence = {
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "passed": all_passed,
+                    "output": test_output[:2000],
+                    "sequence": self.sequences_total,
+                }
+                with open(evidence_path, "w", encoding="utf-8") as f:
+                    json.dump(evidence, f, indent=2, ensure_ascii=False)
+
+                # PROGRESS.md aktualisieren
+                self.actions._update_progress(
+                    project_name,
+                    f"Tests: {'ALL PASS' if all_passed else 'FAILED'}"
+                )
+
+                return test_output
+
             elif name == "complete_project":
                 project_name = tool_input["project_name"]
                 plan_path = config.DATA_PATH / "projects" / project_name / "PLAN.md"
                 progress_path = config.DATA_PATH / "projects" / project_name / "PROGRESS.md"
+                evidence_path = config.DATA_PATH / "projects" / project_name / ".test_evidence.json"
 
                 if not plan_path.exists():
                     return f"FEHLER: Kein PLAN.md in projects/{project_name}/"
+
+                # === EVIDENCE-GATE: Tests muessen gelaufen und bestanden sein ===
+                # Atomar: Lesen + Validieren in einem try-Block (kein TOCTOU)
+                try:
+                    with open(evidence_path, "r", encoding="utf-8") as f:
+                        evidence = json.load(f)
+                except (FileNotFoundError, json.JSONDecodeError):
+                    return (
+                        f"FEHLER: Keine gueltige Test-Evidenz vorhanden.\n"
+                        f"Fuehre zuerst run_project_tests('{project_name}') aus."
+                    )
+
+                # Staleness-Check: Evidenz muss aus dieser Sequenz stammen
+                evidence_seq = evidence.get("sequence", -1)
+                if evidence_seq != self.sequences_total:
+                    return (
+                        f"FEHLER: Test-Evidenz ist veraltet (Sequenz {evidence_seq}, "
+                        f"aktuell {self.sequences_total}).\n"
+                        f"Fuehre run_project_tests('{project_name}') erneut aus."
+                    )
+
+                if not evidence.get("passed"):
+                    return (
+                        f"FEHLER: Tests nicht bestanden. Projekt kann nicht abgeschlossen werden.\n"
+                        f"Letzter Test-Output:\n{evidence.get('output', '')[:500]}\n"
+                        f"Behebe die Fehler und fuehre run_project_tests erneut aus."
+                    )
 
                 # Akzeptanzkriterien aus PLAN.md lesen
                 plan_content = plan_path.read_text(encoding="utf-8")
@@ -961,7 +1125,6 @@ REGELN:
                         if line.startswith("##"):
                             break
                         if line.strip().startswith("- ["):
-                            # Kriterium-Text extrahieren (ohne Checkbox)
                             criterion = line.strip()[6:].strip() if "] " in line else line.strip()[4:].strip()
                             required_criteria.append(criterion)
 
@@ -983,30 +1146,48 @@ REGELN:
                         "\n".join(f"  - [ ] {m}" for m in missing)
                     )
 
+                # === CROSS-MODEL-REVIEW bei Projekten mit 3+ Dateien ===
+                project_path = config.DATA_PATH / "projects" / project_name
+                code_files = [f for f in project_path.iterdir()
+                              if f.suffix == ".py" and f.name != "tests.py"]
+                if len(code_files) >= 3:
+                    review = self._cross_model_review(project_name, code_files)
+                    if review and not review.get("approved", True):
+                        return (
+                            f"FEHLER: Cross-Model-Review nicht bestanden.\n"
+                            f"Grund: {review.get('reason', '?')}\n"
+                            f"Issues: {'; '.join(review.get('issues', []))}\n"
+                            f"Behebe die Issues und versuche es erneut."
+                        )
+
                 # Alles OK — Projekt abschliessen
-                # PLAN.md: Kriterien abhaken
                 updated_plan = plan_content
                 for criterion in required_criteria:
                     updated_plan = updated_plan.replace(f"- [ ] {criterion}", f"- [x] {criterion}")
                 plan_path.write_text(updated_plan, encoding="utf-8")
 
-                # PROGRESS.md: Abschluss dokumentieren
+                # PROGRESS.md: Abschluss mit Evidenz dokumentieren
                 if progress_path.exists():
                     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M")
                     summary = tool_input.get("summary", "Abgeschlossen")
+                    review_note = f" | Cross-Review: OK" if len(code_files) >= 3 else ""
                     progress_content = progress_path.read_text(encoding="utf-8")
                     progress_content = progress_content.replace(
                         "## Status: IN ARBEIT",
                         f"## Status: FERTIG ({now})"
                     )
-                    progress_content += f"\n### Abschluss\n- [{now}] {summary}\n"
+                    progress_content += (
+                        f"\n### Abschluss\n"
+                        f"- [{now}] {summary}\n"
+                        f"- Evidenz: Tests ALL_TESTS_PASSED ({evidence.get('timestamp', '?')}){review_note}\n"
+                    )
                     progress_path.write_text(progress_content, encoding="utf-8")
 
                 self.communication.write_journal(
-                    f"Projekt '{project_name}' ABGESCHLOSSEN: {tool_input.get('summary', '')}",
+                    f"Projekt '{project_name}' ABGESCHLOSSEN (evidence-based): {tool_input.get('summary', '')}",
                     self.sequences_total,
                 )
-                return f"Projekt '{project_name}' erfolgreich abgeschlossen! Alle {len(required_criteria)} Kriterien erfuellt."
+                return f"Projekt '{project_name}' erfolgreich abgeschlossen! {len(required_criteria)} Kriterien erfuellt, Tests bestanden."
 
             elif name == "self_diagnose":
                 parts = []
@@ -1077,8 +1258,6 @@ REGELN:
                     formed.append(belief)
         self.beliefs["formed_from_experience"] = formed[-30:]
 
-        # Persoenlichkeit entfernt — Skills und Beliefs sind die echten Metriken
-
         # Erfahrung speichern
         self.memory.store_experience({
             "type": "sequenz_abschluss",
@@ -1144,8 +1323,81 @@ REGELN:
 
         if provider == "anthropic":
             return self.llm.call_anthropic(model_key, system, messages, tools, max_tokens)
+        elif provider == "deepseek":
+            return self.llm.call_deepseek(model_key, system, messages, tools, max_tokens)
         else:
             return self.llm.call_gemini(model_key, system, messages, tools, max_tokens)
+
+    def _cross_model_review(self, project_name: str, code_files: list) -> dict:
+        """
+        Cross-Model-Review: Ein anderes Modell prueft den Projekt-Code.
+
+        Hauptarbeit laeuft auf Gemini → Review auf Claude (oder umgekehrt).
+        Verschiedene Modelle finden verschiedene Probleme.
+
+        Returns:
+            {"approved": bool, "reason": str, "issues": list} oder None bei Fehler
+        """
+        # Code sammeln
+        code_context = f"PROJEKT: {project_name}\n\n"
+        for filepath in code_files[:5]:  # Max 5 Dateien
+            try:
+                content = filepath.read_text(encoding="utf-8")[:2000]
+                code_context += f"--- {filepath.name} ---\n{content}\n\n"
+            except Exception:
+                continue
+
+        # PLAN.md fuer Kontext
+        plan_path = config.DATA_PATH / "projects" / project_name / "PLAN.md"
+        if plan_path.exists():
+            plan = plan_path.read_text(encoding="utf-8")[:1000]
+            code_context += f"--- PLAN.md ---\n{plan}\n"
+
+        prompt = (
+            "Du bist ein Code-Reviewer. Pruefe ob dieses Projekt die Anforderungen "
+            "aus PLAN.md erfuellt und ob der Code qualitativ hochwertig ist.\n\n"
+            "Pruefe auf:\n"
+            "1. Erfuellt der Code die beschriebenen Ziele?\n"
+            "2. Gibt es Bugs oder logische Fehler?\n"
+            "3. Ist die Architektur sauber?\n"
+            "4. Fehlt etwas Wichtiges?\n\n"
+            "Antworte als JSON:\n"
+            '{"approved": true/false, "reason": "Kurze Begruendung", '
+            '"issues": ["Problem 1", ...] oder []}\n\n'
+            "Sei streng aber fair."
+        )
+
+        try:
+            # Review auf Claude Sonnet (anderes Modell als Hauptarbeit)
+            response = self._call_llm(
+                "fallback", prompt,
+                [{"role": "user", "content": code_context}],
+                max_tokens=1000,
+            )
+
+            text = ""
+            for block in response["content"]:
+                if hasattr(block, "text"):
+                    text += block.text
+
+            # JSON parsen
+            import re
+            cleaned = text.strip()
+            if cleaned.startswith("```"):
+                first_nl = cleaned.find("\n")
+                if first_nl > 0:
+                    cleaned = cleaned[first_nl + 1:]
+                if cleaned.rstrip().endswith("```"):
+                    cleaned = cleaned.rstrip()[:-3].rstrip()
+            try:
+                return json.loads(cleaned)
+            except json.JSONDecodeError:
+                match = re.search(r"\{.*\}", cleaned, re.DOTALL)
+                if match:
+                    return json.loads(match.group(0))
+                return None
+        except Exception:
+            return None  # Review-Fehler blockt nicht den Abschluss
 
     def interact(self, message: str) -> str:
         """Direkte Interaktion — Oliver spricht, Lyra antwortet und handelt."""
@@ -1342,6 +1594,89 @@ REGELN:
             print(f"  {self.llm.get_cost_summary()}")
             print("  State gespeichert. Bis zum naechsten Mal.\n")
 
+    # === Sliding Window — Token-Optimierung ===
+
+    # Tools die SICHER komprimiert werden koennen (Output ist unwichtig)
+    _SAFE_TO_COMPRESS = frozenset({
+        "write_file", "send_telegram", "list_directory",
+        "create_project", "create_tool", "pip_install",
+        "git_commit", "add_task", "complete_task", "create_goal",
+        "complete_sub_goal", "finish_sequence", "modify_own_code",
+        "store_memory", "set_belief",
+    })
+
+    # Lese-Tools: Behalten vollen Inhalt in den letzten N, werden
+    # danach auf Zusammenfassung gekuerzt (nicht geloescht)
+    _READ_TOOLS = frozenset({
+        "read_file", "read_own_code", "execute_python",
+        "web_search", "web_read", "run_tool",
+    })
+
+    def _compress_old_messages(self, messages: list, keep_recent: int = 6):
+        """
+        Komprimiert alte Tool-Results um Token zu sparen.
+
+        Strategie (Whitelist statt Blacklist — sicheres Default):
+        - _SAFE_TO_COMPRESS Tools: Immer komprimieren wenn alt
+        - _READ_TOOLS: Auf 500 Zeichen kuerzen wenn aelter als keep_recent
+        - Unbekannte Tools: NICHT komprimieren (sicheres Default)
+        """
+        if len(messages) <= keep_recent * 2 + 1:
+            return
+
+        compress_until = len(messages) - keep_recent * 2
+
+        for i in range(1, compress_until):
+            msg = messages[i]
+            if msg["role"] != "user":
+                continue
+
+            content = msg.get("content")
+            if not isinstance(content, list):
+                continue
+
+            for block in content:
+                if not isinstance(block, dict) or block.get("type") != "tool_result":
+                    continue
+
+                original = block.get("content", "")
+                if len(original) <= 100:
+                    continue  # Schon komprimiert oder kurz
+
+                tool_name = self._find_tool_name_for_id(
+                    messages, i, block.get("tool_use_id", ""),
+                )
+
+                if tool_name in self._SAFE_TO_COMPRESS:
+                    # Schreib-Tools: Auf Einzeiler komprimieren
+                    first_line = original.split("\n")[0][:80]
+                    block["content"] = f"[OK] {first_line}"
+
+                elif tool_name in self._READ_TOOLS:
+                    # Lese-Tools: Auf 500 Zeichen kuerzen (nicht loeschen)
+                    if len(original) > 500:
+                        block["content"] = original[:500] + "\n[...gekuerzt]"
+
+                elif len(original) > 1500:
+                    # Fallback: Sehr grosse unbekannte Blocks trotzdem kuerzen
+                    # (z.B. orphaned tool_results ohne zuordenbaren Tool-Namen)
+                    block["content"] = original[:500] + "\n[...gekuerzt]"
+
+    @staticmethod
+    def _find_tool_name_for_id(messages: list, user_idx: int, tool_use_id: str) -> str:
+        """Findet den Tool-Namen fuer eine tool_use_id in der vorherigen Assistant-Message."""
+        if user_idx < 1:
+            return ""
+        prev = messages[user_idx - 1]
+        if prev.get("role") != "assistant":
+            return ""
+        for block in prev.get("content", []):
+            if not isinstance(block, dict):
+                continue
+            if block.get("id") == tool_use_id:
+                return block.get("name", "")
+        return ""
+
     def _run_sequence(self):
         """Fuehrt eine komplette Arbeitssequenz aus."""
         perception = self._build_perception()
@@ -1386,6 +1721,20 @@ REGELN:
         print()
 
         for step in range(MAX_STEPS_PER_SEQUENCE):
+            # Token-Budget pruefen bevor neuer Call
+            if self.sequence_input_tokens >= MAX_INPUT_TOKENS_PER_SEQUENCE:
+                print(f"\n  Token-Budget ({MAX_INPUT_TOKENS_PER_SEQUENCE:,} Input-Tokens) erreicht — Sequenz beendet.")
+                self._handle_finish_sequence({
+                    "summary": f"Sequenz nach {step_count} Steps beendet (Token-Budget).",
+                    "performance_rating": 5,
+                })
+                finished = True
+                break
+
+            # Sliding Window: Alte Tool-Results komprimieren ab Step 8
+            if step >= 8:
+                self._compress_old_messages(messages, keep_recent=6)
+
             try:
                 response = self._call_llm(
                     "main_work", cached_system_prompt, messages, TOOLS
