@@ -69,7 +69,7 @@ class CodeReviewer:
             # Fail-Closed: Ohne Reviewer kein Review = kein Durchkommen
             return {
                 "approved": False,
-                "reason": "Gemini nicht konfiguriert — Review nicht moeglich (fail-closed)",
+                "reason": "Reviewer nicht konfiguriert — Review nicht moeglich (fail-closed)",
                 "issues": ["GOOGLE_AI_API_KEY fehlt in .env"],
             }
 

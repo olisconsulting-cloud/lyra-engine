@@ -1905,16 +1905,15 @@ REGELN:
     _SAFE_TO_COMPRESS = frozenset({
         "write_file", "send_telegram", "list_directory",
         "create_project", "create_tool", "pip_install",
-        "git_commit", "add_task", "complete_task", "create_goal",
-        "complete_sub_goal", "finish_sequence", "modify_own_code",
-        "store_memory", "set_belief",
+        "git_commit", "set_goal", "complete_subgoal",
+        "finish_sequence", "modify_own_code", "generate_tool",
     })
 
     # Lese-Tools: Behalten vollen Inhalt in den letzten N, werden
     # danach auf Zusammenfassung gekuerzt (nicht geloescht)
     _READ_TOOLS = frozenset({
         "read_file", "read_own_code", "execute_python",
-        "web_search", "web_read", "run_tool",
+        "web_search", "web_read", "use_tool",
     })
 
     def _compress_old_messages(self, messages: list, keep_recent: int = 6):
@@ -1989,16 +1988,13 @@ REGELN:
             "read_file": lambda i: f"Lese: {i.get('path', '?')}",
             "list_directory": lambda i: f"Schaue in Ordner: {i.get('path', '/')}",
             "execute_python": lambda i: f"Fuehre Code aus ({len(i.get('code', ''))} Zeichen)",
-            "run_script": lambda i: f"Starte Script: {i.get('path', '?')}",
             "web_search": lambda i: f"Suche im Web: {i.get('query', '?')}",
-            "read_webpage": lambda i: f"Lese Webseite: {i.get('url', '?')[:60]}",
+            "web_read": lambda i: f"Lese Webseite: {i.get('url', '?')[:60]}",
             "create_project": lambda i: f"Neues Projekt: {i.get('name', '?')}",
-            "create_goal": lambda i: f"Neues Ziel: {i.get('title', '?')}",
-            "complete_sub_goal": lambda i: f"Sub-Ziel erledigt!",
-            "send_message": lambda i: f"Nachricht an Oliver: {i.get('content', '?')[:60]}",
-            "write_journal": lambda i: f"Tagebucheintrag geschrieben",
+            "set_goal": lambda i: f"Neues Ziel: {i.get('title', '?')}",
+            "complete_subgoal": lambda i: f"Sub-Ziel erledigt!",
+            "send_telegram": lambda i: f"Nachricht an Oliver: {i.get('message', '?')[:60]}",
             "remember": lambda i: f"Erinnere mich: {i.get('query', '?')[:50]}",
-            "store_memory": lambda i: f"Speichere Erinnerung",
             "read_own_code": lambda i: f"Lese eigenen Code: {i.get('path', '?')}",
             "modify_own_code": lambda i: f"Aendere eigenen Code: {i.get('path', '?')}",
             "pip_install": lambda i: f"Installiere Paket: {i.get('package', '?')}",
@@ -2006,6 +2002,7 @@ REGELN:
             "git_status": lambda i: "Pruefe Git-Status",
             "create_tool": lambda i: f"Baue neues Tool: {i.get('name', '?')}",
             "use_tool": lambda i: f"Nutze Tool: {i.get('name', '?')}",
+            "generate_tool": lambda i: f"Generiere Tool: {i.get('name', '?')}",
             "finish_sequence": lambda i: f"Sequenz beendet",
         }
         desc_fn = descriptions.get(tool_name)
