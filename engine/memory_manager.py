@@ -31,15 +31,19 @@ class MemoryManager:
         self.index = self._load_index()
 
     def _load_index(self) -> dict:
-        if self.index_path.exists():
-            with open(self.index_path, "r", encoding="utf-8") as f:
-                return json.load(f)
-        return {
+        default = {
             "experiences": [],
             "reflections": [],
             "total_experiences": 0,
             "total_reflections": 0,
         }
+        if self.index_path.exists():
+            try:
+                with open(self.index_path, "r", encoding="utf-8") as f:
+                    return json.load(f)
+            except (json.JSONDecodeError, ValueError):
+                return default
+        return default
 
     def _save_index(self):
         with open(self.index_path, "w", encoding="utf-8") as f:
@@ -151,10 +155,13 @@ class MemoryManager:
         for score, entry in scored[:top_k]:
             filepath = self.experiences_path / entry["file"]
             if filepath.exists():
-                with open(filepath, "r", encoding="utf-8") as f:
-                    full = json.load(f)
-                    full["retrieval_score"] = round(score, 4)
-                    results.append(full)
+                try:
+                    with open(filepath, "r", encoding="utf-8") as f:
+                        full = json.load(f)
+                        full["retrieval_score"] = round(score, 4)
+                        results.append(full)
+                except (json.JSONDecodeError, ValueError):
+                    continue
 
         return results
 
@@ -165,8 +172,11 @@ class MemoryManager:
         for entry in reversed(recent_entries):
             filepath = self.experiences_path / entry["file"]
             if filepath.exists():
-                with open(filepath, "r", encoding="utf-8") as f:
-                    results.append(json.load(f))
+                try:
+                    with open(filepath, "r", encoding="utf-8") as f:
+                        results.append(json.load(f))
+                except (json.JSONDecodeError, ValueError):
+                    continue
         return results
 
     def get_recent_reflections(self, n: int = 3) -> list[dict]:
@@ -176,8 +186,11 @@ class MemoryManager:
         for entry in reversed(recent):
             filepath = self.reflections_path / entry["file"]
             if filepath.exists():
-                with open(filepath, "r", encoding="utf-8") as f:
-                    results.append(json.load(f))
+                try:
+                    with open(filepath, "r", encoding="utf-8") as f:
+                        results.append(json.load(f))
+                except (json.JSONDecodeError, ValueError):
+                    continue
         return results
 
     def get_stats(self) -> dict:
@@ -239,6 +252,7 @@ class MemoryManager:
 
         # Index aktualisieren
         self.index["experiences"] = sorted(kept, key=lambda e: e["timestamp"])
+        self.index["total_experiences"] = len(kept)
         self._save_index()
 
         return len(removed_files)

@@ -794,12 +794,13 @@ REGELN:
         if next_task:
             parts.append(f"\nNAECHSTE AUFGABE: {next_task['description']} [{next_task.get('priority', 'normal')}]")
 
-        # Letzte Erinnerungen
-        recent = self.memory.get_recent(n=3)
-        if recent:
-            parts.append("\nLetzte Erfahrungen:")
-            for m in recent:
-                parts.append(f"  - {m.get('content', '')[:200]}")
+        # Relevanteste Erinnerungen (Phi-Decay + Valenz-Gewichtung)
+        relevant = self.memory.retrieve_relevant(top_k=3)
+        if relevant:
+            parts.append("\nWICHTIGSTE ERINNERUNGEN:")
+            for m in relevant:
+                score = m.get("retrieval_score", 0)
+                parts.append(f"  - [{score:.2f}] {m.get('content', '')[:200]}")
 
         # Failure-Memory + Skill-Komposition: Vor jeder Sequenz checken
         focus = self.goal_stack.get_current_focus()

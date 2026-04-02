@@ -56,10 +56,14 @@ class SemanticMemory:
         }
 
     def _load_index(self) -> dict:
+        default = {"entries": [], "idf": {}, "doc_count": 0}
         if self.index_path.exists():
-            with open(self.index_path, "r", encoding="utf-8") as f:
-                return json.load(f)
-        return {"entries": [], "idf": {}, "doc_count": 0}
+            try:
+                with open(self.index_path, "r", encoding="utf-8") as f:
+                    return json.load(f)
+            except (json.JSONDecodeError, ValueError):
+                return default
+        return default
 
     def _save_index(self):
         with open(self.index_path, "w", encoding="utf-8") as f:
@@ -68,10 +72,9 @@ class SemanticMemory:
     def _tokenize(self, text: str) -> list[str]:
         """Zerlegt Text in normalisierte Tokens."""
         text = text.lower()
-        # Nur Woerter, keine Satzzeichen
-        words = re.findall(r"[a-zäöüß]+", text)
-        # Stoppwoerter und kurze Woerter entfernen
-        return [w for w in words if w not in self.stopwords and len(w) > 2]
+        words = re.findall(r"[a-zäöüß0-9]+", text)
+        # Stoppwoerter entfernen, aber 2-Buchstaben-Woerter erlauben (ai, ml, io)
+        return [w for w in words if w not in self.stopwords and len(w) >= 2]
 
     def _compute_tf(self, tokens: list[str]) -> dict:
         """Term Frequency — normalisiert."""
@@ -133,6 +136,10 @@ class SemanticMemory:
         }
 
         self.index["entries"].append(entry)
+
+        # Limit: Max 500 Eintraege, aelteste entfernen
+        if len(self.index["entries"]) > 500:
+            self.index["entries"] = self.index["entries"][-500:]
 
         # IDF alle 10 Eintraege neu berechnen
         if len(self.index["entries"]) % 10 == 0:

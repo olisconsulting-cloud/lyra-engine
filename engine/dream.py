@@ -100,58 +100,68 @@ Antworte als JSON:
         except Exception as e:
             return f"Dream-Fehler: {e}"
 
+    def _safe_load_json(self, path: Path) -> dict | list | None:
+        """Laedt JSON robust — gibt None bei Fehler zurueck."""
+        if not path.exists():
+            return None
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except (json.JSONDecodeError, ValueError):
+            return None
+
     def _gather_all_memory(self) -> str:
         """Sammelt alle Memory-Dateien fuer die Konsolidierung."""
         parts = []
 
         # Beliefs
-        beliefs_path = self.consciousness_path / "beliefs.json"
-        if beliefs_path.exists():
-            with open(beliefs_path, "r", encoding="utf-8") as f:
-                beliefs = json.load(f)
+        beliefs = self._safe_load_json(self.consciousness_path / "beliefs.json")
+        if beliefs:
             parts.append(f"=== BELIEFS ===\n{json.dumps(beliefs, indent=2, ensure_ascii=False)}")
 
         # Strategies
-        strategies_path = self.consciousness_path / "strategies.json"
-        if strategies_path.exists():
-            with open(strategies_path, "r", encoding="utf-8") as f:
-                strategies = json.load(f)
+        strategies = self._safe_load_json(self.consciousness_path / "strategies.json")
+        if strategies:
             parts.append(f"\n=== STRATEGIEN ===\n{json.dumps(strategies, indent=2, ensure_ascii=False)}")
 
         # Skills
-        skills_path = self.consciousness_path / "skills.json"
-        if skills_path.exists():
-            with open(skills_path, "r", encoding="utf-8") as f:
-                skills = json.load(f)
+        skills = self._safe_load_json(self.consciousness_path / "skills.json")
+        if skills:
             parts.append(f"\n=== SKILLS ===\n{json.dumps(skills, indent=2, ensure_ascii=False)}")
 
-        # Sequence Memory (letzte Zusammenfassungen)
-        seq_mem_path = self.consciousness_path / "sequence_memory.json"
-        if seq_mem_path.exists():
-            with open(seq_mem_path, "r", encoding="utf-8") as f:
-                seq_mem = json.load(f)
+        # Sequence Memory
+        seq_mem = self._safe_load_json(self.consciousness_path / "sequence_memory.json")
+        if seq_mem:
             parts.append(f"\n=== LETZTE SEQUENZEN ===\n{json.dumps(seq_mem, indent=2, ensure_ascii=False)}")
 
         # Effizienz
-        eff_path = self.consciousness_path / "efficiency.json"
-        if eff_path.exists():
-            with open(eff_path, "r", encoding="utf-8") as f:
-                eff = json.load(f)
+        eff = self._safe_load_json(self.consciousness_path / "efficiency.json")
+        if eff:
             parts.append(f"\n=== EFFIZIENZ ===\n{json.dumps(eff, indent=2, ensure_ascii=False)}")
 
         # Ratings
-        ratings_path = self.consciousness_path / "ratings.json"
-        if ratings_path.exists():
-            with open(ratings_path, "r", encoding="utf-8") as f:
-                ratings = json.load(f)
-            parts.append(f"\n=== SELBSTBEWERTUNGEN ===\n{json.dumps(ratings[-10:], indent=2, ensure_ascii=False)}")
+        ratings = self._safe_load_json(self.consciousness_path / "ratings.json")
+        if ratings:
+            last_10 = ratings[-10:] if isinstance(ratings, list) else ratings
+            parts.append(f"\n=== SELBSTBEWERTUNGEN ===\n{json.dumps(last_10, indent=2, ensure_ascii=False)}")
 
         # Goals
-        goals_path = self.consciousness_path / "goals.json"
-        if goals_path.exists():
-            with open(goals_path, "r", encoding="utf-8") as f:
-                goals = json.load(f)
+        goals = self._safe_load_json(self.consciousness_path / "goals.json")
+        if goals:
             parts.append(f"\n=== ZIELE ===\n{json.dumps(goals, indent=2, ensure_ascii=False)}")
+
+        # Failures/Lessons
+        failures = self._safe_load_json(self.consciousness_path / "failures.json")
+        if failures:
+            parts.append(f"\n=== FEHLER-LEKTIONEN ===\n{json.dumps(failures[-10:], indent=2, ensure_ascii=False)}")
+
+        # Semantic Memory (letzte 20 Eintraege — nicht alle)
+        sem_index = self._safe_load_json(self.base_path / "memory" / "semantic" / "index.json")
+        if sem_index and sem_index.get("entries"):
+            recent_sem = sem_index["entries"][-20:]
+            summaries = [e.get("content", "")[:100] for e in recent_sem]
+            parts.append(f"\n=== SEMANTISCHE ERINNERUNGEN (letzte 20) ===\n" +
+                         "\n".join(f"  - {s}" for s in summaries))
 
         return "\n".join(parts)
 
