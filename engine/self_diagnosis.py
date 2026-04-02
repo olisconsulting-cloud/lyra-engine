@@ -54,6 +54,8 @@ class IntegrationTester:
             self._check_dream_running(),
             self._check_benchmark_running(),
             self._check_sequence_memory_saved(),
+            self._check_router_consistency(),
+            self._check_tool_handler_sync(),
         ]
 
         passed = sum(1 for c in checks if c["passed"])
@@ -240,6 +242,70 @@ class IntegrationTester:
             return {"name": "Sequenz-Memory", "passed": entries > 0, "detail": f"{entries} Eintraege"}
         except Exception:
             return {"name": "Sequenz-Memory", "passed": False, "detail": "Nicht lesbar"}
+
+
+    def _check_router_consistency(self) -> dict:
+        """Prueft: Nutzen alle Module den LLM-Router statt hardcodierter Modell-IDs?"""
+        # Modell-ID-Patterns die nur in llm_router.py stehen duerfen
+        # Zusammengesetzt damit dieser Check sich nicht selbst findet
+        patterns = [
+            "gemini-" + "3-flash-preview",
+            "gemini-" + "2.5-flash",
+            "claude-opus" + "-4-6",
+            "deepseek" + "-chat",
+        ]
+
+        violations = []
+        for py_file in sorted(self.root_path.glob("engine/*.py")):
+            if py_file.name in ("llm_router.py", "__init__.py", "self_diagnosis.py"):
+                continue
+            try:
+                content = py_file.read_text(encoding="utf-8")
+                for pattern in patterns:
+                    if f'"{pattern}"' in content or f"'{pattern}'" in content:
+                        violations.append(f"{py_file.name}: hardcoded '{pattern}'")
+            except Exception:
+                pass
+
+        if violations:
+            return {
+                "name": "Router-Konsistenz",
+                "passed": False,
+                "detail": f"{len(violations)} Module umgehen den Router: {'; '.join(violations[:3])}",
+            }
+        return {"name": "Router-Konsistenz", "passed": True, "detail": "Alle Module nutzen TASK_MODEL_MAP"}
+
+    def _check_tool_handler_sync(self) -> dict:
+        """Prueft: Hat jedes Tool in TOOLS einen Handler in _execute_tool_inner?"""
+        consciousness_path = self.root_path / "engine" / "consciousness.py"
+        try:
+            content = consciousness_path.read_text(encoding="utf-8")
+        except Exception:
+            return {"name": "Tool-Handler-Sync", "passed": False, "detail": "consciousness.py nicht lesbar"}
+
+        # Tool-Namen aus TOOLS-Liste extrahieren (name-Felder)
+        import re
+        tool_defs = set(re.findall(r'"name":\s*"(\w+)"', content[:15000]))
+
+        # Handler aus _execute_tool_inner extrahieren (elif name == "xxx")
+        handlers = set(re.findall(r'(?:if|elif)\s+name\s*==\s*"(\w+)"', content))
+
+        missing_handlers = tool_defs - handlers
+        orphan_handlers = handlers - tool_defs
+
+        issues = []
+        if missing_handlers:
+            issues.append(f"Tools ohne Handler: {missing_handlers}")
+        if orphan_handlers:
+            issues.append(f"Handler ohne Tool: {orphan_handlers}")
+
+        if issues:
+            return {"name": "Tool-Handler-Sync", "passed": False, "detail": "; ".join(issues)}
+        return {
+            "name": "Tool-Handler-Sync",
+            "passed": True,
+            "detail": f"{len(tool_defs)} Tools, alle mit Handler",
+        }
 
 
 class DependencyAnalyzer:
