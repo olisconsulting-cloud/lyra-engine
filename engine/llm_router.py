@@ -58,11 +58,11 @@ MODELS = {
 
 # Welches Modell fuer welche Aufgabe — EINZIGE Stelle fuer Modell-Zuordnung
 TASK_MODEL_MAP = {
-    "main_work": "gemini_3_flash",          # Agentic Loop, Tool-Use
-    "code_review": "gemini_3_flash",          # Gemini 3 Flash als Reviewer
+    "main_work": "gemini_25_flash",          # Agentic Loop, Tool-Use (stabil)
+    "code_review": "gemini_25_flash",         # Gemini 2.5 Flash als Reviewer
     "audit_primary": "claude_opus",          # Opus fuer Tiefenanalyse
-    "audit_secondary": "gemini_3_flash",     # Gemini als Gegenpruefung
-    "telegram_reply": "gemini_3_flash",      # Sofort-Antwort
+    "audit_secondary": "gemini_25_flash",    # Gemini als Gegenpruefung
+    "telegram_reply": "gemini_25_flash",     # Sofort-Antwort
     "dream": "deepseek_v3",                  # Memory-Konsolidierung (DeepSeek V3.2)
     "tool_generation": "deepseek_v3",        # Tool-Foundry (DeepSeek V3.2)
     "fallback": "deepseek_v3",               # Wenn Gemini versagt

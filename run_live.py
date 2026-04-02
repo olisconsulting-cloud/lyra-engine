@@ -1,7 +1,7 @@
 """
-Live-Modus — Lyra autonom beobachten und jederzeit eingreifen.
+Live-Modus — Phi autonom beobachten und jederzeit eingreifen.
 
-Lyra arbeitet autonom im Hintergrund.
+Phi arbeitet autonom im Hintergrund.
 Du siehst alles was sie denkt und tut.
 Tippe eine Nachricht um einzugreifen.
 
@@ -12,6 +12,7 @@ Nutzung:
 import os
 import sys
 import threading
+import msvcrt
 
 from dotenv import load_dotenv
 
@@ -23,12 +24,38 @@ load_dotenv()
 from engine.consciousness import ConsciousnessEngine
 
 
+def read_line_windows() -> str:
+    """Liest eine Zeile von stdin auf Windows ohne zu blockieren."""
+    chars = []
+    while True:
+        if msvcrt.kbhit():
+            ch = msvcrt.getwch()
+            if ch == "\r":  # Enter
+                print()  # Neue Zeile
+                return "".join(chars)
+            elif ch == "\x08":  # Backspace
+                if chars:
+                    chars.pop()
+                    # Zeichen visuell loeschen
+                    sys.stdout.write("\b \b")
+                    sys.stdout.flush()
+            elif ch == "\x03":  # Ctrl+C
+                raise KeyboardInterrupt
+            else:
+                chars.append(ch)
+                sys.stdout.write(ch)
+                sys.stdout.flush()
+        else:
+            import time
+            time.sleep(0.05)  # CPU schonen
+
+
 def input_listener(engine):
     """Lauscht auf Eingaben von Oliver und injiziert sie als Nachrichten."""
-    name = engine.genesis.get("name", "Lyra")
+    name = engine.genesis.get("name", "Phi")
     while engine.running:
         try:
-            msg = input()
+            msg = read_line_windows()
             if not msg.strip():
                 continue
 
@@ -38,7 +65,7 @@ def input_listener(engine):
                 engine.wake_up()
                 break
 
-            # Nachricht in Inbox schreiben — Lyra liest sie in der naechsten Sequenz
+            # Nachricht in Inbox schreiben
             from datetime import datetime, timezone
             from engine.config import safe_json_write
             ts = datetime.now(timezone.utc)
@@ -56,12 +83,13 @@ def input_listener(engine):
             print(f"\n  >> Nachricht an {name}: {msg.strip()}")
             print(f"  >> {name} liest sie in der naechsten Sequenz.\n")
 
-            # Lyra aufwecken falls sie pausiert
             engine.wake_up()
 
-        except (EOFError, KeyboardInterrupt):
+        except KeyboardInterrupt:
             engine.running = False
             engine.wake_up()
+            break
+        except Exception:
             break
 
 
@@ -70,12 +98,12 @@ def main():
 
     # Setup pruefen
     if not engine.is_born():
-        print("\n  Lyra wurde noch nicht geboren.")
+        print("\n  Noch nicht eingerichtet.")
         print("  Starte zuerst: python setup.py\n")
         return
 
     engine.load_state()
-    name = engine.genesis.get("name", "Lyra")
+    name = engine.genesis.get("name", "Phi")
 
     # Telegram starten
     if engine.communication.telegram_active:
@@ -88,17 +116,15 @@ def main():
             ).start()
         engine.communication.telegram.start_polling(on_message=on_telegram_message)
 
-    print(f"\n{'=' * 60}")
+    print(f"\n{'=' * 50}")
     print(f"  {name} — Live-Modus")
-    print(f"  Sequenzen bisher: {engine.sequences_total}")
     print(f"  Telegram: {'aktiv' if engine.communication.telegram_active else 'aus'}")
-    print(f"{'=' * 60}")
-    print(f"  Du siehst alles was {name} denkt und tut.")
+    print(f"{'=' * 50}")
     print(f"  Tippe eine Nachricht + Enter um einzugreifen.")
     print(f"  'stop' oder Ctrl+C zum Beenden.")
-    print(f"{'=' * 60}\n")
+    print(f"{'=' * 50}\n")
 
-    # Input-Thread starten
+    # Input-Thread starten (Windows-kompatibel)
     listener = threading.Thread(target=input_listener, args=(engine,), daemon=True)
     listener.start()
 
