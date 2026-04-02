@@ -138,8 +138,8 @@ async def get_state() -> dict[str, Any]:
             "sub_goals": sgs,
         })
 
-    # Effizienz-Daten (letzte 20 Sequenzen)
-    sequences = efficiency.get("sequences", [])[-20:]
+    # Effizienz-Daten (letzte 50 Sequenzen)
+    sequences = efficiency.get("sequences", [])[-50:]
     efficiency_data = {
         "timestamps": [s.get("timestamp", "") for s in sequences],
         "tool_calls": [s.get("tool_calls", 0) for s in sequences],
