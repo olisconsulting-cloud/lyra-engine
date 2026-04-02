@@ -13,7 +13,7 @@ Dann: State speichern, neue Wahrnehmung, weiter.
 import json
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -693,11 +693,8 @@ class ConsciousnessEngine:
 
         now = datetime.now(timezone.utc)
         # Lokale Zeit (Deutschland) — UTC+2 MESZ / UTC+1 MEZ
-        # Einfache Heuristik: Maerz-Oktober = MESZ
         is_summer = 3 <= now.month <= 10
-        local_offset = 2 if is_summer else 1
-        from datetime import timedelta
-        local_time = now + timedelta(hours=local_offset)
+        local_time = now + timedelta(hours=2 if is_summer else 1)
         date_str = local_time.strftime("%d.%m.%Y")
         time_str = local_time.strftime("%H:%M")
         weekday = ["Montag", "Dienstag", "Mittwoch", "Donnerstag", "Freitag", "Samstag", "Sonntag"][local_time.weekday()]
@@ -1010,25 +1007,39 @@ REGELN:
                         if completed:
                             goal = completed[-1]
                             goal_title = goal.get("title", "Ergebnis")
-                            # Alle Sub-Goal-Ergebnisse sammeln
-                            findings = []
+
+                            # 1. Sub-Goal-Ergebnisse sammeln
+                            sections = []
                             for sg in goal.get("sub_goals", []):
                                 if sg.get("result"):
-                                    findings.append(f"## {sg['title']}\n{sg['result']}")
-                            if findings:
-                                report_content = f"# Ergebnis: {goal_title}\n\n"
-                                report_content += "\n\n".join(findings)
-                                report_content += f"\n\n---\nErstellt: {datetime.now(timezone.utc).isoformat()}\n"
-                                # Report speichern
-                                safe_name = goal_title.lower().replace(" ", "-")[:40]
-                                report_path = config.DATA_PATH / "projects" / f"REPORT_{safe_name}.md"
-                                report_path.write_text(report_content, encoding="utf-8")
+                                    sections.append(f"## {sg['title']}\n{sg['result']}")
+
+                            # 2. Projekt-Dateien einbeziehen (die echten Ergebnisse)
+                            import re
+                            safe_name = re.sub(r"[^a-z0-9-]", "", goal_title.lower().replace(" ", "-"))[:40]
+                            project_dir = config.DATA_PATH / "projects"
+                            for md_file in sorted(project_dir.rglob("*.md")):
+                                if md_file.name in ("README.md", "PLAN.md", "PROGRESS.md"):
+                                    continue
+                                try:
+                                    content = md_file.read_text(encoding="utf-8")[:2000]
+                                    rel = md_file.relative_to(project_dir)
+                                    sections.append(f"## Datei: {rel}\n{content}")
+                                except Exception:
+                                    pass
+
+                            if sections:
+                                report = f"# Ergebnis: {goal_title}\n\n"
+                                report += "\n\n".join(sections)
+                                report += f"\n\n---\nErstellt: {datetime.now(timezone.utc).isoformat()}\n"
+                                report_path = project_dir / f"REPORT_{safe_name}.md"
+                                report_path.write_text(report, encoding="utf-8")
                                 result += f" | Report: REPORT_{safe_name}.md"
-                                # Report per Telegram senden
                                 if self.communication.telegram_active:
-                                    telegram_report = f"ZIEL ERREICHT: {goal_title}\n\n"
-                                    telegram_report += report_content[:3500]
-                                    self.communication.send_message(telegram_report, channel="telegram")
+                                    self.communication.send_message(
+                                        f"ZIEL ERREICHT: {goal_title}\n\n{report[:3500]}",
+                                        channel="telegram",
+                                    )
                     except Exception:
                         pass
 
@@ -1632,52 +1643,49 @@ REGELN:
         if not self.communication.telegram_active:
             return
 
-        now = datetime.now(timezone.utc)
-        from datetime import timedelta
-        is_summer = 3 <= now.month <= 10
-        local = now + timedelta(hours=2 if is_summer else 1)
+        try:
+            now = datetime.now(timezone.utc)
+            is_summer = 3 <= now.month <= 10
+            local = now + timedelta(hours=2 if is_summer else 1)
 
-        # Nur zwischen 7:00 und 9:00 senden
-        if not (7 <= local.hour <= 9):
-            return
-
-        # Pruefen ob heute schon gesendet
-        briefing_flag = self.consciousness_path / "last_briefing.txt"
-        today = local.strftime("%Y-%m-%d")
-        if briefing_flag.exists():
-            last = briefing_flag.read_text(encoding="utf-8").strip()
-            if last == today:
+            # Nur zwischen 7:00 und 9:00 senden
+            if not (7 <= local.hour <= 9):
                 return
 
-        # Briefing bauen
-        goals_summary = self.goal_stack.get_summary()
-        active = self.goal_stack.goals.get("active", [])
-        completed = self.goal_stack.goals.get("completed", [])
+            # Pruefen ob heute schon gesendet
+            briefing_flag = self.consciousness_path / "last_briefing.txt"
+            today = local.strftime("%Y-%m-%d")
+            if briefing_flag.exists():
+                last = briefing_flag.read_text(encoding="utf-8").strip()
+                if last == today:
+                    return
 
-        lines = [f"Guten Morgen! Hier dein Update:"]
-        if active:
-            for goal in active:
-                sgs = goal.get("sub_goals", [])
-                done = sum(1 for sg in sgs if sg["status"] == "done")
-                total = len(sgs)
-                lines.append(f"\n{goal['title']} [{done}/{total}]")
-                for sg in sgs:
-                    icon = "x" if sg["status"] == "done" else " "
-                    lines.append(f"  [{icon}] {sg['title'][:60]}")
+            # Briefing bauen
+            active = self.goal_stack.goals.get("active", [])
+            lines = [f"Guten Morgen! Hier dein Update:"]
+            if active:
+                for goal in active:
+                    sgs = goal.get("sub_goals", [])
+                    done = sum(1 for sg in sgs if sg["status"] == "done")
+                    total = len(sgs)
+                    lines.append(f"\n{goal['title']} [{done}/{total}]")
+                    for sg in sgs:
+                        icon = "x" if sg["status"] == "done" else " "
+                        lines.append(f"  [{icon}] {sg['title'][:60]}")
+            else:
+                lines.append("\nKeine aktiven Ziele — schick mir eine Aufgabe!")
 
-        # Letzte Erkenntnisse
-        insights = self.metacognition.get_recent_insights()
-        if insights:
-            lines.append(f"\nLetzter Gedanke: {insights[:150]}")
+            insights = self.metacognition.get_recent_insights()
+            if insights:
+                lines.append(f"\nLetzter Gedanke: {insights[:150]}")
 
-        lines.append(f"\nSchreib mir wenn du Fragen hast oder den Fokus aendern willst.")
+            lines.append(f"\nSchreib mir wenn du Fragen hast oder den Fokus aendern willst.")
 
-        briefing = "\n".join(lines)
-        self.communication.send_message(briefing, channel="telegram")
-
-        # Flag setzen
-        briefing_flag.write_text(today, encoding="utf-8")
-        print(f"  Morgen-Briefing gesendet.")
+            self.communication.send_message("\n".join(lines), channel="telegram")
+            briefing_flag.write_text(today, encoding="utf-8")
+            print(f"  Morgen-Briefing gesendet.")
+        except Exception:
+            pass  # Briefing-Fehler darf Phi nicht stoppen
 
     # === Autonomer Modus ===
 
