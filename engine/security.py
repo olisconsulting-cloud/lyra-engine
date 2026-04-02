@@ -90,8 +90,8 @@ class SecurityGateway:
         target = (self.data_path / relative_path).resolve()
 
         # 1. Muss innerhalb von data/ oder root/ liegen
-        in_data = str(target).startswith(str(self.data_path))
-        in_root = str(target).startswith(str(self.root_path))
+        in_data = target.is_relative_to(self.data_path)
+        in_root = target.is_relative_to(self.root_path)
 
         if not (in_data or in_root):
             return {

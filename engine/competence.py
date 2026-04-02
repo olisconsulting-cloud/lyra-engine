@@ -22,6 +22,7 @@ from typing import Optional
 import httpx
 from anthropic import Anthropic
 
+from .config import safe_json_read, safe_json_write
 from .llm_router import MODELS, TASK_MODEL_MAP
 
 
@@ -341,15 +342,15 @@ Sei STRENG aber FAIR. Finde echte Probleme, keine Stilfragen."""
             return {"findings": [], "overall_quality": 0, "summary": "Gemini nicht konfiguriert"}
 
         try:
-            client = httpx.Client(timeout=60.0)
-            response = client.post(
-                f"https://generativelanguage.googleapis.com/v1beta/models/{self.gemini_model}:generateContent",
-                params={"key": self.gemini_key},
-                json={
-                    "contents": [{"parts": [{"text": f"{self.AUDIT_PROMPT}\n\n{code_context}"}]}],
-                    "generationConfig": {"maxOutputTokens": 4000},
-                },
-            )
+            with httpx.Client(timeout=60.0) as client:
+                response = client.post(
+                    f"https://generativelanguage.googleapis.com/v1beta/models/{self.gemini_model}:generateContent",
+                    params={"key": self.gemini_key},
+                    json={
+                        "contents": [{"parts": [{"text": f"{self.AUDIT_PROMPT}\n\n{code_context}"}]}],
+                        "generationConfig": {"maxOutputTokens": 4000},
+                    },
+                )
             if response.status_code != 200:
                 return {"findings": [], "overall_quality": 0, "summary": f"Gemini HTTP {response.status_code}"}
 
@@ -456,35 +457,28 @@ Sei STRENG aber FAIR. Finde echte Probleme, keine Stilfragen."""
 
     def _log_audit(self, result: dict):
         """Speichert Audit-Ergebnisse."""
-        try:
-            log = []
-            if self.audit_log_path.exists():
-                with open(self.audit_log_path, "r", encoding="utf-8") as f:
-                    log = json.load(f)
-            # Volle Findings speichern (nicht nur Counts) — fuer Goals-Pipeline
-            findings = result.get("findings", [])
-            log.append({
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-                "quality": result.get("overall_quality"),
-                "opus_quality": result.get("opus_quality"),
-                "gemini_quality": result.get("gemini_quality"),
-                "findings_count": len(findings),
-                "confirmed_by_both": sum(1 for f in findings if f.get("confirmed_by_both")),
-                "critical": sum(1 for f in findings if f.get("severity") == "critical"),
-                "summary": result.get("summary", "")[:300],
-                "findings": [
-                    {"severity": f.get("severity"), "file": f.get("file"),
-                     "description": f.get("description", "")[:150],
-                     "suggestion": f.get("suggestion", "")[:150],
-                     "confirmed_by_both": f.get("confirmed_by_both", False)}
-                    for f in findings[:8]
-                ],
-            })
-            log = log[-20:]
-            with open(self.audit_log_path, "w", encoding="utf-8") as f:
-                json.dump(log, f, indent=2, ensure_ascii=False)
-        except Exception:
-            pass
+        log = safe_json_read(self.audit_log_path, default=[])
+        # Volle Findings speichern (nicht nur Counts) — fuer Goals-Pipeline
+        findings = result.get("findings", [])
+        log.append({
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "quality": result.get("overall_quality"),
+            "opus_quality": result.get("opus_quality"),
+            "gemini_quality": result.get("gemini_quality"),
+            "findings_count": len(findings),
+            "confirmed_by_both": sum(1 for f in findings if f.get("confirmed_by_both")),
+            "critical": sum(1 for f in findings if f.get("severity") == "critical"),
+            "summary": result.get("summary", "")[:300],
+            "findings": [
+                {"severity": f.get("severity"), "file": f.get("file"),
+                 "description": f.get("description", "")[:150],
+                 "suggestion": f.get("suggestion", "")[:150],
+                 "confirmed_by_both": f.get("confirmed_by_both", False)}
+                for f in findings[:8]
+            ],
+        })
+        log = log[-20:]
+        safe_json_write(self.audit_log_path, log)
 
     def create_goals_from_findings(self, findings: list, goal_stack) -> str:
         """

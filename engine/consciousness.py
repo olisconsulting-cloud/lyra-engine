@@ -36,6 +36,7 @@ from .evolution import AdaptiveRhythm, ToolFoundry, SelfBenchmark, LearningEngin
 from .self_diagnosis import IntegrationTester, DependencyAnalyzer, SilentFailureDetector
 from .quantum import FailureMemory, CriticAgent, PromptMutator, SkillComposer
 from . import config
+from .config import safe_json_write, safe_json_read
 
 MAX_STEPS_PER_SEQUENCE = 50
 MAX_INPUT_TOKENS_PER_SEQUENCE = 300_000  # Kosten-Ceiling pro Sequenz
@@ -479,8 +480,7 @@ class ConsciousnessEngine:
 
     def awaken(self):
         """Geburt + Startprotokoll — erstmals oder nach Reset."""
-        with open(self.genesis_path, "r", encoding="utf-8") as f:
-            self.genesis = json.load(f)
+        self.genesis = safe_json_read(self.genesis_path, default={})
 
         config.ensure_data_dirs()
 
@@ -584,11 +584,8 @@ class ConsciousnessEngine:
                 "boundaries": "",
                 "success_metric": "",
             }
-        try:
-            with open(config.PREFERENCES_PATH, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except Exception:
-            return {"communication": {"preset": "proactive"}, "workspace": {}, "owner": {}}
+        fallback = {"communication": {"preset": "proactive"}, "workspace": {}, "owner": {}}
+        return safe_json_read(config.PREFERENCES_PATH, default=fallback)
 
     def _get_context_index(self) -> str:
         """Listet Dateien in data/context/ auf (nur Namen, nicht Inhalt)."""
@@ -602,12 +599,9 @@ class ConsciousnessEngine:
         return ", ".join(sorted(files)[:20])  # Max 20 Dateinamen
 
     def load_state(self):
-        with open(self.genesis_path, "r", encoding="utf-8") as f:
-            self.genesis = json.load(f)
-        with open(self.state_path, "r", encoding="utf-8") as f:
-            self.state = json.load(f)
-        with open(self.beliefs_path, "r", encoding="utf-8") as f:
-            self.beliefs = json.load(f)
+        self.genesis = safe_json_read(self.genesis_path, default={})
+        self.state = safe_json_read(self.state_path, default={})
+        self.beliefs = safe_json_read(self.beliefs_path, default={})
         self.state["awake_since"] = datetime.now(timezone.utc).isoformat()
         self.sequences_total = self.state.get("sequences_total", 0)
         self.preferences = self._load_preferences()
@@ -618,8 +612,7 @@ class ConsciousnessEngine:
             (self.state_path, self.state),
             (self.beliefs_path, self.beliefs),
         ]:
-            with open(path, "w", encoding="utf-8") as f:
-                json.dump(data, f, indent=2, ensure_ascii=False)
+            safe_json_write(path, data)
 
     # === System-Prompt ===
 
@@ -730,8 +723,7 @@ REGELN:
         if not mem_path.exists():
             return ""
         try:
-            with open(mem_path, "r", encoding="utf-8") as f:
-                data = json.load(f)
+            data = safe_json_read(mem_path, default={"entries": []})
             entries = data.get("entries", [])
             if not entries:
                 return ""
@@ -748,11 +740,7 @@ REGELN:
         """Speichert eine Sequenz-Zusammenfassung fuer die naechste Sequenz."""
         mem_path = self.consciousness_path / "sequence_memory.json"
         try:
-            if mem_path.exists():
-                with open(mem_path, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-            else:
-                data = {"entries": []}
+            data = safe_json_read(mem_path, default={"entries": []})
 
             data["entries"].append({
                 "seq": self.sequences_total,
@@ -761,8 +749,7 @@ REGELN:
             })
             data["entries"] = data["entries"][-10:]
 
-            with open(mem_path, "w", encoding="utf-8") as f:
-                json.dump(data, f, indent=2, ensure_ascii=False)
+            safe_json_write(mem_path, data)
         except Exception as e:
             print(f"  [WARNUNG] Sequence-Memory nicht gespeichert: {e}")
 
@@ -1116,8 +1103,7 @@ REGELN:
                     "output": test_output[:2000],
                     "sequence": self.sequences_total,
                 }
-                with open(evidence_path, "w", encoding="utf-8") as f:
-                    json.dump(evidence, f, indent=2, ensure_ascii=False)
+                safe_json_write(evidence_path, evidence)
 
                 # PROGRESS.md aktualisieren
                 self.actions._update_progress(
@@ -1138,10 +1124,8 @@ REGELN:
 
                 # === EVIDENCE-GATE: Tests muessen gelaufen und bestanden sein ===
                 # Atomar: Lesen + Validieren in einem try-Block (kein TOCTOU)
-                try:
-                    with open(evidence_path, "r", encoding="utf-8") as f:
-                        evidence = json.load(f)
-                except (FileNotFoundError, json.JSONDecodeError):
+                evidence = safe_json_read(evidence_path, default=None)
+                if evidence is None:
                     return (
                         f"FEHLER: Keine gueltige Test-Evidenz vorhanden.\n"
                         f"Fuehre zuerst run_project_tests('{project_name}') aus."
@@ -1588,9 +1572,7 @@ REGELN:
                     try:
                         audit_log_path = self.self_audit.audit_log_path
                         if audit_log_path.exists():
-                            import json as _json
-                            with open(audit_log_path, "r", encoding="utf-8") as f:
-                                log = _json.load(f)
+                            log = safe_json_read(audit_log_path, default=[])
                             if log:
                                 last_findings = log[-1].get("findings", [])
                                 if last_findings:

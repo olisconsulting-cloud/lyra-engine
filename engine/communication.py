@@ -16,6 +16,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
+from .config import safe_json_read, safe_json_write
 from .phi import PHI
 from .telegram_bridge import TelegramBridge
 
@@ -68,15 +69,15 @@ class CommunicationEngine:
         messages = []
         for filepath in sorted(self.inbox_path.glob("*.json")):
             try:
-                with open(filepath, "r", encoding="utf-8") as f:
-                    msg = json.load(f)
+                msg = safe_json_read(filepath)
+                if not msg:
+                    continue
 
                 if not msg.get("read", False):
                     messages.append(msg)
                     # Als gelesen markieren
                     msg["read"] = True
-                    with open(filepath, "w", encoding="utf-8") as f:
-                        json.dump(msg, f, indent=2, ensure_ascii=False)
+                    safe_json_write(filepath, msg)
             except (json.JSONDecodeError, KeyError):
                 continue
 
@@ -132,8 +133,7 @@ class CommunicationEngine:
         """Speichert eine Nachricht in der Outbox (Archiv)."""
         filename = f"{ts_str[:19].replace(':', '-')}.json"
         filepath = self.outbox_path / filename
-        with open(filepath, "w", encoding="utf-8") as f:
-            json.dump(msg, f, indent=2, ensure_ascii=False)
+        safe_json_write(filepath, msg)
 
     # === Journal (Tagebuch) ===
 
@@ -165,13 +165,9 @@ class CommunicationEngine:
         """Alle ungelesenen ausgehenden Nachrichten."""
         messages = []
         for filepath in sorted(self.outbox_path.glob("*.json")):
-            try:
-                with open(filepath, "r", encoding="utf-8") as f:
-                    msg = json.load(f)
-                if not msg.get("read", False):
-                    messages.append(msg)
-            except (json.JSONDecodeError, KeyError):
-                continue
+            msg = safe_json_read(filepath)
+            if msg and not msg.get("read", False):
+                messages.append(msg)
         return messages
 
     # === Proaktive Kommunikations-Entscheidung ===

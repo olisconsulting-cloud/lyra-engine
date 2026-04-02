@@ -27,6 +27,7 @@ from typing import Optional
 
 import httpx
 
+from .config import safe_json_read, safe_json_write
 from .llm_router import MODELS, TASK_MODEL_MAP
 
 
@@ -52,17 +53,10 @@ class FailureMemory:
         self.failures = self._load()
 
     def _load(self) -> list:
-        if self.failures_path.exists():
-            try:
-                with open(self.failures_path, "r", encoding="utf-8") as f:
-                    return json.load(f)
-            except Exception:
-                pass
-        return []
+        return safe_json_read(self.failures_path, default=[])
 
     def _save(self):
-        with open(self.failures_path, "w", encoding="utf-8") as f:
-            json.dump(self.failures[-100:], f, indent=2, ensure_ascii=False)
+        safe_json_write(self.failures_path, self.failures[-100:])
 
     def record(self, goal: str, approach: str, error: str, lesson: str):
         """Speichert einen strukturierten Fehler."""
@@ -179,7 +173,7 @@ class CriticAgent:
             }
         """
         if not self.google_key:
-            return {"score": 5, "is_improvement": True, "side_effects": "Kein Critic verfuegbar", "suggestion": ""}
+            return {"score": 5, "is_improvement": None, "side_effects": "Kein Critic verfuegbar — Bewertung nicht moeglich", "suggestion": ""}
 
         prompt = f"""Bewerte diese Code-Aenderung auf einer Skala von 1-10.
 
@@ -201,19 +195,18 @@ Antworte als JSON:
 {{"score": 1-10, "is_improvement": true/false, "side_effects": "...", "suggestion": "..."}}"""
 
         try:
-            client = httpx.Client(timeout=30.0)
-            resp = client.post(
-                f"https://generativelanguage.googleapis.com/v1beta/models/{self.model}:generateContent",
-                params={"key": self.google_key},
-                json={
-                    "contents": [{"parts": [{"text": prompt}]}],
-                    "generationConfig": {"maxOutputTokens": 500},
-                },
-            )
-            client.close()
+            with httpx.Client(timeout=30.0) as client:
+                resp = client.post(
+                    f"https://generativelanguage.googleapis.com/v1beta/models/{self.model}:generateContent",
+                    params={"key": self.google_key},
+                    json={
+                        "contents": [{"parts": [{"text": prompt}]}],
+                        "generationConfig": {"maxOutputTokens": 500},
+                    },
+                )
 
             if resp.status_code != 200:
-                return {"score": 5, "is_improvement": True, "side_effects": f"API {resp.status_code}", "suggestion": ""}
+                return {"score": 5, "is_improvement": None, "side_effects": f"API-Fehler {resp.status_code} — Bewertung nicht moeglich", "suggestion": ""}
 
             text = resp.json()["candidates"][0]["content"]["parts"][-1]["text"]
 
@@ -230,10 +223,10 @@ Antworte als JSON:
                 match = re.search(r"\{.*\}", cleaned, re.DOTALL)
                 if match:
                     return json.loads(match.group(0))
-                return {"score": 5, "is_improvement": True, "side_effects": "Parse-Fehler", "suggestion": ""}
+                return {"score": 5, "is_improvement": None, "side_effects": "Antwort nicht parsebar — Bewertung nicht moeglich", "suggestion": ""}
 
         except Exception as e:
-            return {"score": 5, "is_improvement": True, "side_effects": str(e)[:100], "suggestion": ""}
+            return {"score": 5, "is_improvement": None, "side_effects": f"Critic-Fehler: {str(e)[:100]}", "suggestion": ""}
 
 
 # ============================================================
@@ -276,16 +269,15 @@ Gib genau {n_variants} Ansaetze als JSON-Array zurueck:
 Die Ansaetze muessen WIRKLICH verschieden sein — verschiedene Strategien, nicht Variationen."""
 
         try:
-            client = httpx.Client(timeout=30.0)
-            resp = client.post(
-                f"https://generativelanguage.googleapis.com/v1beta/models/{self.model}:generateContent",
-                params={"key": self.google_key},
-                json={
-                    "contents": [{"parts": [{"text": prompt}]}],
-                    "generationConfig": {"maxOutputTokens": 1000},
-                },
-            )
-            client.close()
+            with httpx.Client(timeout=30.0) as client:
+                resp = client.post(
+                    f"https://generativelanguage.googleapis.com/v1beta/models/{self.model}:generateContent",
+                    params={"key": self.google_key},
+                    json={
+                        "contents": [{"parts": [{"text": prompt}]}],
+                        "generationConfig": {"maxOutputTokens": 1000},
+                    },
+                )
 
             if resp.status_code != 200:
                 return [task]
@@ -330,16 +322,15 @@ Die Ansaetze muessen WIRKLICH verschieden sein — verschiedene Strategien, nich
 {f'Kriterium: {criteria}' if criteria else 'Kriterium: Effektivitaet, Einfachheit, Zuverlaessigkeit'}"""
 
         try:
-            client = httpx.Client(timeout=15.0)
-            resp = client.post(
-                f"https://generativelanguage.googleapis.com/v1beta/models/{self.model}:generateContent",
-                params={"key": self.google_key},
-                json={
-                    "contents": [{"parts": [{"text": prompt}]}],
-                    "generationConfig": {"maxOutputTokens": 10},
-                },
-            )
-            client.close()
+            with httpx.Client(timeout=15.0) as client:
+                resp = client.post(
+                    f"https://generativelanguage.googleapis.com/v1beta/models/{self.model}:generateContent",
+                    params={"key": self.google_key},
+                    json={
+                        "contents": [{"parts": [{"text": prompt}]}],
+                        "generationConfig": {"maxOutputTokens": 10},
+                    },
+                )
 
             if resp.status_code != 200:
                 return 0
@@ -425,19 +416,14 @@ class SkillComposer:
     def log_composition(self, new_tool: str, used_tools: list[str], task: str):
         """Loggt eine erfolgreiche Komposition."""
         try:
-            log = []
-            if self.composition_log_path.exists():
-                with open(self.composition_log_path, "r", encoding="utf-8") as f:
-                    log = json.load(f)
+            log = safe_json_read(self.composition_log_path, default=[])
             log.append({
                 "timestamp": datetime.now(timezone.utc).isoformat(),
                 "new_tool": new_tool,
                 "composed_from": used_tools,
                 "task": task[:200],
             })
-            log = log[-50:]
-            with open(self.composition_log_path, "w", encoding="utf-8") as f:
-                json.dump(log, f, indent=2, ensure_ascii=False)
+            safe_json_write(self.composition_log_path, log[-50:])
         except Exception:
             pass
 
@@ -447,13 +433,7 @@ class SkillComposer:
         total_tools = len(registry)
         total_uses = sum(t.get("uses", 0) for t in registry.values())
 
-        log = []
-        if self.composition_log_path.exists():
-            try:
-                with open(self.composition_log_path, "r", encoding="utf-8") as f:
-                    log = json.load(f)
-            except Exception:
-                pass
+        log = safe_json_read(self.composition_log_path, default=[])
 
         return (
             f"Tools: {total_tools} | Nutzungen: {total_uses} | "

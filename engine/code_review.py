@@ -23,6 +23,7 @@ from typing import Optional
 import httpx
 from anthropic import Anthropic
 
+from .config import safe_json_read, safe_json_write
 from .llm_router import MODELS, TASK_MODEL_MAP
 
 
@@ -88,15 +89,15 @@ Antworte als JSON:
 Sei streng aber fair. Nur echte Probleme fuehren zu Ablehnung."""
 
         try:
-            client = httpx.Client(timeout=30.0)
-            response = client.post(
-                f"{self.base_url}/models/{self.model}:generateContent",
-                params={"key": self.api_key},
-                json={
-                    "contents": [{"parts": [{"text": prompt}]}],
-                    "generationConfig": {"maxOutputTokens": 2000},
-                },
-            )
+            with httpx.Client(timeout=30.0) as client:
+                response = client.post(
+                    f"{self.base_url}/models/{self.model}:generateContent",
+                    params={"key": self.api_key},
+                    json={
+                        "contents": [{"parts": [{"text": prompt}]}],
+                        "generationConfig": {"maxOutputTokens": 2000},
+                    },
+                )
 
             if response.status_code != 200:
                 return {
@@ -177,7 +178,7 @@ class DualReviewSystem:
         target = (self.root_path / file_path).resolve()
 
         # Sicherheitscheck
-        if not str(target).startswith(str(self.root_path.resolve())):
+        if not target.is_relative_to(self.root_path.resolve()):
             return {"accepted": False, "reason": "Pfad ausserhalb des Projekts"}
 
         # === 1. BACKUP ===
@@ -215,25 +216,23 @@ class DualReviewSystem:
             self._rollback(target, original_content)
             return {"accepted": False, "reason": f"Compile-Check Fehler: {e}", "reviews": {}}
 
-        # === 4. GEMINI REVIEW ===
-        gemini_result = {"approved": False, "reason": "Gemini nicht konfiguriert (fail-closed)", "issues": []}
-        if self.gemini.is_configured:
-            gemini_result = self.gemini.review(
-                original_code=original_content,
-                modified_code=new_content,
-                change_reason=reason,
-                file_path=file_path,
-            )
+        # === 4. GEMINI REVIEW (fail-closed: ohne Review kein Durchkommen) ===
+        gemini_result = self.gemini.review(
+            original_code=original_content,
+            modified_code=new_content,
+            change_reason=reason,
+            file_path=file_path,
+        )
 
-            if not gemini_result.get("approved", True):
-                # Gemini sagt NEIN → Rollback
-                self._rollback(target, original_content)
-                self._log_review(file_path, reason, "REJECTED", gemini_result)
-                return {
-                    "accepted": False,
-                    "reason": f"Gemini abgelehnt: {gemini_result.get('reason', '?')}",
-                    "reviews": {"gemini": gemini_result},
-                }
+        if not gemini_result.get("approved", False):
+            # Nicht approved (oder Key fehlt) → Rollback
+            self._rollback(target, original_content)
+            self._log_review(file_path, reason, "REJECTED", gemini_result)
+            return {
+                "accepted": False,
+                "reason": f"Review abgelehnt: {gemini_result.get('reason', '?')}",
+                "reviews": {"gemini": gemini_result},
+            }
 
         # === 5. AKZEPTIERT ===
         self._log_review(file_path, reason, "ACCEPTED", gemini_result)
@@ -255,10 +254,7 @@ class DualReviewSystem:
                     decision: str, gemini_result: dict):
         """Loggt das Review-Ergebnis."""
         try:
-            log = []
-            if self.review_log_path.exists():
-                with open(self.review_log_path, "r", encoding="utf-8") as f:
-                    log = json.load(f)
+            log = safe_json_read(self.review_log_path, default=[])
 
             log.append({
                 "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -271,26 +267,23 @@ class DualReviewSystem:
             })
             log = log[-50:]
 
-            with open(self.review_log_path, "w", encoding="utf-8") as f:
-                json.dump(log, f, indent=2, ensure_ascii=False)
-        except Exception:
-            pass
+            safe_json_write(self.review_log_path, log)
+        except Exception as e:
+            # Fehler loggen statt still schlucken — safe_json_write
+            # behandelt atomares Schreiben, aber uebergeordnete Fehler
+            # (z.B. Berechtigungen) werden hier abgefangen
+            import logging
+            logging.getLogger(__name__).warning("Review-Log Schreibfehler: %s", e)
 
     def get_review_stats(self) -> str:
         """Statistiken ueber Reviews."""
-        if not self.review_log_path.exists():
+        log = safe_json_read(self.review_log_path, default=[])
+        if not log:
             return "Noch keine Reviews."
-        try:
-            with open(self.review_log_path, "r", encoding="utf-8") as f:
-                log = json.load(f)
-            if not log:
-                return "Noch keine Reviews."
-            accepted = sum(1 for r in log if r.get("decision") == "ACCEPTED")
-            rejected = sum(1 for r in log if r.get("decision") == "REJECTED")
-            total = len(log)
-            return (
-                f"Reviews: {total} total, {accepted} akzeptiert, {rejected} abgelehnt "
-                f"({accepted/max(total,1)*100:.0f}% Akzeptanzrate)"
-            )
-        except Exception:
-            return "Review-Log nicht lesbar."
+        accepted = sum(1 for r in log if r.get("decision") == "ACCEPTED")
+        rejected = sum(1 for r in log if r.get("decision") == "REJECTED")
+        total = len(log)
+        return (
+            f"Reviews: {total} total, {accepted} akzeptiert, {rejected} abgelehnt "
+            f"({accepted/max(total,1)*100:.0f}% Akzeptanzrate)"
+        )

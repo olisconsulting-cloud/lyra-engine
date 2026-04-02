@@ -8,10 +8,12 @@ Echte Zielstruktur die ueber Zyklen hinweg arbeitet:
 - Abhaengigkeiten zwischen Goals werden beachtet
 """
 
-import json
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
+
+from .config import safe_json_read, safe_json_write
 
 
 class GoalStack:
@@ -22,14 +24,11 @@ class GoalStack:
         self.goals = self._load()
 
     def _load(self) -> dict:
-        if self.goals_path.exists():
-            with open(self.goals_path, "r", encoding="utf-8") as f:
-                return json.load(f)
-        return {"active": [], "completed": [], "abandoned": []}
+        default = {"active": [], "completed": [], "abandoned": []}
+        return safe_json_read(self.goals_path, default=default)
 
     def _save(self):
-        with open(self.goals_path, "w", encoding="utf-8") as f:
-            json.dump(self.goals, f, indent=2, ensure_ascii=False)
+        safe_json_write(self.goals_path, self.goals)
 
     # === Ziel erstellen ===
 
@@ -47,7 +46,7 @@ class GoalStack:
             Bestaetigungs-Nachricht
         """
         goal = {
-            "id": len(self.goals.get("active", [])) + len(self.goals.get("completed", [])),
+            "id": str(uuid.uuid4())[:8],
             "title": title,
             "description": description,
             "created": datetime.now(timezone.utc).isoformat(),
@@ -80,11 +79,14 @@ class GoalStack:
             Das Sub-Goal dict oder None
         """
         active = self.goals.get("active", [])
-        if goal_index >= len(active):
+        if goal_index < 0 or goal_index >= len(active):
             return None
 
         goal = active[goal_index]
         for sg in goal.get("sub_goals", []):
+            # Stuck in_progress Sub-Goals reaktivieren (z.B. nach Crash)
+            if sg["status"] == "in_progress":
+                return sg
             if sg["status"] == "pending":
                 sg["status"] = "in_progress"
                 self._save()
@@ -96,12 +98,12 @@ class GoalStack:
                          result: str = "") -> str:
         """Markiert ein Sub-Goal als erledigt."""
         active = self.goals.get("active", [])
-        if goal_index >= len(active):
+        if goal_index < 0 or goal_index >= len(active):
             return "FEHLER: Goal-Index ungueltig."
 
         goal = active[goal_index]
         sgs = goal.get("sub_goals", [])
-        if subgoal_index >= len(sgs):
+        if subgoal_index < 0 or subgoal_index >= len(sgs):
             return "FEHLER: SubGoal-Index ungueltig."
 
         sgs[subgoal_index]["status"] = "done"
@@ -128,7 +130,7 @@ class GoalStack:
     def complete_goal(self, goal_index: int) -> str:
         """Markiert ein Hauptziel als abgeschlossen."""
         active = self.goals.get("active", [])
-        if goal_index >= len(active):
+        if goal_index < 0 or goal_index >= len(active):
             return "FEHLER: Goal-Index ungueltig."
 
         goal = active.pop(goal_index)
@@ -141,7 +143,7 @@ class GoalStack:
     def abandon_goal(self, goal_index: int, reason: str = "") -> str:
         """Gibt ein Ziel auf."""
         active = self.goals.get("active", [])
-        if goal_index >= len(active):
+        if goal_index < 0 or goal_index >= len(active):
             return "FEHLER: Goal-Index ungueltig."
 
         goal = active.pop(goal_index)
@@ -156,7 +158,7 @@ class GoalStack:
     def log_progress(self, goal_index: int, update: str) -> str:
         """Loggt Fortschritt fuer ein Ziel."""
         active = self.goals.get("active", [])
-        if goal_index >= len(active):
+        if goal_index < 0 or goal_index >= len(active):
             return "FEHLER: Goal-Index ungueltig."
 
         active[goal_index].setdefault("progress_log", []).append({

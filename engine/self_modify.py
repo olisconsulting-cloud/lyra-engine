@@ -70,7 +70,7 @@ class SelfModifier:
         target = (self.base_path / relative_path).resolve()
 
         # Sicherheitscheck
-        if not str(target).startswith(str(self.base_path.resolve())):
+        if not target.is_relative_to(self.base_path.resolve()):
             return "FEHLER: Zugriff nur auf eigene Dateien."
 
         if target.name in PROTECTED_FILES:
@@ -120,7 +120,7 @@ class SelfModifier:
         target = (self.base_path / relative_path).resolve()
 
         # Sicherheitschecks
-        if not str(target).startswith(str(self.base_path.resolve())):
+        if not target.is_relative_to(self.base_path.resolve()):
             return "FEHLER: Zugriff nur auf eigene Dateien."
 
         if target.name in PROTECTED_FILES:
@@ -160,7 +160,7 @@ class SelfModifier:
         """Erstellt ein neues Modul."""
         target = (self.base_path / relative_path).resolve()
 
-        if not str(target).startswith(str(self.base_path.resolve())):
+        if not target.is_relative_to(self.base_path.resolve()):
             return "FEHLER: Nur im eigenen Ordner."
 
         if target.exists():

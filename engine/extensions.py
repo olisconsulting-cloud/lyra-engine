@@ -18,6 +18,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
+from .config import safe_json_read, safe_json_write
+
 
 class PipManager:
     """Packages installieren im eigenen venv."""
@@ -99,9 +101,9 @@ class GitManager:
     def commit(self, message: str) -> str:
         """Staged alle Aenderungen und committet."""
         try:
-            # Stage alle Aenderungen (ausser .env und venv)
+            # Stage alle Aenderungen — aber .env und Secrets explizit ausschliessen
             subprocess.run(
-                ["git", "add", "-A"],
+                ["git", "add", "--all", "--", ".", ":!.env", ":!.env.local", ":!.env.*"],
                 cwd=str(self.base_path),
                 capture_output=True,
                 timeout=10,
@@ -176,19 +178,15 @@ class TaskQueue:
         self.tasks = self._load()
 
     def _load(self) -> dict:
-        if self.tasks_path.exists():
-            with open(self.tasks_path, "r", encoding="utf-8") as f:
-                return json.load(f)
-        return {"pending": [], "in_progress": None, "completed": []}
+        return safe_json_read(self.tasks_path, default={"pending": [], "in_progress": None, "completed": []})
 
     def _save(self):
-        with open(self.tasks_path, "w", encoding="utf-8") as f:
-            json.dump(self.tasks, f, indent=2, ensure_ascii=False)
+        safe_json_write(self.tasks_path, self.tasks)
 
     def add_task(self, description: str, priority: str = "normal") -> str:
         """Fuegt eine neue Aufgabe hinzu."""
         task = {
-            "id": len(self.tasks.get("pending", [])) + len(self.tasks.get("completed", [])),
+            "id": datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S%f")[:18],
             "description": description,
             "priority": priority,
             "created": datetime.now(timezone.utc).isoformat(),
@@ -258,14 +256,10 @@ class SelfRating:
         self.ratings = self._load()
 
     def _load(self) -> list:
-        if self.ratings_path.exists():
-            with open(self.ratings_path, "r", encoding="utf-8") as f:
-                return json.load(f)
-        return []
+        return safe_json_read(self.ratings_path, default=[])
 
     def _save(self):
-        with open(self.ratings_path, "w", encoding="utf-8") as f:
-            json.dump(self.ratings[-50:], f, indent=2, ensure_ascii=False)
+        safe_json_write(self.ratings_path, self.ratings[-50:])
 
     def add_rating(self, score: int, reason: str, sequence: int):
         """Fuegt eine Bewertung hinzu (1-10)."""
@@ -298,17 +292,10 @@ class FileWatcher:
         self.last_snapshot = self._load_snapshot()
 
     def _load_snapshot(self) -> dict:
-        if self.snapshot_path.exists():
-            try:
-                with open(self.snapshot_path, "r", encoding="utf-8") as f:
-                    return json.load(f)
-            except Exception:
-                pass
-        return {}
+        return safe_json_read(self.snapshot_path, default={})
 
     def _save_snapshot(self, snapshot: dict):
-        with open(self.snapshot_path, "w", encoding="utf-8") as f:
-            json.dump(snapshot, f, ensure_ascii=False)
+        safe_json_write(self.snapshot_path, snapshot)
 
     def check_changes(self) -> str:
         """Prueft auf Datei-Aenderungen seit dem letzten Check."""

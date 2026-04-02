@@ -9,13 +9,14 @@ Intelligence-Engine — Echtes Lernen, nicht Simulation.
 4. Effizienz-Tracking — Misst ob Lyra tatsaechlich besser wird
 """
 
-import json
 import math
 import re
 from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
+
+from .config import safe_json_read, safe_json_write
 
 
 # ============================================================
@@ -56,18 +57,10 @@ class SemanticMemory:
         }
 
     def _load_index(self) -> dict:
-        default = {"entries": [], "idf": {}, "doc_count": 0}
-        if self.index_path.exists():
-            try:
-                with open(self.index_path, "r", encoding="utf-8") as f:
-                    return json.load(f)
-            except (json.JSONDecodeError, ValueError):
-                return default
-        return default
+        return safe_json_read(self.index_path, default={"entries": [], "idf": {}, "doc_count": 0})
 
     def _save_index(self):
-        with open(self.index_path, "w", encoding="utf-8") as f:
-            json.dump(self.index, f, ensure_ascii=False)
+        safe_json_write(self.index_path, self.index)
 
     def _tokenize(self, text: str) -> list[str]:
         """Zerlegt Text in normalisierte Tokens."""
@@ -162,7 +155,7 @@ class SemanticMemory:
         metadata = metadata or {}
         importance = self._compute_importance(content, metadata)
 
-        entry_id = f"sem_{self.index.get('doc_count', 0)}"
+        entry_id = f"sem_{self.index.get('doc_count', 0)}_{datetime.now(timezone.utc).strftime('%H%M%S%f')[:10]}"
         entry = {
             "id": entry_id,
             "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -380,14 +373,10 @@ class SkillTracker:
         self.skills = self._load()
 
     def _load(self) -> dict:
-        if self.skills_path.exists():
-            with open(self.skills_path, "r", encoding="utf-8") as f:
-                return json.load(f)
-        return {}
+        return safe_json_read(self.skills_path, default={})
 
     def _save(self):
-        with open(self.skills_path, "w", encoding="utf-8") as f:
-            json.dump(self.skills, f, indent=2, ensure_ascii=False)
+        safe_json_write(self.skills_path, self.skills)
 
     def record_success(self, tool_name: str):
         """Erfasst eine erfolgreiche Tool-Nutzung mit Streak-Tracking."""
@@ -537,24 +526,16 @@ class StrategyEvolution:
         self.error_log = self._load_errors()
 
     def _load_rules(self) -> list:
-        if self.rules_path.exists():
-            with open(self.rules_path, "r", encoding="utf-8") as f:
-                return json.load(f)
-        return []
+        return safe_json_read(self.rules_path, default=[])
 
     def _load_errors(self) -> list:
-        if self.error_log_path.exists():
-            with open(self.error_log_path, "r", encoding="utf-8") as f:
-                return json.load(f)
-        return []
+        return safe_json_read(self.error_log_path, default=[])
 
     def _save_rules(self):
-        with open(self.rules_path, "w", encoding="utf-8") as f:
-            json.dump(self.rules, f, indent=2, ensure_ascii=False)
+        safe_json_write(self.rules_path, self.rules)
 
     def _save_errors(self):
-        with open(self.error_log_path, "w", encoding="utf-8") as f:
-            json.dump(self.error_log[-100:], f, indent=2, ensure_ascii=False)
+        safe_json_write(self.error_log_path, self.error_log[-100:])
 
     def record_error(self, tool: str, error: str, context: str = ""):
         """Erfasst einen Fehler und prueft auf Muster."""
@@ -722,14 +703,10 @@ class EfficiencyTracker:
         self.data = self._load()
 
     def _load(self) -> dict:
-        if self.tracking_path.exists():
-            with open(self.tracking_path, "r", encoding="utf-8") as f:
-                return json.load(f)
-        return {"sequences": []}
+        return safe_json_read(self.tracking_path, default={"sequences": [], "tool_usage": {}})
 
     def _save(self):
-        with open(self.tracking_path, "w", encoding="utf-8") as f:
-            json.dump(self.data, f, indent=2, ensure_ascii=False)
+        safe_json_write(self.tracking_path, self.data)
 
     def record_sequence(self, metrics: dict):
         """

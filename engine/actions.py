@@ -16,6 +16,7 @@ import subprocess
 
 from .security import SecurityGateway
 from . import config
+from .config import safe_json_write, safe_json_read
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -36,10 +37,7 @@ class ActionEngine:
         self.action_log = self._load_action_log()
 
     def _load_action_log(self) -> list:
-        if self.action_log_path.exists():
-            with open(self.action_log_path, "r", encoding="utf-8") as f:
-                return json.load(f)
-        return []
+        return safe_json_read(self.action_log_path, default=[])
 
     def _log_action(self, action_type: str, details: str, result: str):
         """Loggt jede Aktion fuer Nachvollziehbarkeit."""
@@ -52,8 +50,7 @@ class ActionEngine:
         self.action_log.append(entry)
         # Nur letzte 200 behalten
         self.action_log = self.action_log[-200:]
-        with open(self.action_log_path, "w", encoding="utf-8") as f:
-            json.dump(self.action_log, f, indent=2, ensure_ascii=False)
+        safe_json_write(self.action_log_path, self.action_log)
 
     # === Dateien erstellen und bearbeiten ===
 
@@ -74,7 +71,7 @@ class ActionEngine:
             )
 
         target = (self.base_path / relative_path).resolve()
-        if not str(target).startswith(str(self.base_path.resolve())):
+        if not target.is_relative_to(self.base_path.resolve()):
             return f"FEHLER: Pfad ausserhalb des Daten-Ordners."
 
         # Workflow-Gate: In Projekt-Ordnern muss PLAN.md existieren
@@ -121,7 +118,7 @@ class ActionEngine:
     def read_file(self, relative_path: str) -> str:
         """Liest eine Datei."""
         target = (self.base_path / relative_path).resolve()
-        if not str(target).startswith(str(self.base_path.resolve())):
+        if not target.is_relative_to(self.base_path.resolve()):
             return "FEHLER: Darf nur in meinem eigenen Ordner lesen."
 
         if not target.exists():
@@ -136,7 +133,7 @@ class ActionEngine:
     def list_directory(self, relative_path: str = "") -> str:
         """Listet den Inhalt eines Verzeichnisses."""
         target = (self.base_path / relative_path).resolve()
-        if not str(target).startswith(str(self.base_path.resolve())):
+        if not target.is_relative_to(self.base_path.resolve()):
             return "FEHLER: Nur eigener Ordner."
 
         if not target.exists():
@@ -202,7 +199,7 @@ class ActionEngine:
         target = (self.base_path / relative_path).resolve()
 
         # Pfad-Scope-Check (fehlte vorher!)
-        if not str(target).startswith(str(self.base_path.resolve())):
+        if not target.is_relative_to(self.base_path.resolve()):
             return f"FEHLER: Script ausserhalb des Daten-Ordners."
 
         if not target.exists():
