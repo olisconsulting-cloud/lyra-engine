@@ -64,92 +64,72 @@ def ask_choice(prompt: str, options: list[str], default: int = 1) -> int:
 
 
 def show_onboarding():
-    """Zeigt dem User was Lyra kann und wie man sie nutzt."""
+    """Begruessung — kurz und warm."""
     print(f"""
   {LINE}
-  WILLKOMMEN BEI LYRA - Autonomous Intelligence Engine
+
+    Hey! Schoen dass du hier bist.
+
+    Ich bin gleich bereit — aber zuerst muss ich
+    dich ein bisschen kennenlernen.
+
+    Ein paar kurze Fragen, dann legen wir los.
+
   {LINE}
-
-  Lyra ist eine autonome KI die eigenstaendig arbeitet,
-  lernt und waechst. Bevor es losgeht, braucht sie ein
-  paar Informationen von dir.
-
-  WAS LYRA KANN:
-    - Eigenstaendig Projekte planen und umsetzen
-    - Im Internet recherchieren und lernen
-    - Eigene Tools bauen die sie wiederverwendet
-    - Sich selbst verbessern (Code-Audit + Evolution)
-    - Per Telegram kommunizieren und Rueckfragen stellen
-
-  WIE DU LYRA NUTZT:
-    - python run.py          Autonomer Modus (arbeitet allein)
-    - python interact.py     Direkte Interaktion (Chat)
-    - Telegram-Nachrichten   Auftraege von unterwegs
-
-  ORDNER-STRUKTUR (wird gleich erstellt):
-    data/context/   Lege hier Dateien ab die Lyra kennen soll
-                    (.md, .txt, Bilder — Lyra kann Bilder sehen)
-    data/skills/    Vorgefertigte Faehigkeiten (Skills)
-    data/projects/  Lyras eigene Projekte
-    .env            API-Keys und Secrets
-
-  TIPP: Du kannst jederzeit Dateien in data/context/ legen.
-  Lyra liest sie automatisch wenn sie relevant sind.
-
-  Externe API-Keys (z.B. fuer Services die Lyra nutzen soll)
-  traegst du in die .env Datei ein.
-
-  {THIN}
-  Los geht's — beantworte die folgenden Fragen.
-  Pflicht-Fragen sind markiert, der Rest ist optional
-  aber erhoeht Lyras Effektivitaet massiv.
-  {THIN}
 """)
 
 
 def gather_pflicht() -> dict:
-    """7 Pflicht-Fragen — ohne die geht nichts."""
-    print(f"\n  {'─' * 40}")
-    print("  PFLICHT-FRAGEN (7)")
-    print(f"  {'─' * 40}")
-
+    """Pflicht-Fragen als Gespraech."""
     data = {}
 
     # 1. KI-Name
-    data["ki_name"] = ask(
-        "Name fuer die KI",
-        required=False,
-        default="",
-    ) or None
-    if not data["ki_name"]:
-        print("  → Lyra waehlt ihren Namen beim ersten Start selbst.")
+    print("  Wie soll ich heissen?")
+    print("  (Enter = ich such mir selbst einen Namen aus)\n")
+    data["ki_name"] = ask("", required=False, default="") or None
+    if data["ki_name"]:
+        print(f"\n  {data['ki_name']} — gefaellt mir!\n")
+    else:
+        print(f"\n  Ok, ich such mir was aus.\n")
 
     # 2. Owner
-    print()
+    print(f"  {'─' * 40}")
+    print("  Und wer bist du?\n")
     data["owner_name"] = ask("Dein Name", required=True)
-    data["owner_role"] = ask("Deine Rolle (z.B. Entwickler, Unternehmer)", required=True)
+    print()
+    data["owner_role"] = ask("Was machst du so? (Rolle/Beruf)", required=True)
+    print(f"\n  Freut mich, {data['owner_name']}!\n")
 
     # 3. Mission
-    print()
-    print("  Was soll Lyra fuer dich tun? (Die Mission, 1-3 Saetze)")
-    data["mission"] = ask("Mission", required=True)
+    print(f"  {'─' * 40}")
+    print("  Was ist meine Aufgabe?")
+    print("  (Was soll ich fuer dich tun? 1-3 Saetze reichen.)\n")
+    data["mission"] = ask("", required=True)
+    print(f"\n  Verstanden.\n")
 
     # 4-6. Ziele
-    print()
-    print("  Deine Top-3 Ziele zum Start:")
+    print(f"  {'─' * 40}")
+    print("  Womit soll ich anfangen?")
+    print("  (Gib mir 1-3 konkrete Ziele zum Start.)\n")
     data["goals"] = []
     for i in range(1, 4):
-        goal = ask(f"Ziel {i}", required=(i == 1))
+        label = ["Erstes", "Zweites", "Drittes"][i - 1]
+        suffix = "" if i > 1 else ""
+        goal = ask(f"{label} Ziel{'  (Enter = reicht)' if i > 1 else ''}", required=(i == 1))
         if goal:
             data["goals"].append(goal)
+        elif i > 1:
+            break
+    print(f"\n  {len(data['goals'])} Ziel{'e' if len(data['goals']) != 1 else ''} notiert.\n")
 
     # 7a. Kommunikations-Preset
+    print(f"  {'─' * 40}")
     comm_choice = ask_choice(
-        "Wie soll Lyra kommunizieren?",
+        "Wie oft soll ich mich melden?",
         [
-            "Proaktiv - Meldet Fortschritt, stellt Rueckfragen, berichtet bei Meilensteinen",
-            "Minimal - Nur bei Problemen oder wenn sie nicht weiterkommt",
-            "Still - Arbeitet komplett selbststaendig, meldet nur fertige Ergebnisse",
+            "Oft — Fortschritt, Rueckfragen, Meilensteine",
+            "Wenig — nur bei Problemen",
+            "Fast nie — ich arbeite still, melde nur Ergebnisse",
         ],
         default=1,
     )
@@ -157,10 +137,10 @@ def gather_pflicht() -> dict:
 
     # 7b. Rueckfrage-Verhalten
     question_choice = ask_choice(
-        "Wie soll Lyra bei Rueckfragen vorgehen?",
+        "Wenn ich eine Frage habe:",
         [
-            "Weiterarbeiten und parallel fragen (nicht blockierend)",
-            "Pausieren und auf Antwort warten (blockierend)",
+            "Weiterarbeiten und nebenbei fragen",
+            "Pausieren und auf Antwort warten",
         ],
         default=1,
     )
@@ -170,55 +150,56 @@ def gather_pflicht() -> dict:
 
 
 def gather_hebel() -> dict:
-    """7 Hebel-Fragen — optional, aber maximaler Impact."""
+    """Optionale Fragen — machen mich deutlich besser."""
     print(f"\n  {'─' * 40}")
-    print("  HEBEL-FRAGEN (optional, aber empfohlen)")
-    print("  Diese 7 Fragen machen Lyra deutlich effektiver.")
-    print(f"  {'─' * 40}")
+    print("  Noch 7 kurze Fragen die mich viel besser machen.")
+    print("  (Kannst du auch ueberspringen.)")
 
-    proceed = input("\n  Hebel-Fragen beantworten? (j/n) [j]: ").strip().lower()
+    proceed = input("\n  Weitermachen? (j/n) [j]: ").strip().lower()
     if proceed == "n":
+        print("  Ok, koennen wir spaeter nachholen.\n")
         return {}
 
     data = {}
 
     # 1. Branche
-    data["industry"] = ask("In welcher Branche/Nische arbeitest du?")
+    print()
+    data["industry"] = ask("In welcher Branche arbeitest du?")
 
     # 2. Grenzen
     print()
-    print("  Was soll Lyra NICHT tun? (z.B. keine E-Mails senden,")
-    print("  keinen Code deployen, nicht auf bestimmte Ordner zugreifen)")
-    data["boundaries"] = ask("Grenzen/Verbote")
+    print("  Gibt es etwas das ich auf KEINEN FALL tun soll?")
+    print("  (z.B. keine E-Mails senden, nichts deployen, bestimmte Ordner)")
+    data["boundaries"] = ask("")
 
     # 3. Vorhandene Tools
+    print()
     data["existing_tools"] = ask(
-        "Welche Tools/Plattformen nutzt du? (z.B. GitHub, Notion, Shopify)"
+        "Welche Tools nutzt du? (GitHub, Notion, Shopify...)"
     )
 
     # 4. Workspace
     print()
-    print("  Soll Lyra in einem bestehenden Ordner arbeiten?")
-    print("  (z.B. ein Projekt-Ordner auf deinem Rechner)")
-    workspace = ask("Pfad zum Workspace (leer = nur data/projects/)")
+    print("  Soll ich in einem bestehenden Ordner arbeiten?")
+    workspace = ask("Pfad zum Ordner (Enter = nur eigener Projektordner)")
     if workspace:
         workspace_path = Path(workspace).resolve()
         if workspace_path.exists() and workspace_path.is_dir():
             data["workspace"] = str(workspace_path)
-            print(f"  → Workspace: {workspace_path}")
+            print(f"  Ok, ich arbeite in: {workspace_path}")
         else:
-            print(f"  → Ordner existiert nicht. Uebersprungen.")
+            print(f"  Den Ordner finde ich nicht — uebersprungen.")
             data["workspace"] = None
     else:
         data["workspace"] = None
 
     # 5. Technisches Level
     tech_choice = ask_choice(
-        "Wie technisch bist du?",
+        "Wie technisch soll ich mit dir reden?",
         [
-            "Einsteiger - Erklaere alles einfach",
-            "Fortgeschritten - Kenne Grundlagen, brauche Details bei Neuem",
-            "Experte - Nur das Wesentliche, keine Erklaerungen",
+            "Einfach — erklaer alles",
+            "Normal — Grundlagen kenne ich",
+            "Technisch — gib mir nur die Fakten",
         ],
         default=2,
     )
@@ -227,12 +208,12 @@ def gather_hebel() -> dict:
     # 6. Groesstes Problem
     print()
     data["biggest_problem"] = ask(
-        "Was ist dein groesstes Problem gerade? (das Lyra loesen soll)"
+        "Was ist gerade dein groesstes Problem das ich loesen soll?"
     )
 
     # 7. Erfolgsmessung
     data["success_metric"] = ask(
-        "Woran erkennst du dass Lyra gute Arbeit macht?"
+        "Woran merkst du dass ich gute Arbeit mache?"
     )
 
     return data
@@ -448,31 +429,28 @@ def main():
         print(f"  workspace       - {hebel['workspace']}")
 
     # === ZUSAMMENFASSUNG ===
+    ki_name = pflicht.get("ki_name") or "Ich"
+    owner = pflicht.get("owner_name", "du")
     print(f"""
-  {LINE}
-  SETUP ABGESCHLOSSEN!
-  {LINE}
+  {'─' * 40}
 
-  STRUKTUR:
-    engine/         - Code (GitHub, unveraenderlich)
-    data/           - Deine persoenlichen Daten
-      context/      - Lege hier Dateien fuer Lyra ab
-      skills/       - Faehigkeiten (Skills)
-      projects/     - Lyras Projekte
-    .env            - API-Keys (BITTE EINTRAGEN!)
+  Alles klar, {owner}!
 
-  NAECHSTE SCHRITTE:
-    1. API-Keys in .env eintragen (Pflicht: ANTHROPIC + GOOGLE_AI)
-    2. Optional: Dateien in data/context/ legen
-    3. Optional: python setup_telegram.py
-    4. python run.py  - Lyra starten!
+  {ki_name} ist bereit. So geht's weiter:
 
-  TIPPS:
-    - Lyra liest data/context/ automatisch bei Bedarf
-    - Externe API-Keys in .env eintragen
-    - Telegram fuer Kommunikation unterwegs
-    - python interact.py fuer direkten Chat
-  {LINE}
+    1. Pruefe .env  — API-Keys muessen drin sein
+       (ANTHROPIC_API_KEY + GOOGLE_AI_API_KEY)
+
+    2. Starte mich:
+       python run_live.py     Autonomer Modus + Live-Chat
+       python interact.py     Nur Chat
+       python run.py           Nur autonom (ohne Chat)
+
+    3. Optional:
+       Dateien in data/context/ legen — ich lese sie automatisch
+       python setup_telegram.py — Telegram einrichten
+
+  {'─' * 40}
 """)
 
 
