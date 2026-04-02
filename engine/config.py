@@ -27,7 +27,11 @@ MESSAGES_PATH = DATA_PATH / "messages"
 EVOLUTION_PATH = DATA_PATH / "evolution"
 PROJECTS_PATH = DATA_PATH / "projects"
 TOOLS_PATH = DATA_PATH / "tools"
+CONTEXT_PATH = DATA_PATH / "context"
+SKILLS_PATH = DATA_PATH / "skills"
 GENESIS_PATH = DATA_PATH / "genesis.json"
+MISSION_PATH = DATA_PATH / "mission.md"
+PREFERENCES_PATH = DATA_PATH / "preferences.json"
 ENV_PATH = ROOT_PATH / ".env"
 
 
@@ -45,5 +49,7 @@ def ensure_data_dirs():
         EVOLUTION_PATH / "code_backups",
         PROJECTS_PATH,
         TOOLS_PATH,
+        CONTEXT_PATH,
+        SKILLS_PATH,
     ]:
         path.mkdir(parents=True, exist_ok=True)
