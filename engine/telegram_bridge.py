@@ -11,7 +11,6 @@ Zwei Modi:
 
 import json
 import logging
-import os
 import threading
 import time
 from datetime import datetime, timezone
@@ -122,24 +121,21 @@ class TelegramBridge:
             offset: Update-ID ab der geholt wird
             timeout: Long-Polling Timeout in Sekunden
         """
-        try:
-            response = self.client.get(
-                f"{self.base_url}/getUpdates",
-                params={
-                    "offset": offset,
-                    "timeout": timeout,
-                    "allowed_updates": '["message"]',
-                },
-                timeout=timeout + 5,
-            )
-            result = response.json()
+        response = self.client.get(
+            f"{self.base_url}/getUpdates",
+            params={
+                "offset": offset,
+                "timeout": timeout,
+                "allowed_updates": '["message"]',
+            },
+            timeout=timeout + 5,
+        )
+        result = response.json()
 
-            if result.get("ok"):
-                return result.get("result", [])
-            return []
-
-        except Exception:
-            return []
+        if result.get("ok"):
+            return result.get("result", [])
+        logger.warning("Telegram: getUpdates nicht ok: %s", result)
+        return []
 
     def start_polling(self, on_message=None):
         """
@@ -268,39 +264,42 @@ class TelegramBridge:
         """
         cmd = command.split()[0].lower().replace("@", "").split("@")[0]
 
-        if cmd == "/status":
-            self._save_to_inbox("/status")
-        elif cmd == "/journal":
-            self._send_last_journal()
-        elif cmd == "/beliefs":
-            self._send_beliefs()
-        elif cmd == "/think":
-            self._save_to_inbox("/think")
-            self.send_message("Ich denke nach... 🌀")
-        elif cmd.startswith("/aufgabe") or cmd.startswith("/task"):
-            # Task-Queue: /aufgabe Bau mir ein Dashboard
-            task_text = command[len(cmd):].strip()
-            if task_text:
-                self._add_task(task_text)
-                self.send_message(f"Aufgabe notiert: {task_text}")
+        try:
+            if cmd == "/status":
+                self._save_to_inbox("/status")
+            elif cmd == "/journal":
+                self._send_last_journal()
+            elif cmd == "/beliefs":
+                self._send_beliefs()
+            elif cmd == "/think":
+                self._save_to_inbox("/think")
+                self.send_message("Ich denke nach... 🌀")
+            elif cmd.startswith("/aufgabe") or cmd.startswith("/task"):
+                task_text = command[len(cmd):].strip()
+                if task_text:
+                    self._add_task(task_text)
+                    self.send_message(f"Aufgabe notiert: {task_text}")
+                else:
+                    self.send_message("Nutzung: /aufgabe Beschreibung der Aufgabe")
+            elif cmd == "/tasks":
+                self._send_tasks()
+            elif cmd == "/help":
+                self.send_message(
+                    "*Befehle:*\n"
+                    "/status — Mein aktueller Zustand\n"
+                    "/journal — Letzter Tagebucheintrag\n"
+                    "/beliefs — Meine Ueberzeugungen\n"
+                    "/aufgabe — Aufgabe hinzufuegen\n"
+                    "/tasks — Offene Aufgaben\n"
+                    "/think — Denkzyklus ausloesen\n"
+                    "/help — Diese Hilfe\n\n"
+                    "Oder schreib einfach — ich antworte sofort."
+                )
             else:
-                self.send_message("Nutzung: /aufgabe Beschreibung der Aufgabe")
-        elif cmd == "/tasks":
-            self._send_tasks()
-        elif cmd == "/help":
-            self.send_message(
-                "*Befehle:*\n"
-                "/status — Mein aktueller Zustand\n"
-                "/journal — Letzter Tagebucheintrag\n"
-                "/beliefs — Meine Ueberzeugungen\n"
-                "/aufgabe — Aufgabe hinzufuegen\n"
-                "/tasks — Offene Aufgaben\n"
-                "/think — Denkzyklus ausloesen\n"
-                "/help — Diese Hilfe\n\n"
-                "Oder schreib einfach — ich antworte sofort."
-            )
-        else:
-            self.send_message(f"Unbekannter Befehl: {cmd}\nSchreib /help fuer Hilfe.")
+                self.send_message(f"Unbekannter Befehl: {cmd}\nSchreib /help fuer Hilfe.")
+        except Exception as e:
+            logger.error("Telegram: Fehler bei Befehl %s: %s", cmd, e)
+            self.send_message(f"Fehler bei {cmd} — bitte nochmal versuchen.")
 
     def _send_last_journal(self):
         """Sendet den letzten Journal-Eintrag."""
@@ -375,8 +374,8 @@ class TelegramBridge:
             })
             with open(tasks_path, "w", encoding="utf-8") as f:
                 json.dump(tasks, f, indent=2, ensure_ascii=False)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.error("Telegram: Aufgabe konnte nicht gespeichert werden: %s", e)
 
     def _send_tasks(self):
         """Sendet die aktuelle Task-Queue."""
@@ -423,8 +422,14 @@ class TelegramBridge:
         """Prueft ob der Polling-Thread noch laeuft und keine Dauerfehler hat."""
         alive = self._polling_thread is not None and self._polling_thread.is_alive()
         healthy = self._consecutive_errors < 5
-        if not alive and self._polling_active:
-            logger.error("Telegram: Polling-Thread ist gestorben!")
-        elif not healthy:
-            logger.warning("Telegram: %d aufeinanderfolgende Polling-Fehler", self._consecutive_errors)
         return alive and healthy
+
+    def get_polling_status(self) -> dict:
+        """Detaillierter Polling-Status fuer Diagnostik."""
+        alive = self._polling_thread is not None and self._polling_thread.is_alive()
+        return {
+            "active": self._polling_active,
+            "thread_alive": alive,
+            "consecutive_errors": self._consecutive_errors,
+            "healthy": alive and self._consecutive_errors < 5,
+        }
