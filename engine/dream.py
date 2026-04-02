@@ -13,6 +13,7 @@ Basiert auf dem oeffentlichen Claude Code Dream System-Prompt.
 """
 
 import json
+import logging
 import os
 from datetime import datetime, timezone
 from pathlib import Path
@@ -20,6 +21,8 @@ from pathlib import Path
 import httpx
 
 from .llm_router import MODELS, TASK_MODEL_MAP
+
+logger = logging.getLogger(__name__)
 
 
 class DreamEngine:
@@ -274,4 +277,4 @@ Antworte als JSON:
             with open(self.dream_log_path, "w", encoding="utf-8") as f:
                 json.dump(log, f, indent=2, ensure_ascii=False)
         except (OSError, json.JSONDecodeError) as e:
-            print(f"WARNUNG: Dream-Log konnte nicht geschrieben werden: {e}")
+            logger.warning("Dream-Log konnte nicht geschrieben werden: %s", e)

@@ -33,8 +33,13 @@ class WebAccess:
 
     def close(self):
         """Schliesst den HTTP-Client sauber."""
-        if self.client:
-            self.client.close()
+        try:
+            if self.client:
+                self.client.close()
+        except Exception:
+            pass
+        finally:
+            self.client = None
 
     def __del__(self):
         self.close()

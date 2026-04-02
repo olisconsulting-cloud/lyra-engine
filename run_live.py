@@ -132,7 +132,7 @@ def main():
     try:
         engine.run()
     finally:
-        engine.communication.stop_telegram_listener()
+        engine.close()
 
 
 if __name__ == "__main__":

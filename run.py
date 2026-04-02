@@ -51,13 +51,16 @@ def main():
 
     if "--once" in sys.argv:
         print("\n  Eine Sequenz...\n")
-        engine._run_sequence()
+        try:
+            engine._run_sequence()
+        finally:
+            engine.close()
         print("  Fertig.\n")
     else:
         try:
             engine.run()
         finally:
-            engine.communication.stop_telegram_listener()
+            engine.close()
 
 
 if __name__ == "__main__":

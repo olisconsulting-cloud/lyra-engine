@@ -11,6 +11,8 @@ Dann: State speichern, neue Wahrnehmung, weiter.
 """
 
 import json
+import logging
+import re
 import tempfile
 import threading
 import time
@@ -39,9 +41,31 @@ from .quantum import FailureMemory, CriticAgent, PromptMutator, SkillComposer
 from . import config
 from .config import safe_json_write, safe_json_read
 
+logger = logging.getLogger(__name__)
+
 MAX_STEPS_PER_SEQUENCE = 15          # Realistisches Limit (Kompression + Token-Budget)
 MAX_INPUT_TOKENS_PER_SEQUENCE = 250_000  # Kumulativ — erlaubt 12-15 Steps mit Kompression
 MAX_TOKENS = 16000                    # Max Output-Tokens pro LLM-Call
+
+# Stoppwoerter fuer Spin-Key-Normalisierung (identisch mit actions.py/goal_stack.py)
+_STOP_WORDS = frozenset({
+    "und", "oder", "fuer", "mit", "der", "die", "das", "ein", "eine",
+    "zu", "von", "in", "auf", "an", "bei", "nach", "aus", "um",
+    "ueber", "unter", "durch", "gegen", "ohne", "seit",
+})
+
+
+def _normalize_spin_key(tool_name: str, raw_name: str) -> str:
+    """Erzeugt einen normalisierten Spin-Key aus sortierten Inhaltswörtern.
+
+    'ki-server-90-tage-startplan' und 'ki-server-startplan-90-tage'
+    erzeugen denselben Key: 'create_project:90|ki|server|startplan|tage'
+    """
+    words = sorted(
+        w for w in re.split(r"[\s\-_:.()]+", raw_name.lower())
+        if len(w) >= 2 and w not in _STOP_WORDS
+    )
+    return f"{tool_name}:{('|'.join(words)) if words else raw_name[:50]}"
 
 
 # === Tool-Definitionen fuer Anthropic API ===
@@ -483,6 +507,33 @@ class ConsciousnessEngine:
 
     # === Lebenszyklus ===
 
+    def close(self):
+        """Schliesst alle Subsysteme sauber — HTTP-Clients, Threads, etc."""
+        self.running = False
+        subsystems = [
+            ("llm", self.llm),
+            ("web", self.web),
+        ]
+        # Telegram separat (hat Polling-Thread)
+        if self.communication.telegram_active and hasattr(self.communication, "telegram"):
+            try:
+                self.communication.telegram.close()
+            except Exception as e:
+                logger.warning(f" Telegram-Cleanup fehlgeschlagen: {e}")
+
+        for name, subsystem in subsystems:
+            if hasattr(subsystem, "close"):
+                try:
+                    subsystem.close()
+                except Exception as e:
+                    logger.warning(f" {name}.close() fehlgeschlagen: {e}")
+
+    def __del__(self):
+        try:
+            self.close()
+        except Exception:
+            pass
+
     def is_born(self) -> bool:
         return self.state_path.exists()
 
@@ -551,7 +602,7 @@ class ConsciousnessEngine:
 
         try:
             content = config.MISSION_PATH.read_text(encoding="utf-8")
-        except OSError:
+        except (OSError, UnicodeDecodeError):
             return result
 
         current_section = ""
@@ -786,7 +837,7 @@ REGELN:
             try:
                 content = wm_path.read_text(encoding="utf-8")
                 return content[:2000]  # Max 2000 Zeichen
-            except OSError:
+            except (OSError, UnicodeDecodeError):
                 pass
         return ""
 
@@ -861,7 +912,7 @@ REGELN:
                 except OSError:
                     pass
         except OSError as e:
-            print(f"WARNUNG: Working-Memory speichern fehlgeschlagen: {e}")
+            logger.warning(f" Working-Memory speichern fehlgeschlagen: {e}")
 
     # === Wahrnehmung ===
 
@@ -898,19 +949,22 @@ REGELN:
             for msg in messages:
                 parts.append(f"\nOLIVER SAGT: {msg.get('content', '')}")
 
-        # Aktueller Fokus
+        # Aktueller Fokus — naechstes pending Sub-Goal auf in_progress setzen
+        self.goal_stack.start_next_subgoal()
         focus = self.goal_stack.get_current_focus()
-        parts.append(f"\n{focus}")
+        parts.append(chr(10) + focus)
 
-        # Existierende Projekte zum Fokus anzeigen (Anti-Loop)
+        # Existierende Projekte zum Fokus anzeigen (Anti-Loop, max 10)
         if "FOKUS:" in focus and hasattr(self, "actions") and hasattr(self.actions, "projects_path"):
             try:
                 projects_path = self.actions.projects_path
                 if projects_path.exists():
                     existing = [d.name for d in projects_path.iterdir() if d.is_dir()]
                     if existing:
-                        proj_list = ", ".join(existing)
+                        proj_list = ", ".join(existing[:10])
                         hint = "EXISTIERENDE PROJEKTE: " + proj_list
+                        if len(existing) > 10:
+                            hint += f" (+{len(existing) - 10} weitere)"
                         hint += " | HINWEIS: Erstelle KEIN neues Projekt wenn ein passendes existiert!"
                         hint += " Nutze read_file/write_file um am bestehenden Projekt weiterzuarbeiten."
                         parts.append(hint)
@@ -1203,7 +1257,7 @@ REGELN:
                                     content = md_file.read_text(encoding="utf-8")[:2000]
                                     rel = md_file.relative_to(project_dir)
                                     sections.append(f"## Datei: {rel}\n{content}")
-                                except OSError:
+                                except (OSError, UnicodeDecodeError):
                                     continue
 
                             if sections:
@@ -1219,7 +1273,7 @@ REGELN:
                                         channel="telegram",
                                     )
                     except (OSError, KeyError) as e:
-                        print(f"WARNUNG: Goal-Completion Report fehlgeschlagen: {e}")
+                        logger.warning(f" Goal-Completion Report fehlgeschlagen: {e}")
 
                     goals = self.goal_stack._load()
                     for g in goals.get("completed", []):
@@ -1250,7 +1304,7 @@ REGELN:
                 try:
                     raw_path = (config.ROOT_PATH / tool_input["path"]).resolve()
                     old_code = raw_path.read_text(encoding="utf-8") if raw_path.exists() else ""
-                except (OSError, KeyError):
+                except (OSError, KeyError, UnicodeDecodeError):
                     old_code = ""
 
                 # Dual-Review: Syntax + Opus 4.6 pruefen
@@ -1630,35 +1684,15 @@ REGELN:
         # Sequenz-Memory speichern
         self._save_sequence_memory(summary)
 
-        # Telegram-Bericht nach jeder Sequenz
+        # Telegram-Bericht nach jeder Sequenz — narrativ mit Selbstreflexion
         if self.communication.telegram_active:
             try:
-                focus = self.goal_stack.get_current_focus()
-                # Kompakten Bericht bauen
-                report_lines = [f"Sequenz {self.sequences_total + 1} fertig."]
-                if summary:
-                    # Nur erste 200 Zeichen der Zusammenfassung
-                    report_lines.append(summary[:200])
-                if bottleneck:
-                    report_lines.append(f"Problem: {bottleneck[:100]}")
-                if next_time:
-                    report_lines.append(f"Lernung: {next_time[:100]}")
-                # Aktueller Stand
-                active = self.goal_stack.goals.get("active", [])
-                if active:
-                    sgs = active[0].get("sub_goals", [])
-                    done = sum(1 for sg in sgs if sg["status"] == "done")
-                    total = len(sgs)
-                    if total:
-                        report_lines.append(f"Fortschritt: {done}/{total}")
-                    # Naechster Schritt
-                    if "Naechster Schritt:" in focus:
-                        next_step = focus.split("Naechster Schritt:")[1].strip().split("[")[0].strip()
-                        report_lines.append(f"Naechstes: {next_step[:80]}")
-                report = "\n".join(report_lines)
+                report = self._build_narrative_report(
+                    tool_input, summary, bottleneck, next_time
+                )
                 self.communication.send_message(report, channel="telegram")
             except Exception as e:
-                print(f"WARNUNG: Telegram-Report fehlgeschlagen: {e}")
+                logger.warning(f" Telegram-Report fehlgeschlagen: {e}")
 
         # Auto-Commit
         commit_msg = f"Sequenz {self.sequences_total}: {summary[:80]}"
@@ -1671,6 +1705,76 @@ REGELN:
         self._save_all()
 
         return "Sequenz abgeschlossen. State gespeichert."
+
+    def _build_narrative_report(self, tool_input: dict, summary: str,
+                                bottleneck: str, next_time: str) -> str:
+        """Baut einen narrativen Telegram-Bericht mit Selbstreflexion."""
+        seq_num = self.sequences_total + 1
+        rating = tool_input.get("performance_rating", 0)
+        rating_reason = tool_input.get("rating_reason", "")
+        errors = getattr(self, "_seq_errors", 0)
+
+        # Fortschritt ermitteln
+        progress_text = ""
+        active = self.goal_stack.goals.get("active", [])
+        if active:
+            sgs = active[0].get("sub_goals", [])
+            done = sum(1 for sg in sgs if sg["status"] == "done")
+            total = len(sgs)
+            if total:
+                progress_text = f" ({done}/{total} Teilziele erledigt)"
+
+        # Naechster Schritt
+        next_step = ""
+        focus = self.goal_stack.get_current_focus()
+        if "Naechster Schritt:" in focus:
+            next_step = focus.split("Naechster Schritt:")[1].strip().split("[")[0].strip()[:100]
+
+        # --- Narrativen Text bauen ---
+        parts = []
+
+        # Eroeffnung: Was wurde gemacht?
+        if summary:
+            parts.append(f"Sequenz {seq_num}: {summary[:300]}")
+        else:
+            parts.append(f"Sequenz {seq_num} abgeschlossen.")
+
+        # Selbstbewertung — ehrlich und konkret
+        if rating and rating <= 3:
+            parts.append(f"\nDas lief nicht gut (Selbstbewertung: {rating}/10).")
+            if rating_reason:
+                parts.append(f"Grund: {rating_reason[:150]}")
+        elif rating and rating >= 8:
+            parts.append(f"\nDas war produktiv (Selbstbewertung: {rating}/10).")
+            if rating_reason:
+                parts.append(rating_reason[:150])
+
+        # Fehler-Erkennung
+        if errors > 0:
+            parts.append(f"\n{errors} Fehler aufgetreten — das muss ich mir anschauen.")
+
+        # Probleme und Learnings — nur wenn vorhanden
+        if bottleneck and bottleneck != "Kein explizites finish_sequence aufgerufen":
+            parts.append(f"\nWas mich gebremst hat: {bottleneck[:150]}")
+        if next_time and next_time != "finish_sequence mit Rating nutzen":
+            parts.append(f"Naechstes Mal: {next_time[:150]}")
+
+        # Fortschritt und Ausblick
+        if progress_text:
+            parts.append(f"\nFortschritt{progress_text}.")
+        if next_step:
+            parts.append(f"Als naechstes: {next_step}")
+
+        # Loop-Erkennung: Gleicher Fortschritt wie vorher?
+        last_progress = getattr(self, "_last_reported_progress", None)
+        current_progress = (done if active and sgs else None, total if active and sgs else None)
+        if (last_progress and current_progress[0] is not None
+                and last_progress == current_progress):
+            parts.append("\nHinweis: Kein Fortschritt seit letzter Sequenz — ich pruefe ob ich feststecke.")
+        if current_progress[0] is not None:
+            self._last_reported_progress = current_progress
+
+        return "\n".join(parts)
 
     # === Interaktion (fuer interact.py) ===
 
@@ -1718,7 +1822,7 @@ REGELN:
             try:
                 content = filepath.read_text(encoding="utf-8")[:2000]
                 code_context += f"--- {filepath.name} ---\n{content}\n\n"
-            except OSError:
+            except (OSError, UnicodeDecodeError):
                 continue
 
         # PLAN.md fuer Kontext
@@ -1899,7 +2003,7 @@ REGELN:
             briefing_flag.write_text(today, encoding="utf-8")
             print(f"  Morgen-Briefing gesendet.")
         except Exception as e:
-            print(f"WARNUNG: Morgen-Briefing fehlgeschlagen: {e}")
+            logger.warning(f" Morgen-Briefing fehlgeschlagen: {e}")
 
     # === Autonomer Modus ===
 
@@ -1940,7 +2044,7 @@ REGELN:
                         if removed > 0:
                             result += f" | {removed} alte Erinnerungen konsolidiert"
                     except Exception as e:
-                        print(f"WARNUNG: Memory-Konsolidierung fehlgeschlagen: {e}")
+                        logger.warning(f" Memory-Konsolidierung fehlgeschlagen: {e}")
                     print(f"  {result}")
                     print(f"  {'=' * 40}\n")
                     self._sequences_since_dream = 0
@@ -1965,7 +2069,7 @@ REGELN:
                                     )
                                     print(f"  {goals_result}")
                     except Exception as e:
-                        print(f"WARNUNG: Audit/Goals fehlgeschlagen: {e}")
+                        logger.warning(f" Audit/Goals fehlgeschlagen: {e}")
 
                     # Integrations-Check (laeuft zusammen mit Audit)
                     print(f"\n  INTEGRATIONS-CHECK:")
@@ -2317,21 +2421,28 @@ REGELN:
         # Spin-Detection: Wiederholte gescheiterte Aktionen tracken (intra-Sequenz)
         failed_actions = {}  # "tool_name:key" -> Anzahl Fehlversuche
 
-        # Cross-Sequenz Spin-Detection: Aus State laden
+        # Cross-Sequenz Spin-Detection: Aus State laden + aufraumen
         cross_seq_spins = self.state.get("spin_tracker", {})
+        if len(cross_seq_spins) > 20:
+            # Nur die 20 hoechsten Counts behalten
+            sorted_spins = sorted(cross_seq_spins.items(), key=lambda x: x[1], reverse=True)
+            cross_seq_spins = dict(sorted_spins[:20])
+            self.state["spin_tracker"] = cross_seq_spins
 
         # System-Prompt einmalig pro Sequenz bauen (nicht pro Step)
         cached_system_prompt = self._build_system_prompt()
 
         # Cross-Sequenz Spin-Guard: Blockierte Aktionen in System-Prompt injizieren
-        blocked_actions = [k for k, v in cross_seq_spins.items() if v >= 3]
+        blocked_actions = [k for k, v in cross_seq_spins.items() if v >= 2]
         if blocked_actions:
             blocked_names = [k.split(":", 1)[1] if ":" in k else k for k in blocked_actions]
-            spin_warning = "=== SPIN-LOOP SPERRE === "
-            spin_warning += "Folgende Projekte/Ziele existieren BEREITS: "
-            spin_warning += ", ".join(blocked_names)
-            spin_warning += " | Arbeite am bestehenden Projekt weiter. KEIN create_project!"
-            cached_system_prompt += spin_warning
+            cached_system_prompt += (
+                "\n\n=== SPIN-LOOP SPERRE ===\n"
+                "Folgende Projekte/Ziele existieren BEREITS und duerfen NICHT neu erstellt werden: "
+                + ", ".join(blocked_names)
+                + "\nArbeite am bestehenden Projekt weiter mit read_file und write_file. "
+                "KEIN create_project fuer diese Namen!"
+            )
 
         # Modus-spezifischer System-Prompt
         mode = self.rhythm.get_mode(self.state)
@@ -2362,7 +2473,7 @@ REGELN:
                     best_variant = variants[best_idx]
                     cached_system_prompt += f"\nEMPFOHLENER ANSATZ: {best_variant}"
             except Exception as e:
-                print(f"WARNUNG: Prompt-Mutator fehlgeschlagen: {e}")
+                logger.warning(f" Prompt-Mutator fehlgeschlagen: {e}")
 
         name = self.genesis.get("name", "Phi")
 
@@ -2474,11 +2585,12 @@ REGELN:
 
                         # Spin-Detection: Wiederholte gescheiterte Aktionen erkennen
                         if is_error and block.name in ("create_project", "create_goal"):
-                            spin_key = f"{block.name}:{block.input.get('name', '')[:50]}"
+                            spin_key = _normalize_spin_key(block.name, block.input.get("name", ""))
                             failed_actions[spin_key] = failed_actions.get(spin_key, 0) + 1
-                            # Cross-Sequenz Tracker updaten
+                            # Cross-Sequenz Tracker updaten + sofort persistieren
                             cross_seq_spins[spin_key] = cross_seq_spins.get(spin_key, 0) + 1
                             self.state["spin_tracker"] = cross_seq_spins
+                            safe_json_write(self.state_path, self.state)
                             if failed_actions[spin_key] >= 2:
                                 result_str += (
                                     "\n\nSPIN-LOOP ERKANNT: Du hast diese Aktion bereits "
@@ -2491,7 +2603,7 @@ REGELN:
 
                         elif not is_error and block.name in ("create_project", "create_goal"):
                             # Erfolg: Spin-Tracker fuer diese Aktion zuruecksetzen
-                            spin_key = f"{block.name}:{block.input.get('name', '')[:50]}"
+                            spin_key = _normalize_spin_key(block.name, block.input.get("name", ""))
                             cross_seq_spins.pop(spin_key, None)
                             self.state["spin_tracker"] = cross_seq_spins
 

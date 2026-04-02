@@ -11,6 +11,7 @@ Jede Aktion wird geloggt und ist nachvollziehbar.
 """
 
 import json
+import logging
 import os
 import re
 import subprocess
@@ -21,6 +22,8 @@ from pathlib import Path
 from . import config
 from .config import safe_json_write, safe_json_read
 from .security import SecurityGateway
+
+logger = logging.getLogger(__name__)
 from typing import Optional
 
 
@@ -242,6 +245,50 @@ class ActionEngine:
 
     # === Projekte verwalten ===
 
+    def _normalize_project_name(self, name: str) -> set[str]:
+        """Extrahiert normalisierte Woerter aus einem Projektnamen."""
+        stop = {"und", "oder", "fuer", "mit", "der", "die", "das", "ein", "eine",
+                "zu", "von", "in", "auf", "an", "bei", "nach", "aus", "um",
+                "ueber", "unter", "durch", "gegen", "ohne", "seit"}
+        return {w for w in re.split(r"[\s\-_:.()]+", name.lower()) if len(w) >= 2} - stop
+
+    def _find_similar_project(self, name: str) -> Optional[str]:
+        """Findet ein aehnliches Projekt nach Wort-Overlap und sortiertem Namen."""
+        if not self.projects_path.exists():
+            return None
+
+        new_words = self._normalize_project_name(name)
+        # Sortierter Name erkennt Wort-Umstellungen exakt
+        new_sorted = "-".join(sorted(new_words))
+
+        for existing in self.projects_path.iterdir():
+            if not existing.is_dir():
+                continue
+            ex_words = self._normalize_project_name(existing.name)
+            if not ex_words or not new_words:
+                continue
+
+            # Exakter Match nach sortierten Woertern (fangen Umstellungen ab)
+            ex_sorted = "-".join(sorted(ex_words))
+            if new_sorted == ex_sorted:
+                return existing.name
+
+            # Jaccard-Overlap >= 0.5
+            overlap = len(new_words & ex_words)
+            union = len(new_words | ex_words)
+            if union and overlap / union >= 0.5:
+                return existing.name
+
+        return None
+
+    def _check_create_cooldown(self) -> Optional[str]:
+        """Verhindert Projekt-Erstellung wenn in letzten 5 Aktionen schon eins erstellt wurde."""
+        recent = self.action_log[-5:] if self.action_log else []
+        for entry in recent:
+            if entry.get("type") == "create_project" and "erstellt" in entry.get("result", "").lower():
+                return entry.get("details", "unbekannt")
+        return None
+
     def create_project(self, name: str, description: str,
                        acceptance_criteria: Optional[list[str]] = None,
                        phases: Optional[list[str]] = None) -> str:
@@ -254,6 +301,16 @@ class ActionEngine:
         - PROGRESS.md -Fortschritts-Tracking
         - tests.py -Test-Scaffold aus Akzeptanzkriterien (Tests-First)
         """
+        # Cooldown: Kein zweites Projekt in schneller Folge
+        recent_project = self._check_create_cooldown()
+        if recent_project:
+            return (
+                f"FEHLER: COOLDOWN — Projekt '{recent_project}' wurde gerade erst erstellt. "
+                f"Arbeite am bestehenden Projekt weiter statt ein neues zu erstellen. "
+                f"Nutze read_file/write_file fuer bestehende Projekte."
+            )
+
+        # Exakter Namens-Match
         project_path = self.projects_path / name
         if project_path.exists():
             return (
@@ -262,26 +319,14 @@ class ActionEngine:
                 f"Pfad: projects/{name}/"
             )
 
-        # Aehnliche Projekte pruefen (Wort-Overlap im Namen)
-        if self.projects_path.exists():
-            stop = {"und", "oder", "fuer", "mit", "der", "die", "das", "ein", "eine",
-                    "zu", "von", "in", "auf", "an", "bei", "nach", "aus", "um",
-                    "ueber", "unter", "durch", "gegen", "ohne", "seit"}
-            new_words = {w for w in re.split(r"[\s\-_:.()]+", name.lower()) if len(w) >= 2} - stop
-            for existing in self.projects_path.iterdir():
-                if not existing.is_dir():
-                    continue
-                ex_words = {w for w in re.split(r"[\s\-_:.()]+", existing.name.lower()) if len(w) >= 2} - stop
-                if not ex_words or not new_words:
-                    continue
-                overlap = len(new_words & ex_words)
-                union = len(new_words | ex_words)
-                if union and overlap / union >= 0.5:
-                    return (
-                        f"FEHLER: AEHNLICHES PROJEKT EXISTIERT: '{existing.name}'. "
-                        f"ERSTELLE KEIN NEUES PROJEKT! Arbeite am bestehenden Projekt weiter. "
-                        f"Pfad: projects/{existing.name}/"
-                    )
+        # Aehnliche Projekte pruefen (Wort-Overlap + sortierter Vergleich)
+        similar = self._find_similar_project(name)
+        if similar:
+            return (
+                f"FEHLER: AEHNLICHES PROJEKT EXISTIERT: '{similar}'. "
+                f"ERSTELLE KEIN NEUES PROJEKT! Arbeite am bestehenden Projekt weiter. "
+                f"Pfad: projects/{similar}/"
+            )
 
         project_path.mkdir(parents=True)
         now = datetime.now().strftime("%Y-%m-%d %H:%M")
@@ -438,6 +483,6 @@ if __name__ == "__main__":
 
             progress_path.write_text(content, encoding="utf-8")
         except (OSError, ValueError) as e:
-            print(f"WARNUNG: Progress-Update fehlgeschlagen: {e}")
+            logger.warning("Progress-Update fehlgeschlagen: %s", e)
 
     # Ziele werden ueber GoalStack verwaltet (engine/goal_stack.py), nicht hier.

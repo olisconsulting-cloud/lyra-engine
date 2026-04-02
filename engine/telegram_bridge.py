@@ -178,8 +178,13 @@ class TelegramBridge:
     def close(self):
         """Stoppt Polling und schliesst den HTTP-Client sauber."""
         self.stop_polling()
-        if self.client:
-            self.client.close()
+        try:
+            if self.client:
+                self.client.close()
+        except Exception:
+            pass
+        finally:
+            self.client = None
 
     def _polling_loop(self, on_message=None):
         """Interner Polling-Loop — laeuft als Daemon-Thread."""

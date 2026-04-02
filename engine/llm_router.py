@@ -53,7 +53,7 @@ MODELS = {
 
 # Welches Modell fuer welche Aufgabe — EINZIGE Stelle fuer Modell-Zuordnung
 TASK_MODEL_MAP = {
-    "main_work": "kimi_k25",                 # Agentic Loop, Tool-Use (Kimi K2.5 via NVIDIA)
+    "main_work": "claude_opus",               # Opus 4.6 fuer System-Optimierung (temporaer, vorher: kimi_k25)
     "code_review": "claude_opus",              # Opus 4.6 als unabhaengiger Reviewer (echtes Dual-Review)
     "audit_primary": "claude_opus",          # Opus fuer Tiefenanalyse
     "audit_secondary": "kimi_k25",           # Kimi als Gegenpruefung
@@ -90,8 +90,14 @@ class LLMRouter:
 
     def close(self):
         """Schliesst den HTTP-Client sauber."""
-        if self._http_owned and self.http:
-            self.http.close()
+        if self._http_owned:
+            try:
+                if self.http:
+                    self.http.close()
+            except Exception:
+                pass
+            finally:
+                self._http_owned = False
 
     def __del__(self):
         self.close()
