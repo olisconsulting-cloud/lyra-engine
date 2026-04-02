@@ -1366,6 +1366,36 @@ REGELN:
         # Sequenz-Memory speichern
         self._save_sequence_memory(summary)
 
+        # Telegram-Bericht nach jeder Sequenz
+        if self.communication.telegram_active:
+            try:
+                focus = self.goal_stack.get_current_focus()
+                # Kompakten Bericht bauen
+                report_lines = [f"Sequenz {self.sequences_total + 1} fertig."]
+                if summary:
+                    # Nur erste 200 Zeichen der Zusammenfassung
+                    report_lines.append(summary[:200])
+                if bottleneck:
+                    report_lines.append(f"Problem: {bottleneck[:100]}")
+                if next_time:
+                    report_lines.append(f"Lernung: {next_time[:100]}")
+                # Aktueller Stand
+                active = self.goal_stack.goals.get("active", [])
+                if active:
+                    sgs = active[0].get("sub_goals", [])
+                    done = sum(1 for sg in sgs if sg["status"] == "done")
+                    total = len(sgs)
+                    if total:
+                        report_lines.append(f"Fortschritt: {done}/{total}")
+                    # Naechster Schritt
+                    if "Naechster Schritt:" in focus:
+                        next_step = focus.split("Naechster Schritt:")[1].strip().split("[")[0].strip()
+                        report_lines.append(f"Naechstes: {next_step[:80]}")
+                report = "\n".join(report_lines)
+                self.communication.send_message(report, channel="telegram")
+            except Exception:
+                pass
+
         # Auto-Commit
         commit_msg = f"Sequenz {self.sequences_total}: {summary[:80]}"
         self.git.commit(commit_msg)
