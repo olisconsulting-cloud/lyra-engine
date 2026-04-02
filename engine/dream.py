@@ -13,10 +13,11 @@ Basiert auf dem oeffentlichen Claude Code Dream System-Prompt.
 """
 
 import json
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 
-from anthropic import Anthropic
+import httpx
 
 from .llm_router import MODELS, TASK_MODEL_MAP
 
@@ -28,8 +29,19 @@ class DreamEngine:
         self.base_path = base_path
         self.consciousness_path = base_path / "consciousness"
         self.dream_log_path = self.consciousness_path / "dream_log.json"
-        self.client = Anthropic()
-        self.model = MODELS[TASK_MODEL_MAP["dream"]]["model_id"]
+        model_key = TASK_MODEL_MAP["dream"]
+        model_config = MODELS[model_key]
+        self.provider = model_config["provider"]
+        self.model = model_config["model_id"]
+        if self.provider == "nvidia":
+            self.api_key = os.getenv("NVIDIA_API_KEY", "").strip()
+            self.api_url = "https://integrate.api.nvidia.com/v1/chat/completions"
+        elif self.provider == "deepseek":
+            self.api_key = os.getenv("DEEPSEEK_API_KEY", "").strip()
+            self.api_url = "https://api.deepseek.com/chat/completions"
+        else:
+            self.api_key = os.getenv("ANTHROPIC_API_KEY", "").strip()
+            self.api_url = "anthropic"  # Marker fuer Anthropic-Client
 
     def should_dream(self, sequences_since_last: int) -> bool:
         """Prueft ob eine Konsolidierung faellig ist."""
@@ -68,14 +80,30 @@ Antworte als JSON:
 }"""
 
         try:
-            response = self.client.messages.create(
-                model=self.model,
-                max_tokens=4000,
-                system=system_prompt,
-                messages=[{"role": "user", "content": context}],
-            )
-
-            result_text = response.content[0].text
+            if self.api_url == "anthropic":
+                from anthropic import Anthropic
+                client = Anthropic()
+                response = client.messages.create(
+                    model=self.model, max_tokens=4000,
+                    system=system_prompt,
+                    messages=[{"role": "user", "content": context}],
+                )
+                result_text = response.content[0].text
+            else:
+                with httpx.Client(timeout=60.0) as client:
+                    resp = client.post(
+                        self.api_url,
+                        headers={"Authorization": f"Bearer {self.api_key}",
+                                 "Content-Type": "application/json"},
+                        json={"model": self.model, "max_tokens": 4000,
+                              "messages": [
+                                  {"role": "system", "content": system_prompt},
+                                  {"role": "user", "content": context},
+                              ]},
+                    )
+                if resp.status_code != 200:
+                    return f"Dream-Fehler: API {resp.status_code}"
+                result_text = resp.json()["choices"][0]["message"]["content"]
 
             # JSON parsen
             import re

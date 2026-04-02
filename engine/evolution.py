@@ -10,6 +10,7 @@ Multi-Ebenen-Evolution — 5 Dimensionen des Wachstums.
 
 import json
 import random
+import os
 import re
 import subprocess
 import sys
@@ -77,11 +78,8 @@ class AdaptiveRhythm:
                 ),
             }
 
-        # 3. Aktive Goals → Execution
+        # 3. Aktive Goals → Execution (kein Evolution-Unterbruch)
         if has_active_goals:
-            # Aber: Alle 5 Sequenzen trotzdem eine Evolution einstreuen
-            if sequences % 5 == 4:
-                return self._evolution_mode()
             return {
                 "mode": "execution",
                 "reason": "Aktive Ziele vorhanden",
@@ -183,7 +181,9 @@ class AdaptiveRhythm:
 # 2. TOOL-FOUNDRY (ECHT — mit LLM-Call)
 # ============================================================
 
-FOUNDRY_MODEL = MODELS[TASK_MODEL_MAP["tool_generation"]]["model_id"]
+FOUNDRY_MODEL_KEY = TASK_MODEL_MAP["tool_generation"]
+FOUNDRY_MODEL = MODELS[FOUNDRY_MODEL_KEY]["model_id"]
+FOUNDRY_PROVIDER = MODELS[FOUNDRY_MODEL_KEY]["provider"]
 
 
 class ToolFoundry:
@@ -196,8 +196,17 @@ class ToolFoundry:
 
     def __init__(self, tools_path: Path):
         self.tools_path = tools_path
-        self.client = Anthropic()
         self.foundry_log_path = tools_path / "foundry_log.json"
+        self.provider = FOUNDRY_PROVIDER
+        if self.provider == "nvidia":
+            self.api_key = os.getenv("NVIDIA_API_KEY", "").strip()
+            self.api_url = "https://integrate.api.nvidia.com/v1/chat/completions"
+        elif self.provider == "deepseek":
+            self.api_key = os.getenv("DEEPSEEK_API_KEY", "").strip()
+            self.api_url = "https://api.deepseek.com/chat/completions"
+        else:
+            self.api_key = ""
+            self.api_url = "anthropic"
 
     def generate_tool(self, name: str, description: str, toolchain) -> str:
         """
@@ -228,13 +237,26 @@ Gib NUR den Python-Code zurueck. Kein Markdown, keine Erklaerung.
 Starte direkt mit import oder def."""
 
         try:
-            response = self.client.messages.create(
-                model=FOUNDRY_MODEL,
-                max_tokens=3000,
-                messages=[{"role": "user", "content": prompt}],
-            )
-
-            code = response.content[0].text.strip()
+            if self.api_url == "anthropic":
+                from anthropic import Anthropic
+                response = Anthropic().messages.create(
+                    model=FOUNDRY_MODEL, max_tokens=3000,
+                    messages=[{"role": "user", "content": prompt}],
+                )
+                code = response.content[0].text.strip()
+            else:
+                import httpx
+                with httpx.Client(timeout=60.0) as client:
+                    resp = client.post(
+                        self.api_url,
+                        headers={"Authorization": f"Bearer {self.api_key}",
+                                 "Content-Type": "application/json"},
+                        json={"model": FOUNDRY_MODEL, "max_tokens": 3000,
+                              "messages": [{"role": "user", "content": prompt}]},
+                    )
+                if resp.status_code != 200:
+                    return f"FEHLER bei Tool-Generierung: API {resp.status_code}"
+                code = resp.json()["choices"][0]["message"]["content"].strip()
 
             # Code-Block-Wrapper entfernen falls vorhanden
             if code.startswith("```"):

@@ -1225,7 +1225,18 @@ REGELN:
 
             # === Package Management ===
             elif name == "pip_install":
-                return self.pip.install(tool_input["package"])
+                pkg = tool_input["package"]
+                # Bereits installierte Pakete ueberspringen
+                if not hasattr(self, "_installed_packages"):
+                    self._installed_packages = set()
+                if pkg.lower() in self._installed_packages:
+                    return f"Bereits installiert: {pkg}"
+                result = self.pip.install(pkg)
+                if "already satisfied" in result.lower() or "installiert" in result.lower():
+                    self._installed_packages.add(pkg.lower())
+                elif not result.startswith("FEHLER"):
+                    self._installed_packages.add(pkg.lower())
+                return result
 
             # === Git ===
             elif name == "git_commit":
