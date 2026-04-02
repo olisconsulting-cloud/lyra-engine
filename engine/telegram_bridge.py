@@ -10,6 +10,7 @@ Zwei Modi:
 """
 
 import json
+import logging
 import os
 import threading
 import time
@@ -18,6 +19,8 @@ from pathlib import Path
 from typing import Optional
 
 import httpx
+
+logger = logging.getLogger(__name__)
 
 TELEGRAM_API = "https://api.telegram.org/bot{token}/{method}"
 
@@ -34,6 +37,7 @@ class TelegramBridge:
         self._polling_thread: Optional[threading.Thread] = None
         self._polling_active = False
         self._last_update_id = 0
+        self._consecutive_errors = 0
 
     # === Senden ===
 
@@ -147,7 +151,21 @@ class TelegramBridge:
         if self._polling_thread and self._polling_thread.is_alive():
             return
 
+        # Chat-ID Validierung beim Start
+        if not self.chat_id:
+            logger.error("Telegram: Keine TELEGRAM_CHAT_ID konfiguriert — Polling nicht gestartet")
+            return
+
+        # Verbindung testen
+        me = self.get_me()
+        if me.get("ok"):
+            bot_name = me.get("result", {}).get("username", "?")
+            logger.info("Telegram: Polling gestartet fuer Bot @%s (Chat %s)", bot_name, self.chat_id)
+        else:
+            logger.warning("Telegram: Bot-Verbindung fehlgeschlagen — Polling startet trotzdem: %s", me)
+
         self._polling_active = True
+        self._consecutive_errors = 0
         self._polling_thread = threading.Thread(
             target=self._polling_loop,
             args=(on_message,),
