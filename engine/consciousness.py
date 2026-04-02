@@ -38,8 +38,8 @@ from .quantum import FailureMemory, CriticAgent, PromptMutator, SkillComposer
 from . import config
 from .config import safe_json_write, safe_json_read
 
-MAX_STEPS_PER_SEQUENCE = 25          # Max Tool-Calls pro Sequenz (Sicherheitsnetz)
-MAX_INPUT_TOKENS_PER_SEQUENCE = 150_000  # ~10-12 Schritte, Soft-Warning bei 80% (120k)
+MAX_STEPS_PER_SEQUENCE = 15          # Realistisches Limit (Kompression + Token-Budget)
+MAX_INPUT_TOKENS_PER_SEQUENCE = 250_000  # Kumulativ — erlaubt 12-15 Steps mit Kompression
 MAX_TOKENS = 16000                    # Max Output-Tokens pro LLM-Call
 
 
@@ -2004,7 +2004,7 @@ REGELN:
                 break
 
             # Sliding Window: Alte Tool-Results komprimieren ab Step 8
-            if step >= 8:
+            if step >= 5:
                 self._compress_old_messages(messages, keep_recent=6)
 
             try:
