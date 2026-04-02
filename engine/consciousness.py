@@ -38,9 +38,9 @@ from .quantum import FailureMemory, CriticAgent, PromptMutator, SkillComposer
 from . import config
 from .config import safe_json_write, safe_json_read
 
-MAX_STEPS_PER_SEQUENCE = 50
-MAX_INPUT_TOKENS_PER_SEQUENCE = 300_000  # Kosten-Ceiling pro Sequenz
-MAX_TOKENS = 16000
+MAX_STEPS_PER_SEQUENCE = 25          # Max Tool-Calls pro Sequenz (fokussiert)
+MAX_INPUT_TOKENS_PER_SEQUENCE = 100_000  # Kuerzere Sequenzen = klarerer Fokus
+MAX_TOKENS = 16000                    # Max Output-Tokens pro LLM-Call
 
 
 # === Tool-Definitionen fuer Anthropic API ===
