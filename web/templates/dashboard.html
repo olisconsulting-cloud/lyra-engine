@@ -1,0 +1,531 @@
+<!DOCTYPE html>
+<html lang="de" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Phi — Dashboard</title>
+
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    colors: {
+                        phi: {
+                            50: '#f0f9ff',
+                            100: '#e0f2fe',
+                            200: '#bae6fd',
+                            300: '#7dd3fc',
+                            400: '#38bdf8',
+                            500: '#0ea5e9',
+                            600: '#0284c7',
+                            700: '#0369a1',
+                            800: '#075985',
+                            900: '#0c4a6e',
+                            950: '#082f49',
+                        },
+                        surface: {
+                            0: '#0a0a0f',
+                            1: '#12121a',
+                            2: '#1a1a25',
+                            3: '#222230',
+                            4: '#2a2a3a',
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+
+    <!-- Alpine.js -->
+    <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+
+    <!-- ApexCharts -->
+    <script src="https://cdn.jsdelivr.net/npm/apexcharts"></script>
+
+    <!-- Inter Font -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+
+    <style>
+        * { font-family: 'Inter', sans-serif; }
+        code, .mono { font-family: 'JetBrains Mono', monospace; }
+
+        /* Scrollbar */
+        ::-webkit-scrollbar { width: 6px; height: 6px; }
+        ::-webkit-scrollbar-track { background: #12121a; }
+        ::-webkit-scrollbar-thumb { background: #2a2a3a; border-radius: 3px; }
+        ::-webkit-scrollbar-thumb:hover { background: #3a3a4a; }
+
+        /* Glow-Effekte */
+        .glow-blue { box-shadow: 0 0 20px rgba(14, 165, 233, 0.15); }
+        .glow-green { box-shadow: 0 0 20px rgba(34, 197, 94, 0.15); }
+        .glow-amber { box-shadow: 0 0 20px rgba(245, 158, 11, 0.15); }
+
+        /* Pulsierender Punkt */
+        @keyframes pulse-dot {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.4; }
+        }
+        .pulse-dot { animation: pulse-dot 2s ease-in-out infinite; }
+
+        /* Progress-Bar Animation */
+        .progress-fill { transition: width 0.8s cubic-bezier(0.4, 0, 0.2, 1); }
+
+        /* Karten-Hover */
+        .card {
+            background: #12121a;
+            border: 1px solid #222230;
+            border-radius: 12px;
+            transition: border-color 0.2s, box-shadow 0.2s;
+        }
+        .card:hover {
+            border-color: #2a2a3a;
+        }
+
+        /* ApexCharts Dark-Theme Override */
+        .apexcharts-tooltip {
+            background: #1a1a25 !important;
+            border: 1px solid #2a2a3a !important;
+            color: #e2e8f0 !important;
+        }
+        .apexcharts-tooltip-title {
+            background: #222230 !important;
+            border-bottom: 1px solid #2a2a3a !important;
+        }
+    </style>
+</head>
+
+<body class="bg-surface-0 text-gray-200 min-h-screen" x-data="dashboard()" x-init="init()">
+
+    <!-- Header -->
+    <header class="sticky top-0 z-50 bg-surface-0/80 backdrop-blur-xl border-b border-surface-3">
+        <div class="max-w-[1600px] mx-auto px-6 py-4 flex items-center justify-between">
+            <div class="flex items-center gap-4">
+                <div class="w-10 h-10 rounded-xl bg-gradient-to-br from-phi-500 to-phi-700 flex items-center justify-center">
+                    <span class="text-white font-bold text-lg">&Phi;</span>
+                </div>
+                <div>
+                    <h1 class="text-lg font-semibold text-white">Phi Dashboard</h1>
+                    <p class="text-xs text-gray-500 mono" x-text="'Sequenz ' + state.sequences_total + ' · ' + state.last_sequence_ago"></p>
+                </div>
+            </div>
+
+            <div class="flex items-center gap-6">
+                <!-- Live-Indikator -->
+                <div class="flex items-center gap-2">
+                    <div class="w-2 h-2 rounded-full pulse-dot"
+                         :class="connected ? 'bg-green-400' : 'bg-red-400'"></div>
+                    <span class="text-xs text-gray-400" x-text="connected ? 'Live' : 'Offline'"></span>
+                </div>
+
+                <!-- Nachrichten -->
+                <div class="relative" x-show="state.unread_messages > 0">
+                    <span class="text-xs bg-phi-600 text-white px-2 py-0.5 rounded-full" x-text="state.unread_messages + ' ungelesen'"></span>
+                </div>
+
+                <!-- Refresh -->
+                <button @click="fetchState()" class="text-gray-400 hover:text-white transition-colors">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+                    </svg>
+                </button>
+            </div>
+        </div>
+    </header>
+
+    <!-- Hauptinhalt -->
+    <main class="max-w-[1600px] mx-auto px-6 py-6">
+
+        <!-- Status-Karten (obere Reihe) -->
+        <div class="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4 mb-6">
+            <template x-for="metric in statusMetrics" :key="metric.label">
+                <div class="card p-4">
+                    <p class="text-xs text-gray-500 mb-1" x-text="metric.label"></p>
+                    <p class="text-xl font-semibold mono" :class="metric.color" x-text="metric.value"></p>
+                </div>
+            </template>
+        </div>
+
+        <!-- Hauptbereich: 2-Spalten Layout -->
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+
+            <!-- Linke Spalte (2/3) -->
+            <div class="lg:col-span-2 space-y-6">
+
+                <!-- Goals -->
+                <div class="card p-6">
+                    <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-4">Aktive Ziele</h2>
+                    <div class="space-y-4">
+                        <template x-for="goal in state.goals" :key="goal.id">
+                            <div class="bg-surface-2 rounded-lg p-4">
+                                <div class="flex items-center justify-between mb-2">
+                                    <h3 class="text-sm font-medium text-white" x-text="goal.title"></h3>
+                                    <span class="text-xs mono text-phi-400" x-text="goal.done + '/' + goal.total"></span>
+                                </div>
+                                <!-- Progress Bar -->
+                                <div class="w-full h-2 bg-surface-4 rounded-full overflow-hidden mb-3">
+                                    <div class="h-full bg-gradient-to-r from-phi-600 to-phi-400 rounded-full progress-fill"
+                                         :style="'width: ' + (goal.progress * 100) + '%'"></div>
+                                </div>
+                                <!-- Sub-Goals -->
+                                <div class="space-y-1.5">
+                                    <template x-for="sg in goal.sub_goals" :key="sg.index">
+                                        <div class="flex items-start gap-2 text-xs">
+                                            <span class="mt-0.5 flex-shrink-0"
+                                                  :class="sg.status === 'done' ? 'text-green-400' : sg.status === 'in_progress' ? 'text-amber-400' : 'text-gray-600'"
+                                                  x-text="sg.status === 'done' ? '\u2713' : sg.status === 'in_progress' ? '\u25B6' : '\u25CB'"></span>
+                                            <span :class="sg.status === 'done' ? 'text-gray-500 line-through' : 'text-gray-300'"
+                                                  x-text="sg.title"></span>
+                                        </div>
+                                    </template>
+                                </div>
+                            </div>
+                        </template>
+                        <p x-show="state.goals.length === 0" class="text-gray-600 text-sm">Keine aktiven Ziele.</p>
+                    </div>
+                </div>
+
+                <!-- Effizienz-Charts -->
+                <div class="card p-6">
+                    <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-4">Effizienz</h2>
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div id="chart-tokens" class="h-48"></div>
+                        <div id="chart-costs" class="h-48"></div>
+                        <div id="chart-tools" class="h-48"></div>
+                        <div id="chart-duration" class="h-48"></div>
+                    </div>
+                </div>
+
+                <!-- Sequenz-Gedaechtnis (Timeline) -->
+                <div class="card p-6">
+                    <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-4">Sequenz-Verlauf</h2>
+                    <div class="space-y-3 max-h-96 overflow-y-auto pr-2">
+                        <template x-for="entry in [...state.sequence_memory].reverse()" :key="entry.seq">
+                            <div class="flex gap-3">
+                                <div class="flex flex-col items-center">
+                                    <div class="w-8 h-8 rounded-full bg-surface-3 flex items-center justify-center flex-shrink-0">
+                                        <span class="text-xs mono text-phi-400" x-text="entry.seq"></span>
+                                    </div>
+                                    <div class="w-px h-full bg-surface-3 mt-1"></div>
+                                </div>
+                                <div class="pb-4">
+                                    <p class="text-xs text-gray-500 mb-1 mono" x-text="formatTime(entry.timestamp)"></p>
+                                    <p class="text-sm text-gray-300 leading-relaxed" x-text="entry.summary"></p>
+                                </div>
+                            </div>
+                        </template>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Rechte Spalte (1/3) -->
+            <div class="space-y-6">
+
+                <!-- Skills -->
+                <div class="card p-6">
+                    <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-4">Skills</h2>
+                    <div class="space-y-2.5 max-h-80 overflow-y-auto pr-2">
+                        <template x-for="skill in state.skills.slice(0, 15)" :key="skill.name">
+                            <div>
+                                <div class="flex items-center justify-between mb-1">
+                                    <span class="text-xs text-gray-300" x-text="skill.name.replace(/_/g, ' ')"></span>
+                                    <div class="flex items-center gap-2">
+                                        <span class="text-[10px] px-1.5 py-0.5 rounded-full"
+                                              :class="{
+                                                  'bg-gray-800 text-gray-400': skill.level === 'beginner',
+                                                  'bg-blue-900/50 text-blue-300': skill.level === 'intermediate',
+                                                  'bg-purple-900/50 text-purple-300': skill.level === 'advanced',
+                                                  'bg-amber-900/50 text-amber-300': skill.level === 'expert'
+                                              }"
+                                              x-text="skill.level"></span>
+                                    </div>
+                                </div>
+                                <div class="flex items-center gap-2">
+                                    <div class="flex-1 h-1.5 bg-surface-4 rounded-full overflow-hidden">
+                                        <div class="h-full rounded-full progress-fill"
+                                             :class="{
+                                                 'bg-gray-500': skill.level === 'beginner',
+                                                 'bg-blue-500': skill.level === 'intermediate',
+                                                 'bg-purple-500': skill.level === 'advanced',
+                                                 'bg-amber-500': skill.level === 'expert'
+                                             }"
+                                             :style="'width: ' + Math.min(100, (skill.successes / (maxSkillSuccesses || 1)) * 100) + '%'"></div>
+                                    </div>
+                                    <span class="text-[10px] mono text-gray-500" x-text="skill.successes + '/' + (skill.successes + skill.failures)"></span>
+                                </div>
+                            </div>
+                        </template>
+                    </div>
+                </div>
+
+                <!-- Working Memory -->
+                <div class="card p-6">
+                    <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-4">Working Memory</h2>
+                    <div class="text-xs text-gray-400 leading-relaxed max-h-64 overflow-y-auto pr-2 whitespace-pre-wrap mono"
+                         x-text="state.working_memory || '(leer)'"></div>
+                </div>
+
+                <!-- Persoenlichkeit -->
+                <div class="card p-6">
+                    <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-4">Persoenlichkeit</h2>
+                    <div class="space-y-2">
+                        <template x-for="(value, trait) in state.traits" :key="trait">
+                            <div>
+                                <div class="flex justify-between text-xs mb-1">
+                                    <span class="text-gray-400" x-text="trait"></span>
+                                    <span class="mono text-gray-500" x-text="(value * 100).toFixed(0) + '%'"></span>
+                                </div>
+                                <div class="w-full h-1.5 bg-surface-4 rounded-full overflow-hidden">
+                                    <div class="h-full bg-phi-600 rounded-full progress-fill"
+                                         :style="'width: ' + (value * 100) + '%'"></div>
+                                </div>
+                            </div>
+                        </template>
+                    </div>
+
+                    <div class="mt-3" x-show="state.values.length > 0">
+                        <p class="text-xs text-gray-500 mb-1.5">Werte</p>
+                        <div class="flex flex-wrap gap-1.5">
+                            <template x-for="v in state.values" :key="v">
+                                <span class="text-[10px] px-2 py-0.5 bg-surface-3 rounded-full text-gray-400" x-text="v"></span>
+                            </template>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Beliefs -->
+                <div class="card p-6" x-show="state.beliefs.length > 0">
+                    <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-4">
+                        Ueberzeugungen
+                        <span class="text-gray-600 font-normal" x-text="'(' + state.beliefs.length + ')'"></span>
+                    </h2>
+                    <div class="space-y-2 max-h-48 overflow-y-auto pr-2">
+                        <template x-for="(belief, i) in state.beliefs.slice(-5)" :key="i">
+                            <p class="text-xs text-gray-400 leading-relaxed border-l-2 border-surface-4 pl-3" x-text="belief"></p>
+                        </template>
+                    </div>
+                </div>
+
+                <!-- Memory-Statistiken -->
+                <div class="card p-6">
+                    <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-4">Memory</h2>
+                    <div class="grid grid-cols-3 gap-3 text-center">
+                        <div>
+                            <p class="text-lg font-semibold mono text-white" x-text="state.total_experiences"></p>
+                            <p class="text-[10px] text-gray-500">Erfahrungen</p>
+                        </div>
+                        <div>
+                            <p class="text-lg font-semibold mono text-white" x-text="state.total_reflections"></p>
+                            <p class="text-[10px] text-gray-500">Reflexionen</p>
+                        </div>
+                        <div>
+                            <p class="text-lg font-semibold mono text-white" x-text="state.semantic_entries"></p>
+                            <p class="text-[10px] text-gray-500">Semantisch</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <!-- Footer -->
+    <footer class="border-t border-surface-3 mt-12 py-4">
+        <div class="max-w-[1600px] mx-auto px-6 flex items-center justify-between text-xs text-gray-600">
+            <span>Phi Engine v1.0 &middot; Geboren <span x-text="state.born"></span></span>
+            <span>Auto-Refresh alle 5s &middot; <span class="mono" x-text="new Date().toLocaleTimeString('de-DE')"></span></span>
+        </div>
+    </footer>
+
+    <script>
+    function dashboard() {
+        return {
+            state: {
+                sequences_total: 0,
+                total_tool_calls: 0,
+                last_sequence: '',
+                last_sequence_ago: '...',
+                awake_since: '',
+                born: '?',
+                goals: [],
+                completed_goals: [],
+                skills: [],
+                efficiency: { timestamps: [], tool_calls: [], tokens: [], costs: [], durations: [], errors: [], files_written: [] },
+                sequence_memory: [],
+                working_memory: '',
+                traits: {},
+                values: [],
+                style: [],
+                beliefs: [],
+                total_experiences: 0,
+                total_reflections: 0,
+                semantic_entries: 0,
+                unread_messages: 0,
+                total_cost: 0,
+            },
+            connected: false,
+            ws: null,
+            charts: {},
+            refreshTimer: null,
+
+            get statusMetrics() {
+                return [
+                    { label: 'Sequenzen', value: this.state.sequences_total, color: 'text-white' },
+                    { label: 'Tool-Calls', value: this.state.total_tool_calls, color: 'text-white' },
+                    { label: 'Letzte Sequenz', value: this.state.last_sequence_ago, color: 'text-phi-400' },
+                    { label: 'Gesamtkosten', value: '$' + this.state.total_cost.toFixed(3), color: 'text-green-400' },
+                    { label: 'Erfahrungen', value: this.state.total_experiences, color: 'text-white' },
+                    { label: 'Skills', value: this.state.skills.length, color: 'text-white' },
+                ];
+            },
+
+            get maxSkillSuccesses() {
+                if (!this.state.skills.length) return 1;
+                return Math.max(...this.state.skills.map(s => s.successes));
+            },
+
+            async init() {
+                await this.fetchState();
+                this.connectWebSocket();
+                // Auto-Refresh alle 5 Sekunden
+                this.refreshTimer = setInterval(() => this.fetchState(), 5000);
+            },
+
+            async fetchState() {
+                try {
+                    const res = await fetch('/api/state');
+                    if (res.ok) {
+                        this.state = await res.json();
+                        this.$nextTick(() => this.updateCharts());
+                    }
+                } catch (e) {
+                    console.warn('Fetch fehlgeschlagen:', e);
+                }
+            },
+
+            connectWebSocket() {
+                const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+                this.ws = new WebSocket(`${proto}//${location.host}/ws`);
+
+                this.ws.onopen = () => { this.connected = true; };
+                this.ws.onclose = () => {
+                    this.connected = false;
+                    // Reconnect nach 3 Sekunden
+                    setTimeout(() => this.connectWebSocket(), 3000);
+                };
+                this.ws.onmessage = (e) => {
+                    const data = JSON.parse(e.data);
+                    if (data.type === 'state_changed') {
+                        this.fetchState();
+                    }
+                };
+            },
+
+            formatTime(iso) {
+                if (!iso) return '';
+                try {
+                    const d = new Date(iso);
+                    return d.toLocaleString('de-DE', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+                } catch { return iso; }
+            },
+
+            updateCharts() {
+                const eff = this.state.efficiency;
+                if (!eff.timestamps.length) return;
+
+                const labels = eff.timestamps.map((t, i) => `#${i + 1}`);
+                const baseOpts = {
+                    chart: {
+                        background: 'transparent',
+                        toolbar: { show: false },
+                        animations: { enabled: true, easing: 'easeinout', speed: 600 },
+                    },
+                    theme: { mode: 'dark' },
+                    grid: { borderColor: '#222230', strokeDashArray: 3 },
+                    xaxis: {
+                        categories: labels,
+                        labels: { style: { colors: '#64748b', fontSize: '10px', fontFamily: 'JetBrains Mono' } },
+                        axisBorder: { show: false },
+                        axisTicks: { show: false },
+                    },
+                    yaxis: {
+                        labels: { style: { colors: '#64748b', fontSize: '10px', fontFamily: 'JetBrains Mono' } },
+                    },
+                    tooltip: { theme: 'dark' },
+                    stroke: { curve: 'smooth', width: 2 },
+                    fill: {
+                        type: 'gradient',
+                        gradient: { shadeIntensity: 1, opacityFrom: 0.4, opacityTo: 0.05, stops: [0, 100] },
+                    },
+                };
+
+                this.renderChart('chart-tokens', {
+                    ...baseOpts,
+                    chart: { ...baseOpts.chart, type: 'area', height: 180 },
+                    series: [{ name: 'Tokens', data: eff.tokens }],
+                    colors: ['#0ea5e9'],
+                    title: { text: 'Tokens pro Sequenz', style: { fontSize: '12px', color: '#94a3b8', fontFamily: 'Inter' } },
+                });
+
+                this.renderChart('chart-costs', {
+                    ...baseOpts,
+                    chart: { ...baseOpts.chart, type: 'area', height: 180 },
+                    series: [{ name: 'Kosten ($)', data: eff.costs }],
+                    colors: ['#22c55e'],
+                    title: { text: 'Kosten pro Sequenz', style: { fontSize: '12px', color: '#94a3b8', fontFamily: 'Inter' } },
+                    yaxis: {
+                        ...baseOpts.yaxis,
+                        labels: {
+                            ...baseOpts.yaxis.labels,
+                            formatter: (v) => '$' + v.toFixed(3),
+                        },
+                    },
+                });
+
+                this.renderChart('chart-tools', {
+                    ...baseOpts,
+                    chart: { ...baseOpts.chart, type: 'bar', height: 180 },
+                    series: [
+                        { name: 'Tool-Calls', data: eff.tool_calls },
+                        { name: 'Fehler', data: eff.errors },
+                    ],
+                    colors: ['#8b5cf6', '#ef4444'],
+                    plotOptions: { bar: { borderRadius: 3, columnWidth: '60%' } },
+                    title: { text: 'Tools & Fehler', style: { fontSize: '12px', color: '#94a3b8', fontFamily: 'Inter' } },
+                    fill: { type: 'solid', opacity: 0.85 },
+                });
+
+                this.renderChart('chart-duration', {
+                    ...baseOpts,
+                    chart: { ...baseOpts.chart, type: 'area', height: 180 },
+                    series: [{ name: 'Dauer (s)', data: eff.durations }],
+                    colors: ['#f59e0b'],
+                    title: { text: 'Sequenz-Dauer', style: { fontSize: '12px', color: '#94a3b8', fontFamily: 'Inter' } },
+                    yaxis: {
+                        ...baseOpts.yaxis,
+                        labels: {
+                            ...baseOpts.yaxis.labels,
+                            formatter: (v) => v.toFixed(0) + 's',
+                        },
+                    },
+                });
+            },
+
+            renderChart(id, opts) {
+                const el = document.querySelector('#' + id);
+                if (!el) return;
+
+                if (this.charts[id]) {
+                    this.charts[id].updateOptions(opts, true, true);
+                } else {
+                    this.charts[id] = new ApexCharts(el, opts);
+                    this.charts[id].render();
+                }
+            },
+        }
+    }
+    </script>
+</body>
+</html>
