@@ -11,6 +11,7 @@ Dann: State speichern, neue Wahrnehmung, weiter.
 """
 
 import json
+import tempfile
 import threading
 import time
 from datetime import datetime, timedelta, timezone
@@ -819,17 +820,39 @@ REGELN:
                             lines.append(f"- {sg['title'][:60]}: {sg['result'][:100]}")
                 lines.append("")
 
-            # Altes Wissen uebernehmen das noch relevant ist
-            # (Abschnitt "Erkenntnisse" aus alter Notiz behalten)
-            if old and "## Erkenntnisse" in old:
-                erkenntnisse = old.split("## Erkenntnisse")[1].split("##")[0].strip()
-                if erkenntnisse:
-                    lines.append(f"## Erkenntnisse")
-                    lines.append(erkenntnisse[:500])
-                    lines.append("")
+            # Altes Wissen uebernehmen: Letzte Sequenz-Ergebnisse akkumulieren
+            # Jede Sequenz fuegt ihre Summary hinzu, max 5 Eintraege behalten
+            old_history = []
+            if old and "## Verlauf" in old:
+                verlauf_text = old.split("## Verlauf")[1].split("##")[0].strip()
+                # Bisherige Eintraege parsen
+                old_history = [l.strip() for l in verlauf_text.split("\n") if l.strip().startswith("- ")]
+
+            if summary:
+                # Neuen Eintrag vorne anfuegen, auf 5 begrenzen
+                short_summary = summary.replace("\n", " ")[:150]
+                old_history.insert(0, f"- Seq {self.sequences_total + 1}: {short_summary}")
+                old_history = old_history[:5]
+
+            if old_history:
+                lines.append(f"## Verlauf")
+                lines.extend(old_history)
+                lines.append("")
 
             content = "\n".join(lines)[:2000]
-            wm_path.write_text(content, encoding="utf-8")
+            # Atomar schreiben — temp + rename
+            tmp_fd, tmp_path = tempfile.mkstemp(
+                dir=str(wm_path.parent), suffix=".tmp"
+            )
+            try:
+                with open(tmp_fd, "w", encoding="utf-8") as f:
+                    f.write(content)
+                Path(tmp_path).replace(wm_path)
+            except Exception:
+                try:
+                    Path(tmp_path).unlink(missing_ok=True)
+                except OSError:
+                    pass
         except Exception:
             pass
 
@@ -860,10 +883,7 @@ REGELN:
         now = datetime.now(timezone.utc)
         parts.append(f"Zeit: {now.strftime('%Y-%m-%d %H:%M')} UTC")
 
-        # Sequenz-Memory (Kontext aus vorherigen Sequenzen)
-        seq_memory = self._load_sequence_memory()
-        if seq_memory:
-            parts.append(f"\n{seq_memory}")
+        # (Sequenz-Memory entfaellt — Working Memory uebernimmt diese Rolle)
 
         # Nachrichten von Oliver
         messages = self.communication.check_inbox()
