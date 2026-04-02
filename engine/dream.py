@@ -207,8 +207,8 @@ Antworte als JSON:
                 with open(beliefs_path, "w", encoding="utf-8") as f:
                     json.dump(beliefs, f, indent=2, ensure_ascii=False)
                 applied.append(f"Beliefs: {len(new_beliefs)} konsolidiert")
-            except Exception:
-                pass
+            except (OSError, json.JSONDecodeError) as e:
+                applied.append(f"Beliefs-Update fehlgeschlagen: {e}")
 
         # Strategien updaten
         strategy_updates = result.get("strategy_updates", [])
@@ -250,8 +250,8 @@ Antworte als JSON:
                 with open(seq_mem_path, "w", encoding="utf-8") as f:
                     json.dump(data, f, indent=2, ensure_ascii=False)
                 applied.append("Summary gespeichert")
-            except Exception:
-                pass
+            except (OSError, json.JSONDecodeError) as e:
+                applied.append(f"Summary-Speicherung fehlgeschlagen: {e}")
 
         return ", ".join(applied) if applied else "Keine Aenderungen"
 
@@ -273,5 +273,5 @@ Antworte als JSON:
 
             with open(self.dream_log_path, "w", encoding="utf-8") as f:
                 json.dump(log, f, indent=2, ensure_ascii=False)
-        except Exception:
-            pass
+        except (OSError, json.JSONDecodeError) as e:
+            print(f"WARNUNG: Dream-Log konnte nicht geschrieben werden: {e}")

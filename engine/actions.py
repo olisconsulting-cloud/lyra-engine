@@ -256,7 +256,11 @@ class ActionEngine:
         """
         project_path = self.projects_path / name
         if project_path.exists():
-            return f"Projekt '{name}' existiert bereits."
+            return (
+                f"FEHLER: Projekt '{name}' existiert bereits! "
+                f"Nutze read_file/write_file um am bestehenden Projekt zu arbeiten. "
+                f"Pfad: projects/{name}/"
+            )
 
         # Aehnliche Projekte pruefen (Wort-Overlap im Namen)
         if self.projects_path.exists():
@@ -274,8 +278,9 @@ class ActionEngine:
                 union = len(new_words | ex_words)
                 if union and overlap / union >= 0.5:
                     return (
-                        f"AEHNLICHES PROJEKT EXISTIERT: '{existing.name}'. "
-                        f"Arbeite am bestehenden Projekt statt ein neues zu erstellen!"
+                        f"FEHLER: AEHNLICHES PROJEKT EXISTIERT: '{existing.name}'. "
+                        f"ERSTELLE KEIN NEUES PROJEKT! Arbeite am bestehenden Projekt weiter. "
+                        f"Pfad: projects/{existing.name}/"
                     )
 
         project_path.mkdir(parents=True)
@@ -432,7 +437,7 @@ if __name__ == "__main__":
                 content += f"\n{line}"
 
             progress_path.write_text(content, encoding="utf-8")
-        except Exception:
-            pass
+        except (OSError, ValueError) as e:
+            print(f"WARNUNG: Progress-Update fehlgeschlagen: {e}")
 
     # Ziele werden ueber GoalStack verwaltet (engine/goal_stack.py), nicht hier.

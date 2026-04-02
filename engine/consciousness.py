@@ -2298,6 +2298,9 @@ REGELN:
         self._seq_written_paths = []  # Pfade der geschriebenen Dateien
         self._modify_count_this_seq = 0  # Max 3 modify_own_code pro Sequenz
 
+        # Spin-Detection: Wiederholte gescheiterte Aktionen tracken
+        failed_actions = {}  # "tool_name:key" -> Anzahl Fehlversuche
+
         # System-Prompt einmalig pro Sequenz bauen (nicht pro Step)
         cached_system_prompt = self._build_system_prompt()
 
