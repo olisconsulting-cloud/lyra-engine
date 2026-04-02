@@ -267,13 +267,15 @@ class SemanticMemory:
 
         # 3. Wenn immer noch > 400, die unwichtigsten alten entfernen
         if len(all_entries) > 400:
-            # Nur die aeltesten (merged) nach Importance sortieren und kuerzen
             merged.sort(key=lambda e: e.get("importance", 0.3), reverse=True)
             keep_count = 400 - len(recent_entries)
             merged = merged[:max(keep_count, 50)]
             all_entries = merged + recent_entries
 
+        # Chronologische Reihenfolge wiederherstellen
+        all_entries.sort(key=lambda e: e.get("timestamp", ""))
         self.index["entries"] = all_entries
+        self._save_index()
 
     def search(self, query: str, top_k: int = 5) -> list[dict]:
         """
@@ -307,12 +309,15 @@ class SemanticMemory:
             entry_vec = self._tfidf_vector(entry_all)
             sim = self._cosine_similarity(query_vec, entry_vec)
             if sim > 0.005:
-                scored.append((sim, entry))
+                # Gewichteter Score: Similarity + Importance-Boost
+                importance = entry.get("importance", 0.3)
+                weighted = sim + (importance * 0.2)
+                scored.append((weighted, sim, entry))
 
         scored.sort(key=lambda x: x[0], reverse=True)
 
         results = []
-        for sim, entry in scored[:top_k]:
+        for weighted, sim, entry in scored[:top_k]:
             # Access-Counter erhoehen (haeufig abgerufene Memories bleiben laenger)
             entry["access_count"] = entry.get("access_count", 0) + 1
             results.append({

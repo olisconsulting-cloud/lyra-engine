@@ -171,22 +171,23 @@ Antworte als JSON:
 
         # Beliefs konsolidieren (Guard: nie leere Liste uebernehmen)
         new_beliefs = result.get("consolidated_beliefs", [])
-        if new_beliefs and len(new_beliefs) >= 3:  # Mindestens 3 Beliefs behalten
+        if new_beliefs and len(new_beliefs) >= 3:
             beliefs_path = self.consciousness_path / "beliefs.json"
-            with open(beliefs_path, "r", encoding="utf-8") as f:
-                beliefs = json.load(f)
-            beliefs["formed_from_experience"] = new_beliefs
-            with open(beliefs_path, "w", encoding="utf-8") as f:
-                json.dump(beliefs, f, indent=2, ensure_ascii=False)
-            applied.append(f"Beliefs: {len(new_beliefs)} konsolidiert")
+            try:
+                beliefs = self._safe_load_json(beliefs_path) or {}
+                beliefs["formed_from_experience"] = new_beliefs
+                with open(beliefs_path, "w", encoding="utf-8") as f:
+                    json.dump(beliefs, f, indent=2, ensure_ascii=False)
+                applied.append(f"Beliefs: {len(new_beliefs)} konsolidiert")
+            except Exception:
+                pass
 
         # Strategien updaten
         strategy_updates = result.get("strategy_updates", [])
         if strategy_updates:
             strategies_path = self.consciousness_path / "strategies.json"
-            if strategies_path.exists():
-                with open(strategies_path, "r", encoding="utf-8") as f:
-                    strategies = json.load(f)
+            strategies = self._safe_load_json(strategies_path)
+            if isinstance(strategies, list):
 
                 # Regeln die geloescht werden sollen entfernen
                 delete_rules = [
