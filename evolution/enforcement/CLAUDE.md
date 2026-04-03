@@ -47,7 +47,7 @@ Beispiel: `if step >= 15 and not finished: force_finish_sequence()`
 - Enforcement darf NICHT zu aggressiv sein — Step 15 ist konservativ
 - Phi muss im Narrator SEHEN warum auto-finished wurde (Transparenz)
 - Jeder Enforcement wird in MetaCognition geloggt (Lern-Feedback)
-- KEIN Enforcement fuer evolution/sprint Modus (Selbstverbesserung braucht Raum)
+- evolution/sprint: erhoehtes Limit (25 statt 15) — Selbstverbesserung braucht Raum, aber kein Freifahrtschein
 
 ## Metriken
 - **Vorher**: productive_steps/total_steps = ~22% (Baseline aus metacognition.json)

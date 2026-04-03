@@ -53,6 +53,10 @@ from .message_compression import compress_old_messages, estimate_tokens
 from .reporting import build_narrative_report
 from . import llm_ops
 from .handlers import ToolContext, register_all_handlers
+from .tool_lifecycle import (
+    ToolMetrics, ToolPruner, ToolDreamBridge,
+    ToolMetaPatterns, ToolConsolidator, PromotionEngine,
+)
 from .perception_pipeline import PerceptionPipeline
 from .unified_memory import (
     UnifiedMemory, semantic_adapter, experience_adapter,
@@ -625,6 +629,13 @@ class ConsciousnessEngine:
         self.foundry = ToolFoundry(config.TOOLS_PATH)
         self.curator = ToolCurator(config.TOOLS_PATH, config.TOOLS_PATH / "registry.json")
         self.benchmark = SelfBenchmark(config.DATA_PATH, config.ROOT_PATH)
+
+        # Tool-Lifecycle: Metrics + Pruner (frueh, da keine Dependencies)
+        self.tool_metrics = ToolMetrics(config.TOOLS_PATH)
+        self.tool_pruner = ToolPruner(self.toolchain, self.tool_metrics)
+        # Metrics-Callback in Toolchain verdrahten
+        self.toolchain._metrics_callback = lambda name, ok, err="": \
+            self.tool_metrics.record_use(name, ok, error=err)
         self.learning = LearningEngine(config.DATA_PATH)
         self.metacognition = MetaCognition(config.DATA_PATH)
         self.failure_memory = FailureMemory(config.DATA_PATH)
@@ -652,6 +663,18 @@ class ConsciousnessEngine:
         self.seq_intel = SequenceIntelligence(self.consciousness_path)
         self.skill_library = SkillLibrary(config.DATA_PATH)
         self.proactive_learner = ProactiveLearner(config.DATA_PATH)
+
+        # Tool-Lifecycle: Module die seq_intel brauchen
+        self.tool_meta_patterns = ToolMetaPatterns(self.seq_intel.meta_rules)
+        self.tool_dream_bridge = ToolDreamBridge(self.toolchain, self.tool_metrics)
+        self.tool_consolidator = ToolConsolidator(
+            self.curator, self.foundry, self.toolchain, self.tool_metrics
+        )
+        self.tool_promotion = PromotionEngine(
+            self.toolchain, self.tool_metrics, data_path=config.TOOLS_PATH
+        )
+        # Dream-Bridge in DreamEngine verdrahten
+        self.dream.tool_dream_bridge = self.tool_dream_bridge
 
         # Event-Bus — Echtzeit-Kommunikation zwischen Subsystemen
         self.event_bus = EventBus()
@@ -1502,6 +1525,8 @@ SEQUENZ-PLANUNG: Nutze write_sequence_plan am Anfang — plane dein Ziel, Exit-K
             dependency_analyzer=self.dependency_analyzer,
             silent_failure_detector=self.silent_failure_detector,
             failure_memory=self.failure_memory,
+            tool_metrics=self.tool_metrics,
+            tool_meta_patterns=self.tool_meta_patterns,
             sequences_total=self.sequences_total,
             _installed_packages=self._installed_packages,
             # Callbacks fuer Logik die in consciousness.py bleibt
@@ -2364,6 +2389,21 @@ Antworte als JSON:
                             result += f" | {removed} alte Erinnerungen konsolidiert"
                     except Exception as e:
                         logger.warning(f" Memory-Konsolidierung fehlgeschlagen: {e}")
+
+                    # Tool-Lifecycle: Pruning + Konsolidierung + Promotion
+                    try:
+                        prune_result = self.tool_pruner.auto_prune()
+                        if prune_result:
+                            result += f" | {prune_result}"
+                        consol_result = self.tool_consolidator.auto_consolidate()
+                        if consol_result:
+                            result += f" | {consol_result}"
+                        promo_result = self.tool_promotion.auto_nominate()
+                        if promo_result:
+                            result += f" | {promo_result}"
+                    except Exception as e:
+                        logger.warning(f"Tool-Lifecycle im Dream-Zyklus fehlgeschlagen: {e}")
+
                     self.narrator.dream_end(result)
                     self._sequences_since_dream = 0
 
@@ -2886,9 +2926,12 @@ Antworte als JSON:
                 is_evo = mode.get("mode") in ("evolution", "sprint")
                 enforcement_limit = 25 if is_evo else 15
                 if step >= enforcement_limit and not finished:
-                    self.narrator.enforcement("auto_finish", step, enforcement_limit)
-                    # MetaCognition: Enforcement loggen (Lern-Feedback)
                     m = self.seq_intel.metrics
+                    self.narrator.enforcement(
+                        "auto_finish", step, enforcement_limit,
+                        files=m.files_written, errors=m.errors,
+                    )
+                    # MetaCognition: Enforcement loggen (Lern-Feedback)
                     self.metacognition.record(
                         bottleneck=f"Enforcement: Auto-Finish bei LLM-Call {step} (Limit {enforcement_limit})",
                         strategy_change="Code-Enforcement statt Prompt — Sequenz automatisch beendet",

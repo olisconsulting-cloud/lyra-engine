@@ -158,9 +158,14 @@ class Narrator:
         rate = errors / (step + 1) * 100
         print(f"\n  {YELLOW}Error-Budget: {errors} Fehler in {step + 1} Steps ({rate:.0f}%) — schliesse ab.{RESET}")
 
-    def enforcement(self, rule: str, step: int, limit: int):
+    def enforcement(self, rule: str, step: int, limit: int,
+                    files: int = 0, errors: int = 0):
         """Meta-Rule Enforcement — automatische Intervention."""
-        print(f"\n  {YELLOW}⚡ Enforcement [{rule}]: Step {step}/{limit} — Auto-Finish{RESET}")
+        detail = f"{files} Dateien, {errors} Fehler" if files or errors else ""
+        if detail:
+            print(f"\n  {YELLOW}⚡ Enforcement: Auto-Finish nach {step} LLM-Calls ({detail}){RESET}")
+        else:
+            print(f"\n  {YELLOW}⚡ Enforcement: Auto-Finish nach {step} LLM-Calls (Limit {limit}){RESET}")
 
     def emergency(self, msg: str):
         """Emergency-Finish bei API-Ausfall o.ae."""

@@ -87,6 +87,7 @@ Du bekommst den aktuellen Stand aller Memory-Dateien. Deine Aufgabe:
 6. PROZESS-ANALYSE: Analysiere die Metacognition-Eintraege. Welche Engpaesse wiederholen sich? Welche Sequenzen hatten hohe Effizienz (viel Output pro Step) und was war anders? Welche Arbeitsgewohnheiten sind gut, welche schlecht?
 7. META-SKILLS: Wie arbeitet Lyra? Beschreibe den Arbeitsstil — plant sie gut? Fuehrt sie effizient aus? Springt sie zwischen Aufgaben? Nutzt sie finish_sequence rechtzeitig?
 8. RECOMMENDATIONS: Max 2 Empfehlungen, JEDE mit 2-3 konkreten Sub-Goals. Jedes Sub-Goal muss ein messbarer, ausfuehrbarer Schritt sein — keine Absichtserklaerungen.
+9. TOOL-OEKOSYSTEM: Analysiere die selbstgebauten Tools. Welche sind wertvoll und sollten behalten werden? Welche verfallen (nie genutzt, niedrige Success-Rate)? Gibt es Luecken — Tools die fehlen? Gibt es aehnliche Tools die konsolidiert werden sollten?
 
 Antworte als JSON:
 {
@@ -97,7 +98,8 @@ Antworte als JSON:
   "memory_summary": "Was Lyra in letzter Zeit gelernt hat — 2-3 Saetze",
   "recommendations": [{"title": "Kurzer Titel (max 80 Zeichen)", "sub_goals": ["Konkreter Schritt 1", "Konkreter Schritt 2", "Messbares Erfolgskriterium"]}],
   "process_insights": "Was Lyra ueber ihren ARBEITSSTIL gelernt hat — nicht Aufgaben, sondern WIE sie arbeitet",
-  "efficiency_patterns": ["Konkrete Beobachtungen ueber Produktivitaet und Effizienz"]
+  "efficiency_patterns": ["Konkrete Beobachtungen ueber Produktivitaet und Effizienz"],
+  "tool_insights": "Analyse des Tool-Oekosystems: Was ist wertvoll, was verfaellt, was fehlt?"
 }"""
 
         try:
@@ -210,6 +212,15 @@ Antworte als JSON:
             summaries = [e.get("content", "")[:100] for e in recent_sem]
             parts.append(f"\n=== SEMANTISCHE ERINNERUNGEN (letzte 20) ===\n" +
                          "\n".join(f"  - {s}" for s in summaries))
+
+        # Tool-Oekosystem (via Dream-Bridge)
+        if self.tool_dream_bridge:
+            try:
+                tool_mem = self.tool_dream_bridge.gather_tool_memory()
+                if tool_mem:
+                    parts.append(f"\n=== TOOL-OEKOSYSTEM ===\n{tool_mem}")
+            except Exception as e:
+                logger.warning(f"Tool-Dream-Bridge fehlgeschlagen: {e}")
 
         return "\n".join(parts)
 
@@ -349,10 +360,43 @@ Antworte als JSON:
             except (OSError, json.JSONDecodeError):
                 pass
 
+        # Tool-Insights als Belief speichern (wenn vorhanden)
+        tool_insights = result.get("tool_insights", "")
+        if tool_insights and len(tool_insights) > 20:
+            beliefs_path = self.consciousness_path / "beliefs.json"
+            try:
+                beliefs = self._safe_load_json(beliefs_path) or {}
+                formed = beliefs.get("formed_from_experience", [])
+                insight_belief = f"[TOOLS] {tool_insights[:300]}"
+                if not self._is_belief_duplicate(insight_belief, formed):
+                    formed.append(insight_belief)
+                    beliefs["formed_from_experience"] = formed[-30:]
+                    with open(beliefs_path, "w", encoding="utf-8") as f:
+                        json.dump(beliefs, f, indent=2, ensure_ascii=False)
+                    applied.append("Tool-Insights gespeichert")
+            except (OSError, json.JSONDecodeError):
+                pass
+
         return ", ".join(applied) if applied else "Keine Aenderungen"
 
+    # Meta-Keywords: Goals die Phi-internes Verhalten beschreiben statt echten Output
+    META_KEYWORDS = frozenset((
+        "finish_sequence", "konsisten", "fruehzeitig", "steps aufrufen",
+        "tracking-system", "alert-mechanis", "uebungssequenz", "skill erweit",
+        "self-diagnose", "speichermanagement", "reflexion", "routine",
+    ))
+
+    def _is_meta_goal(self, title: str) -> bool:
+        """Erkennt ob ein Goal Meta-Reflexion statt echte Arbeit ist."""
+        tl = title.lower()
+        return sum(1 for kw in self.META_KEYWORDS if kw in tl) >= 1
+
     def _apply_recommendations(self, result: dict, goal_stack=None) -> str:
-        """Wandelt Dream-Empfehlungen in Goals um (max 2 pro Dream)."""
+        """Wandelt Dream-Empfehlungen in Goals um (max 2 pro Dream).
+
+        Guard: Meta-Goals (finish_sequence, Reflexion, Uebungen) werden
+        geblockt wenn bereits echte Infrastruktur-Goals existieren.
+        """
         recommendations = result.get("recommendations", [])
         if not recommendations or goal_stack is None:
             return ""
@@ -363,6 +407,12 @@ Antworte als JSON:
             active_count = summary.count("[ ]") + summary.count("[→]") if summary else 0
             if active_count >= 5:
                 return ""
+
+            # Meta-Goal-Guard: Zaehle bereits aktive Meta-Goals
+            active_goals = goal_stack.goals.get("active", [])
+            meta_count = sum(
+                1 for g in active_goals if self._is_meta_goal(g.get("title", ""))
+            )
 
             created = 0
             for rec in recommendations[:2]:
@@ -378,9 +428,17 @@ Antworte als JSON:
                     sub_goals = None
                 else:
                     continue
-                # Duplikat-Check: Nicht erstellen wenn aehnlich existiert
-                if title[:30].lower() in summary.lower():
+
+                # META-GOAL-GUARD: Max 1 Meta-Goal aktiv
+                if self._is_meta_goal(title) and meta_count >= 1:
+                    logger.info("Meta-Goal geblockt (max 1): %s", title[:60])
                     continue
+
+                # Duplikat-Check: Jaccard statt nur Prefix
+                if self._is_goal_duplicate(title, active_goals):
+                    logger.info("Duplikat-Goal geblockt: %s", title[:60])
+                    continue
+
                 goal_stack.create_goal(
                     title=title,
                     description=f"[Dream-Empfehlung] {title}",
@@ -388,6 +446,8 @@ Antworte als JSON:
                     sub_goals=sub_goals,
                 )
                 created += 1
+                if self._is_meta_goal(title):
+                    meta_count += 1
                 if active_count + created >= 5:
                     break
 
@@ -396,6 +456,23 @@ Antworte als JSON:
         except Exception as e:
             logger.warning("Dream-Empfehlungen zu Goals fehlgeschlagen: %s", e)
         return ""
+
+    @staticmethod
+    def _is_goal_duplicate(title: str, existing_goals: list,
+                           threshold: float = 0.4) -> bool:
+        """Prueft ob ein Goal-Titel semantisch zu einem bestehenden passt."""
+        new_words = set(title.lower().split())
+        if len(new_words) < 3:
+            return False
+        for goal in existing_goals:
+            ex_words = set(goal.get("title", "").lower().split())
+            if len(ex_words) < 3:
+                continue
+            overlap = len(new_words & ex_words)
+            union = len(new_words | ex_words)
+            if union > 0 and overlap / union >= threshold:
+                return True
+        return False
 
     def _log_dream(self, result: dict, applied: str):
         """Loggt den Dream-Vorgang."""

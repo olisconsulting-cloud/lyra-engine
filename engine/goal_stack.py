@@ -80,10 +80,24 @@ class GoalStack:
             return "tool_building"
         return "sonstiges"
 
+    # Keywords die auf Meta-Reflexion statt echte Arbeit hindeuten
+    _META_KEYWORDS = frozenset((
+        "finish_sequence", "konsisten", "fruehzeitig", "steps aufrufen",
+        "tracking-system", "alert-mechanis", "uebungssequenz", "skill erweit",
+        "self-diagnose", "speichermanagement", "reflexion", "routine",
+    ))
+
+    def _is_meta_goal(self, title: str) -> bool:
+        """Erkennt ob ein Goal Meta-Reflexion statt echte Arbeit ist."""
+        tl = title.lower()
+        return sum(1 for kw in self._META_KEYWORDS if kw in tl) >= 1
+
     def _telos_score(self, goal: dict) -> float:
         """Berechnet Telos-Score: Diversitaets-Bonus + Ring-Prioritaet.
 
         Hoher Score = Goal ist wertvoller fuer Phis Wachstum.
+        Meta-Goals (Reflexion, Uebungen) werden abgewertet wenn echte
+        Infrastruktur-Goals existieren.
         Ohne telos.json: gibt 0.0 zurueck (Fallback auf Index-Reihenfolge).
         """
         if not self._telos:
@@ -93,27 +107,35 @@ class GoalStack:
         domain = self._classify_domain(title)
 
         # 1. Diversitaets-Bonus: PHI^(-Wiederholungen)
-        # Neue Domaene = 1.0, 1x wiederholt = 0.618, 2x = 0.382...
         recent = self._get_recent_goal_domains(10)
         repetitions = recent.count(domain)
-        diversity = PHI ** (-repetitions)  # 1.0 → 0.618 → 0.382 → 0.236
+        diversity = PHI ** (-repetitions)
 
         # 2. Ring-Prioritaet: Niedrigster unfertiger Ring bevorzugt
         ring_bonus = 0.0
         ringe = self._telos.get("ringe", [])
         for ring in ringe:
             completion = ring.get("completion", 1.0)
-            if completion < 0.6:  # Ring braucht Arbeit
-                # Ist dieses Goal in einer Domaene dieses Rings?
+            if completion < 0.6:
                 ring_domains = [d["name"] for d in ring.get("domaenen", [])]
                 if domain in ring_domains:
-                    # Niedrigere Ringe = hoehere Prioritaet
                     ring_nr = ring.get("nummer", 5)
-                    ring_bonus = PHI ** (-(ring_nr - 1))  # Ring 3=0.382, Ring 4=0.236
+                    ring_bonus = PHI ** (-(ring_nr - 1))
                     break
 
-        # Gewichtete Kombination: 60% Diversitaet, 40% Ring
-        return diversity * 0.6 + ring_bonus * 0.4
+        # 3. Meta-Penalty: Meta-Goals abwerten wenn echte Goals existieren
+        meta_penalty = 1.0
+        if self._is_meta_goal(title):
+            active = self.goals.get("active", [])
+            has_real = any(
+                not self._is_meta_goal(g.get("title", ""))
+                for g in active
+            )
+            if has_real:
+                meta_penalty = 0.2  # -80% Score fuer Meta wenn echte da sind
+
+        # Gewichtete Kombination: 60% Diversitaet, 40% Ring, Meta-Penalty
+        return (diversity * 0.6 + ring_bonus * 0.4) * meta_penalty
 
     def _save(self):
         try:

@@ -56,6 +56,7 @@ class IntegrationTester:
             self._check_sequence_memory_saved(),
             self._check_router_consistency(),
             self._check_tool_handler_sync(),
+            self._check_meta_goal_ratio(),
         ]
 
         passed = sum(1 for c in checks if c["passed"])
@@ -315,6 +316,52 @@ class IntegrationTester:
             "passed": True,
             "detail": f"{len(tool_defs)} Tools, alle mit Handler",
         }
+
+
+    # Keywords fuer Meta-Goal-Erkennung (gleiche Liste wie in dream.py/goal_stack.py)
+    _META_KEYWORDS = (
+        "finish_sequence", "konsisten", "fruehzeitig", "steps aufrufen",
+        "tracking-system", "alert-mechanis", "uebungssequenz", "skill erweit",
+        "self-diagnose", "speichermanagement", "reflexion", "routine",
+    )
+
+    def _check_meta_goal_ratio(self) -> dict:
+        """Prueft: Sind zu viele aktive Goals Meta-Reflexion statt echte Arbeit?"""
+        goals_file = self.data_path / "consciousness" / "goals.json"
+        if not goals_file.exists():
+            return {"name": "Meta-Goal-Ratio", "passed": True, "detail": "Keine Goals"}
+
+        try:
+            with open(goals_file, "r", encoding="utf-8") as f:
+                goals = json.load(f)
+
+            active = goals.get("active", [])
+            if not active:
+                return {"name": "Meta-Goal-Ratio", "passed": True, "detail": "Keine aktiven Goals"}
+
+            meta_count = 0
+            for g in active:
+                title = g.get("title", "").lower()
+                if any(kw in title for kw in self._META_KEYWORDS):
+                    meta_count += 1
+
+            ratio = meta_count / len(active)
+            if ratio > 0.5:
+                return {
+                    "name": "Meta-Goal-Ratio",
+                    "passed": False,
+                    "detail": (
+                        f"META-LOOP: {meta_count}/{len(active)} Goals sind Meta-Reflexion! "
+                        f"Fokus auf echte Infrastruktur-Goals verschieben."
+                    ),
+                }
+            return {
+                "name": "Meta-Goal-Ratio",
+                "passed": True,
+                "detail": f"{len(active)} aktiv, {meta_count} meta ({ratio:.0%})",
+            }
+        except Exception:
+            return {"name": "Meta-Goal-Ratio", "passed": False, "detail": "Goals nicht lesbar"}
 
 
 class DependencyAnalyzer:

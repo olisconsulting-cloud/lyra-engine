@@ -39,15 +39,36 @@ def handle_create_tool(ctx: ToolContext, tool_input: dict) -> str:
 
     if composition_hint:
         result += f"\n{composition_hint}"
+
+    # Tool-Lifecycle: Version-Sprawl pruefen
+    if ctx.tool_meta_patterns and not result.startswith("FEHLER"):
+        try:
+            ctx.tool_meta_patterns.check_version_sprawl(
+                name, ctx.toolchain.registry.get("tools", {})
+            )
+        except Exception:
+            pass
+
     return result
 
 
 def handle_use_tool(ctx: ToolContext, tool_input: dict) -> str:
     """Bestehendes Tool ausfuehren."""
-    return ctx.toolchain.use_tool(
-        tool_input["name"],
+    name = tool_input["name"]
+    result = ctx.toolchain.use_tool(
+        name,
         **(tool_input.get("arguments") or {}),
     )
+
+    # Tool-Lifecycle: Failure-Loop pruefen
+    if ctx.tool_meta_patterns:
+        try:
+            is_error = isinstance(result, str) and "FEHLER" in result
+            ctx.tool_meta_patterns.check_failure_loop(name, is_error)
+        except Exception:
+            pass
+
+    return result
 
 
 def handle_generate_tool(ctx: ToolContext, tool_input: dict) -> str:
