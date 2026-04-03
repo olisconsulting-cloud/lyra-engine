@@ -58,10 +58,11 @@ class ActionEngine:
 
     # === Dateien erstellen und bearbeiten ===
 
-    def write_file(self, relative_path: str, content: str) -> str:
+    def write_file(self, relative_path: str, content: str, force: bool = False) -> str:
         """
         Erstellt oder ueberschreibt eine Datei.
         Geht durch den Security-Gateway.
+        force=True umgeht den Duplikat-Guard (wenn bewusst gewollt).
         """
         # Security-Gateway: Pfad pruefen
         check = self.security.check_write_permission(relative_path)
@@ -78,6 +79,9 @@ class ActionEngine:
         if not target.is_relative_to(self.base_path.resolve()):
             return f"FEHLER: Pfad ausserhalb des Daten-Ordners."
 
+        if target.is_dir():
+            return f"FEHLER: {relative_path} ist ein Ordner, keine Datei. Gib einen Dateinamen an."
+
         # Workflow-Gate: In Projekt-Ordnern muss PLAN.md existieren
         if relative_path.startswith("projects/"):
             parts = relative_path.split("/")
@@ -92,6 +96,18 @@ class ActionEngine:
                             f"FEHLER (Plan-First): Kein PLAN.md in projects/{project_name}/. "
                             f"Nutze zuerst create_project mit acceptance_criteria!"
                         )
+
+        # Duplikat-Guard: Aehnliche Dateien im selben Ordner erkennen
+        if not force and (relative_path.startswith("projects/") or relative_path.startswith("tools/")):
+            similar = self._find_similar_file(target)
+            if similar:
+                return (
+                    f"WARNUNG: Aehnliche Datei existiert bereits: '{similar.name}'. "
+                    f"Meinst du diese? Nutze den bestehenden Pfad "
+                    f"'{similar.relative_to(self.base_path)}' oder waehle einen "
+                    f"klar unterscheidbaren Namen. "
+                    f"Wenn gewollt: write_file mit force=true."
+                )
 
         # Warnungen bei Code-Dateien
         warnings = ""
@@ -215,6 +231,9 @@ class ActionEngine:
         if not target.exists():
             return f"FEHLER: {relative_path} existiert nicht."
 
+        if target.is_dir():
+            return f"FEHLER: {relative_path} ist ein Ordner, kein Script. Nutze list_directory."
+
         # Security-Scan auf Script-Inhalt
         try:
             script_content = target.read_text(encoding="utf-8")
@@ -254,6 +273,63 @@ class ActionEngine:
     def _normalize_project_name(self, name: str) -> set[str]:
         """Extrahiert normalisierte Woerter aus einem Projektnamen."""
         return normalize_name_words(name)
+
+    # Versions-Suffixe die bewusste Varianten markieren (kein Duplikat)
+    _VERSION_WORDS = frozenset({
+        "v1", "v2", "v3", "v4", "v5", "v6", "v7", "v8", "v9", "v10",
+        "rev1", "rev2", "rev3",
+        "final", "latest", "draft", "backup", "old", "new",
+        "alpha", "beta", "rc", "rc1", "rc2",
+        "dev", "prod", "staging", "test",
+        "legacy", "deprecated", "archived",
+    })
+
+    def _find_similar_file(self, target: Path) -> Optional[Path]:
+        """Findet eine aehnliche Datei im selben Ordner (Wort-Overlap im Dateinamen)."""
+        folder = target.parent
+        if not folder.exists():
+            return None
+
+        new_stem = target.stem
+        new_ext = target.suffix
+        new_words = normalize_name_words(new_stem)
+        if not new_words:
+            return None
+
+        # Versions-Suffixe → bewusste Variante, kein Duplikat
+        if new_words & self._VERSION_WORDS:
+            return None
+
+        try:
+            entries = list(folder.iterdir())
+        except (OSError, PermissionError):
+            return None
+
+        for existing in entries:
+            try:
+                if not existing.is_file() or existing.name == target.name:
+                    continue
+            except (OSError, PermissionError):
+                continue
+            # Dotfiles ueberspringen (fuer Phi unsichtbar)
+            if existing.name.startswith("."):
+                continue
+            # Nur gleiche Dateiendung vergleichen
+            if existing.suffix != new_ext:
+                continue
+            ex_words = normalize_name_words(existing.stem)
+            if not ex_words:
+                continue
+            # Bestehende Versions-Dateien auch ueberspringen
+            if ex_words & self._VERSION_WORDS:
+                continue
+            # Jaccard-Overlap >= 0.5 → wahrscheinlich Duplikat
+            overlap = len(new_words & ex_words)
+            union = len(new_words | ex_words)
+            if union and overlap / union >= 0.5:
+                return existing
+
+        return None
 
     def _find_similar_project(self, name: str) -> Optional[str]:
         """Findet ein aehnliches Projekt nach Wort-Overlap und sortiertem Namen."""
@@ -468,8 +544,18 @@ if __name__ == "__main__":
             return "(keine Projekte)"
         return "\n".join(f"  - {p}" for p in sorted(projects))
 
-    def _update_progress(self, project_name: str, entry: str):
-        """Aktualisiert PROGRESS.md eines Projekts automatisch."""
+    _PROGRESS_SECTIONS = frozenset({
+        "Fortschritt", "Test-Ergebnisse", "Offene Fragen", "Entscheidungen",
+    })
+
+    def _update_progress(self, project_name: str, entry: str, section: str = "Fortschritt"):
+        """Aktualisiert PROGRESS.md eines Projekts automatisch.
+
+        section: In welche Section schreiben (Whitelist: Fortschritt, Test-Ergebnisse, etc.)
+        """
+        if section not in self._PROGRESS_SECTIONS:
+            logger.warning("Unbekannte Progress-Section: %s (ignoriert)", section)
+            return
         progress_path = self.projects_path / project_name / "PROGRESS.md"
         if not progress_path.exists():
             return
@@ -479,11 +565,19 @@ if __name__ == "__main__":
             line = f"- [{now}] {entry}\n"
 
             content = progress_path.read_text(encoding="utf-8")
-            # Nach "### Fortschritt" einfuegen
-            marker = "### Fortschritt\n"
+            marker = f"### {section}\n"
             if marker in content:
                 idx = content.index(marker) + len(marker)
-                content = content[:idx] + line + content[idx:]
+                # Platzhalter-Text entfernen wenn vorhanden
+                rest = content[idx:]
+                for placeholder in (
+                    "(Wird automatisch aktualisiert wenn Tests laufen)\n",
+                    "(Hier dokumentieren was unklar ist)\n",
+                    "(Hier dokumentieren welche Entscheidungen getroffen wurden)\n",
+                ):
+                    if rest.startswith(placeholder):
+                        rest = rest[len(placeholder):]
+                content = content[:idx] + line + rest
             else:
                 content += f"\n{line}"
 

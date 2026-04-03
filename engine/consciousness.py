@@ -43,6 +43,8 @@ from .checkpoint import CheckpointManager
 from .meta_rules import MetaRuleEngine
 from .skill_library import SkillLibrary
 from .proactive_learner import ProactiveLearner
+from .event_bus import EventBus, Events
+from .tool_registry import ToolRegistry, ToolDefinition
 from . import config
 from .config import safe_json_write, safe_json_read
 
@@ -67,12 +69,13 @@ def _normalize_spin_key(tool_name: str, raw_name: str) -> str:
 TOOLS = [
     {
         "name": "write_file",
-        "description": "Erstellt oder ueberschreibt eine Datei in deinem Ordner.",
+        "description": "Erstellt oder ueberschreibt eine Datei. Prueft automatisch auf aehnliche Dateien — bei Duplikat-Verdacht wird blockiert. Aktualisiere bestehende Dateien statt neue anzulegen.",
         "input_schema": {
             "type": "object",
             "properties": {
                 "path": {"type": "string", "description": "Relativer Pfad, z.B. 'projects/mein-tool/main.py'"},
                 "content": {"type": "string", "description": "Dateiinhalt"},
+                "force": {"type": "boolean", "description": "Duplikat-Warnung ignorieren (nur wenn bewusst gewollt)", "default": False},
             },
             "required": ["path", "content"],
         },
@@ -609,12 +612,14 @@ class ConsciousnessEngine:
         self._wake_event = threading.Event()
         self.sequences_total = 0
 
-        # Neue Module: Sequenz-Planung, Checkpoints, Meta-Regeln
-        self.planner = SequencePlanner(self.consciousness_path)
-        self.checkpointer = CheckpointManager(self.consciousness_path)
-        self.meta_rules = MetaRuleEngine(self.consciousness_path)
+        # Sequenz-Intelligence: Fassade fuer Checkpoint, Planner, Meta-Rules
+        from .sequence_intelligence import SequenceIntelligence
+        self.seq_intel = SequenceIntelligence(self.consciousness_path)
         self.skill_library = SkillLibrary(config.DATA_PATH)
         self.proactive_learner = ProactiveLearner(config.DATA_PATH)
+
+        # Event-Bus — Echtzeit-Kommunikation zwischen Subsystemen
+        self.event_bus = EventBus()
 
         # Genehmigungspflicht — diese Tools brauchen Olivers OK
         # NUR pip_install braucht Genehmigung (laedt aus dem Internet)
@@ -622,6 +627,10 @@ class ConsciousnessEngine:
         # modify_own_code = hat eigenes Code-Review-System
         # create_tool = normaler Arbeitsfluss
         self._requires_approval = {"pip_install"}
+
+        # Tool-Registry — zentrale Tool-Verwaltung (nach _requires_approval)
+        self.tool_registry = ToolRegistry(event_bus=self.event_bus)
+        self._register_all_tools()
 
         # Kosten-Tracking
         self.session_input_tokens = 0
@@ -914,6 +923,7 @@ REGELN:
 - read_own_code + modify_own_code = Selbst-Evolution (Dual-Review)
 - finish_sequence wenn fertig | send_telegram = ECHTE Nachricht
 - Projekte in 'projects/', Tools in 'tools/'
+- DUPLIKAT-VERMEIDUNG: write_file prueft automatisch auf aehnliche Dateien und blockiert Duplikate. Wenn du eine WARNUNG bekommst, aktualisiere die bestehende Datei statt eine neue zu erstellen. Die Perception zeigt dir welche Dateien im Projekt existieren. force=true nur wenn du SICHER bist dass es kein Duplikat ist (max 3x pro Sequenz).
 - DATEI-QUALITAET: Grosse Markdown-Dateien (>50 Zeilen) in ABSCHNITTEN schreiben — nicht den ganzen Inhalt in einem write_file. Pruefe nach dem Schreiben mit read_file ob die Datei vollstaendig ist. Alle Saetze muessen vollstaendig sein, keine abgebrochenen Woerter, keine offenen Klammern.
 - LOOP-GUARD: Wenn create_project "FEHLER: AEHNLICHES PROJEKT EXISTIERT" oder "FEHLER: Projekt existiert bereits" zurueckgibt, SOFORT zum bestehenden Projekt wechseln (read_file, write_file). NIEMALS das gleiche Projekt nochmal erstellen. Wenn ein Sub-Goal blockiert ist, nutze finish_sequence und erklaere warum.
 - PROZESS-REFLEXION: Bei finish_sequence beschreibe nicht nur WAS du erreicht hast, sondern WIE du gearbeitet hast. key_decision: Was war die wichtigste Entscheidung? bottleneck: Was hat dich gebremst (2-3 Saetze)? new_beliefs: Was hast du ueber deinen Arbeitsprozess gelernt?"""
@@ -999,7 +1009,7 @@ SEQUENZ-PLANUNG: Nutze write_sequence_plan am Anfang — plane dein Ziel, Exit-K
     # === Sequenz-Memory ===
 
     def _load_sequence_memory(self) -> str:
-        """Laedt die letzte Sequenz-Zusammenfassung fuer Kontext-Kontinuitaet."""
+        """Laedt die letzte Sequenz-Zusammenfassung mit Datei-Tracking fuer Kontext-Kontinuitaet."""
         mem_path = self.consciousness_path / "sequence_memory.json"
         if not mem_path.exists():
             return ""
@@ -1012,21 +1022,32 @@ SEQUENZ-PLANUNG: Nutze write_sequence_plan am Anfang — plane dein Ziel, Exit-K
             recent = entries[-3:]
             lines = ["KONTEXT AUS VORHERIGEN SEQUENZEN:"]
             for entry in recent:
-                lines.append(f"  [{entry.get('seq', '?')}] {entry.get('summary', '')[:300]}")
+                line = f"  [Seq {entry.get('seq', '?')}] {entry.get('summary', '')[:300]}"
+                files = entry.get("files_written", [])
+                if files:
+                    line += f" | Dateien: {', '.join(files[-5:])}"
+                lines.append(line)
             return "\n".join(lines)
         except (OSError, json.JSONDecodeError, KeyError):
             return ""
 
     def _save_sequence_memory(self, summary: str):
-        """Speichert eine Sequenz-Zusammenfassung fuer die naechste Sequenz."""
+        """Speichert eine Sequenz-Zusammenfassung mit Datei-Tracking fuer die naechste Sequenz."""
         mem_path = self.consciousness_path / "sequence_memory.json"
         try:
             data = safe_json_read(mem_path, default={"entries": []})
+
+            # Geschriebene Dateien als Kurzpfade (nur Dateiname, max 10)
+            written = []
+            if hasattr(self, "_seq_written_paths"):
+                written = [Path(p).name for p in self.seq_intel.metrics.written_paths[-10:]]
 
             data["entries"].append({
                 "seq": self.sequences_total,
                 "timestamp": datetime.now(timezone.utc).isoformat(),
                 "summary": summary[:500],
+                "files_written": written,
+                "errors": getattr(self, "_seq_errors", 0),
             })
             data["entries"] = data["entries"][-50:]
 
@@ -1195,15 +1216,43 @@ SEQUENZ-PLANUNG: Nutze write_sequence_plan am Anfang — plane dein Ziel, Exit-K
             try:
                 projects_path = self.actions.projects_path
                 if projects_path.exists():
-                    existing = [d.name for d in projects_path.iterdir() if d.is_dir()]
+                    try:
+                        all_dirs = [d for d in projects_path.iterdir() if d.is_dir()]
+                        existing = sorted(
+                            all_dirs,
+                            key=lambda d: d.stat().st_mtime, reverse=True,
+                        )
+                    except (OSError, PermissionError):
+                        existing = []
+
                     if existing:
-                        proj_list = ", ".join(existing[:10])
+                        proj_list = ", ".join(d.name for d in existing[:10])
                         hint = "EXISTIERENDE PROJEKTE: " + proj_list
                         if len(existing) > 10:
                             hint += f" (+{len(existing) - 10} weitere)"
                         hint += " | HINWEIS: Erstelle KEIN neues Projekt wenn ein passendes existiert!"
                         hint += " Nutze read_file/write_file um am bestehenden Projekt weiterzuarbeiten."
                         parts.append(hint)
+
+                        # Datei-Inventar der 2 zuletzt bearbeiteten Projekte (max 25 pro Projekt)
+                        _SKIP_EXT = frozenset((".pyc", ".pyo", ".tmp", ".bak"))
+                        for proj_dir in existing[:2]:
+                            try:
+                                files = sorted(
+                                    f.name for f in proj_dir.iterdir()
+                                    if (f.is_file()
+                                        and not f.name.startswith(".")
+                                        and f.suffix not in _SKIP_EXT)
+                                )
+                                if files:
+                                    display = ", ".join(files[:25])
+                                    if len(files) > 25:
+                                        display += f" (+{len(files) - 25} weitere)"
+                                    parts.append(
+                                        f"DATEIEN IN {proj_dir.name}/: {display}"
+                                    )
+                            except (OSError, PermissionError):
+                                continue
             except Exception as e:
                 logger.warning("Perception: Projekt-Liste konnte nicht geladen werden: %s", e)
 
@@ -1262,13 +1311,13 @@ SEQUENZ-PLANUNG: Nutze write_sequence_plan am Anfang — plane dein Ziel, Exit-K
                 parts.append(f"  ! {a}")
 
         # Checkpoint-Resume: Falls letzte Sequenz abgebrochen wurde
-        resume = self.checkpointer.build_resume_context()
+        resume = self.seq_intel.build_resume_context()
         if resume:
             parts.append(f"\n{resume}")
 
         # Sequenz-Planung: Phi soll am Anfang planen
-        plan_history = self.planner.get_plan_history()
-        plan_prompt = self.planner.build_planning_prompt(
+        plan_history = self.seq_intel.get_plan_history()
+        plan_prompt = self.seq_intel.build_planning_prompt(
             focus, working_memory, plan_history
         )
         parts.append(plan_prompt)
@@ -1276,6 +1325,21 @@ SEQUENZ-PLANUNG: Nutze write_sequence_plan am Anfang — plane dein Ziel, Exit-K
         return "\n".join(parts)
 
     # === Tool-Ausfuehrung ===
+
+    def _register_all_tools(self):
+        """Registriert alle Tools in der ToolRegistry aus TOOLS + TOOL_TIERS + REQUIRED_FIELDS."""
+        for api_def in TOOLS:
+            name = api_def["name"]
+            self.tool_registry.register_from_api_def(
+                api_def,
+                tier=TOOL_TIERS.get(name, 1),
+                required_fields=self.REQUIRED_FIELDS.get(name, []),
+                requires_approval=(name in self._requires_approval),
+            )
+            # Handler: Delegiert an bestehende _execute_tool_inner
+            self.tool_registry.set_handler(
+                name, lambda inp, n=name: self._execute_tool_inner(n, inp)
+            )
 
     def _request_approval(self, name: str, tool_input: dict) -> bool:
         """Fragt Oliver um Erlaubnis fuer kritische Aktionen. Gibt True=genehmigt zurueck."""
@@ -1331,15 +1395,15 @@ SEQUENZ-PLANUNG: Nutze write_sequence_plan am Anfang — plane dein Ziel, Exit-K
                 return f"FEHLER: Oliver hat '{name}' nicht genehmigt."
 
         self.state["total_tool_calls"] = self.state.get("total_tool_calls", 0) + 1
-        self._seq_tool_calls += 1
+        self.seq_intel.metrics.tool_calls += 1
 
         result = self._execute_tool_inner(name, tool_input)
 
-        # Erfolg/Fehler tracken
-        if result.startswith("FEHLER"):
+        # Erfolg/Fehler tracken (WARNUNG = blockierte Aktion, zaehlt als Fehler)
+        if result.startswith("FEHLER") or result.startswith("WARNUNG"):
             self.skills.record_failure(name)
             self.strategies.record_error(name, result, str(tool_input)[:200])
-            self._seq_errors += 1
+            self.seq_intel.metrics.errors += 1
             # Failure-Memory: Strukturierten Fehler speichern
             # Failure-Memory: Sinnvolle Felder statt Dict-Dump
             # Goal = was versucht wurde (menschenlesbar)
@@ -1371,10 +1435,26 @@ SEQUENZ-PLANUNG: Nutze write_sequence_plan am Anfang — plane dein Ziel, Exit-K
                 )
             # Output-Tracking
             if name == "write_file":
-                self._seq_files_written += 1
-                self._seq_written_paths.append(tool_input.get("path", "?"))
+                self.seq_intel.metrics.files_written += 1
+                self.seq_intel.metrics.written_paths.append(tool_input.get("path", "?"))
+                self.event_bus.emit_simple(
+                    Events.FILE_WRITTEN, source="tool_dispatch",
+                    path=tool_input.get("path", "?"),
+                )
             elif name == "create_tool":
-                self._seq_tools_built += 1
+                self.seq_intel.metrics.tools_built += 1
+
+        # Event-Bus: Tool-Ergebnis als Event feuern (additiv zum bestehenden Tracking)
+        if result.startswith("FEHLER") or result.startswith("WARNUNG"):
+            self.event_bus.emit_simple(
+                Events.TOOL_FAILED, source="tool_dispatch",
+                tool=name, error=result[:200],
+            )
+        else:
+            self.event_bus.emit_simple(
+                Events.TOOL_SUCCEEDED, source="tool_dispatch",
+                tool=name, result_preview=result[:150],
+            )
 
         return result
 
@@ -1418,14 +1498,24 @@ SEQUENZ-PLANUNG: Nutze write_sequence_plan am Anfang — plane dein Ziel, Exit-K
             if name == "write_file":
                 path = tool_input["path"]
                 content = tool_input["content"]
+                force = bool(tool_input.get("force", False))
+                # force-Missbrauch tracken (max 3 pro Sequenz)
+                if force:
+                    self._seq_force_used = getattr(self, "_seq_force_used", 0) + 1
+                    if self._seq_force_used > 3:
+                        return (
+                            "FEHLER: force wurde diese Sequenz bereits 3x genutzt. "
+                            "Das deutet auf ein systematisches Problem hin. "
+                            "Pruefe ob du bestehende Dateien aktualisieren solltest."
+                        )
                 # Quality Gate fuer Markdown-Dateien
                 if path.endswith(".md") and len(content) > 200:
                     issues = self._check_markdown_quality(content)
                     if issues:
                         # Datei trotzdem schreiben, aber Warnung zurueckgeben
-                        result = self.actions.write_file(path, content)
+                        result = self.actions.write_file(path, content, force=force)
                         return f"{result}\nQUALITAETS-WARNUNG: {'; '.join(issues)}"
-                return self.actions.write_file(path, content)
+                return self.actions.write_file(path, content, force=force)
 
             elif name == "read_file":
                 return self.actions.read_file(tool_input["path"])
@@ -1505,7 +1595,7 @@ SEQUENZ-PLANUNG: Nutze write_sequence_plan am Anfang — plane dein Ziel, Exit-K
                             sub_goals = opus_sub_goals
                 result = self.goal_stack.create_goal(title, description, sub_goals)
                 # Neues Goal → alten Checkpoint loeschen (sonst falscher Resume-Kontext)
-                self.checkpointer.clear()
+                self.seq_intel.clear_checkpoint()
                 return result
 
             elif name == "complete_subgoal":
@@ -1575,9 +1665,9 @@ SEQUENZ-PLANUNG: Nutze write_sequence_plan am Anfang — plane dein Ziel, Exit-K
             elif name == "modify_own_code":
                 # Sicherheit: Max 3 modify_own_code pro Sequenz
                 if not hasattr(self, "_modify_count_this_seq"):
-                    self._modify_count_this_seq = 0
-                self._modify_count_this_seq += 1
-                if self._modify_count_this_seq > 3:
+                    self.seq_intel.metrics.modify_count = 0
+                self.seq_intel.metrics.modify_count += 1
+                if self.seq_intel.metrics.modify_count > 3:
                     return (
                         "FEHLER: Maximum 3 Code-Aenderungen pro Sequenz erreicht. "
                         "Beende die Sequenz und mache in der naechsten weiter."
@@ -1732,10 +1822,11 @@ SEQUENZ-PLANUNG: Nutze write_sequence_plan am Anfang — plane dein Ziel, Exit-K
                 }
                 safe_json_write(evidence_path, evidence)
 
-                # PROGRESS.md aktualisieren
+                # PROGRESS.md aktualisieren — in die richtige Section
                 self.actions._update_progress(
                     project_name,
-                    f"Tests: {'ALL PASS' if all_passed else 'FAILED'}"
+                    f"Tests: {'ALL PASS' if all_passed else 'FAILED'}",
+                    section="Test-Ergebnisse",
                 )
 
                 return test_output
@@ -1907,10 +1998,12 @@ SEQUENZ-PLANUNG: Nutze write_sequence_plan am Anfang — plane dein Ziel, Exit-K
                 return self._handle_finish_sequence(tool_input)
 
             elif name == "write_sequence_plan":
-                return self.planner.save_plan(tool_input)
+                return self.seq_intel.save_plan(tool_input)
 
             elif name == "update_sequence_plan":
-                return self.planner.update_plan(tool_input)
+                result = self.seq_intel.update_plan(tool_input)
+                self.seq_intel.on_plan_updated()
+                return result
 
             else:
                 return f"Unbekanntes Tool: {name}"
@@ -1959,15 +2052,15 @@ SEQUENZ-PLANUNG: Nutze write_sequence_plan am Anfang — plane dein Ziel, Exit-K
             print(f"  ⚠ {len(challenged)} Belief(s) nahe am Challenge-Schwellwert")
 
         # Prozess-Metriken automatisch berechnen
-        output_count = self._seq_files_written + self._seq_tools_built
-        total_steps = max(self._seq_step_count, 1)
+        output_count = self.seq_intel.metrics.files_written + self.seq_intel.metrics.tools_built
+        total_steps = max(self.seq_intel.metrics.step_count, 1)
         efficiency_ratio = round(output_count / total_steps, 3)
 
         # Valenz aus Performance-Rating ableiten (nicht mehr hardcoded 0.7)
         # Rating 1-10 → Valenz -0.5 bis 1.0 (schlechte Sequenzen = negativ)
         rating = tool_input.get("performance_rating", 5)
         valence = round((rating - 3) / 7.0, 2)  # 1→-0.29, 5→0.29, 10→1.0
-        if self._seq_errors > 2:
+        if self.seq_intel.metrics.errors > 2:
             valence = min(valence, 0.0)  # Viele Fehler → nie positiv
 
         # Erfahrung speichern (mit Prozess-Metriken)
@@ -1979,8 +2072,8 @@ SEQUENZ-PLANUNG: Nutze write_sequence_plan am Anfang — plane dein Ziel, Exit-K
                 "emotions": {},
                 "tags": [f"sequenz_{self.sequences_total}"],
                 "process_metrics": {
-                    "steps": self._seq_step_count,
-                    "errors": self._seq_errors,
+                    "steps": self.seq_intel.metrics.step_count,
+                    "errors": self.seq_intel.metrics.errors,
                     "output": output_count,
                     "efficiency_ratio": efficiency_ratio,
                     "key_decision": tool_input.get("key_decision", ""),
@@ -2005,7 +2098,7 @@ SEQUENZ-PLANUNG: Nutze write_sequence_plan am Anfang — plane dein Ziel, Exit-K
         if bottleneck or next_time:
             self.metacognition.record(
                 bottleneck, next_time, self.sequences_total,
-                wasted_steps=max(0, self._seq_step_count - output_count),
+                wasted_steps=max(0, self.seq_intel.metrics.step_count - output_count),
                 productive_steps=output_count,
                 key_decision=key_decision,
             )
@@ -2065,17 +2158,20 @@ SEQUENZ-PLANUNG: Nutze write_sequence_plan am Anfang — plane dein Ziel, Exit-K
             except Exception as e:
                 logger.warning(f" Telegram-Report fehlgeschlagen: {e}")
 
-        # Plan-Evaluation: War der Sequenz-Plan erfolgreich?
+        # Sequenz-Intelligence: Plan-Eval + Meta-Learning + Checkpoint-Status
         rating = tool_input.get("performance_rating", 5)
-        plan_eval = self.planner.evaluate_plan(
-            summary, rating, self._seq_step_count, self._seq_errors
+        m = self.seq_intel.metrics
+        fr = self.seq_intel.finish(
+            summary=summary, rating=rating,
+            step_count=m.step_count, seq_total=self.sequences_total,
+            bottleneck=bottleneck, next_time=next_time,
         )
-        if plan_eval.get("score", 0) <= 3:
-            print(f"  Plan-Score: {plan_eval.get('score')}/10 — {plan_eval.get('lesson', '')[:80]}")
+        if fr.plan_eval.get("score", 0) <= 3:
+            print(f"  Plan-Score: {fr.plan_eval.get('score')}/10 — {fr.plan_eval.get('lesson', '')[:80]}")
 
         # Skill-Extraktion: Bei Erfolg (Score >= 7 + Rating >= 7) als Template speichern
-        plan = self.planner.get_active_plan()
-        plan_score = plan_eval.get("score", 0)
+        plan = self.seq_intel.get_refreshed_plan()
+        plan_score = fr.plan_eval.get("score", 0)
         goal_type = self.semantic_memory.classify_goal_type(
             self.goal_stack.get_current_focus()
         )
@@ -2083,35 +2179,12 @@ SEQUENZ-PLANUNG: Nutze write_sequence_plan am Anfang — plane dein Ziel, Exit-K
             plan_goal=plan.get("goal", summary[:100]),
             plan_score=plan_score,
             summary=summary,
-            tool_sequence=self._seq_tool_sequence,
+            tool_sequence=m.tool_sequence,
             goal_type=goal_type,
             rating=rating,
         )
         if skill_id:
             print(f"  Neuer Skill extrahiert: {skill_id}")
-
-        # Meta-Regeln aus Erfahrung ableiten
-        self.meta_rules.learn_from_metacognition(
-            bottleneck, next_time, self.sequences_total,
-            self._seq_step_count, self._seq_files_written, self._seq_errors,
-        )
-
-        # Checkpoint mit differenziertem Status markieren
-        rating = tool_input.get("performance_rating", 5)
-        if self._seq_errors > 3 and self._seq_files_written == 0:
-            # Viele Fehler, kein Output → gescheitert
-            finish_status = "failed"
-        elif rating >= 5 or self._seq_files_written > 0:
-            # Phi hat etwas geschafft
-            finish_status = "completed"
-        else:
-            # Phi hat aufgegeben / niedrige Bewertung
-            finish_status = "paused"
-        self.checkpointer.mark_finished(
-            status=finish_status,
-            errors=self._seq_errors,
-            files_written=self._seq_files_written,
-        )
 
         # Auto-Commit
         commit_msg = f"Sequenz {self.sequences_total}: {summary[:80]}"
@@ -2122,6 +2195,16 @@ SEQUENZ-PLANUNG: Nutze write_sequence_plan am Anfang — plane dein Ziel, Exit-K
         self.state["sequences_total"] = self.sequences_total
         self.state["last_sequence"] = datetime.now(timezone.utc).isoformat()
         self._save_all()
+
+        # Event: Sequenz abgeschlossen
+        self.event_bus.emit_simple(
+            Events.SEQUENCE_FINISHED, source="finish_sequence",
+            seq_num=self.sequences_total,
+            rating=tool_input.get("performance_rating", 5),
+            errors=self.seq_intel.metrics.errors,
+            files_written=self.seq_intel.metrics.files_written,
+            summary=summary[:200],
+        )
 
         return "Sequenz abgeschlossen. State gespeichert."
 
@@ -2284,12 +2367,12 @@ SEQUENZ-PLANUNG: Nutze write_sequence_plan am Anfang — plane dein Ziel, Exit-K
             focus_topic = focus.split("FOKUS:")[1].strip()[:200]
 
         # Kompakter Kontext fuer Sonnet (nicht die vollen Messages — nur das Wesentliche)
-        paths_short = [Path(p).name for p in self._seq_written_paths[:5]]
+        paths_short = [Path(p).name for p in self.seq_intel.metrics.written_paths[:5]]
         context = (
             f"Sequenz {self.sequences_total + 1} wird auto-beendet.\n"
-            f"Steps: {step_count} | Fehler: {self._seq_errors} | "
-            f"Dateien: {self._seq_files_written} ({', '.join(paths_short) if paths_short else 'keine'})\n"
-            f"Tools gebaut: {self._seq_tools_built}\n"
+            f"Steps: {step_count} | Fehler: {self.seq_intel.metrics.errors} | "
+            f"Dateien: {self.seq_intel.metrics.files_written} ({', '.join(paths_short) if paths_short else 'keine'})\n"
+            f"Tools gebaut: {self.seq_intel.metrics.tools_built}\n"
             f"Fokus: {focus_topic}\n"
             f"Letzter Gedanke: {last_thought or '(keiner extrahiert)'}\n"
         )
@@ -2359,12 +2442,12 @@ Antworte als JSON:
             logger.warning("Sonnet Graceful-Finish fehlgeschlagen: %s — Fallback auf mechanisch", e)
 
         # Fallback: Mechanische Summary wenn Sonnet-Call scheitert
-        auto_rating = min(7, max(2, self._seq_files_written * 2 + self._seq_tools_built * 3))
-        if self._seq_errors > 2:
+        auto_rating = min(7, max(2, self.seq_intel.metrics.files_written * 2 + self.seq_intel.metrics.tools_built * 3))
+        if self.seq_intel.metrics.errors > 2:
             auto_rating = min(auto_rating, 3)
         return {
             "summary": f"{step_count} Steps an {focus_topic or 'unbekannt'}. "
-                       f"{self._seq_files_written} Dateien, {self._seq_errors} Fehler. "
+                       f"{self.seq_intel.metrics.files_written} Dateien, {self.seq_intel.metrics.errors} Fehler. "
                        f"{last_thought or ''}",
             "performance_rating": auto_rating,
             "bottleneck": "Auto-beendet (Sonnet-Fallback)",
@@ -2785,6 +2868,29 @@ Antworte als JSON:
                     block["content"] = cut + "\n[...gekuerzt]"
 
     @staticmethod
+    def _estimate_tokens(system_prompt: str, messages: list, tools: list) -> int:
+        """Schaetzt Token-Verbrauch VOR dem API-Call (ca. 4 Zeichen pro Token).
+
+        Keine externe Abhaengigkeit (kein tiktoken). Genauigkeit: +/-15%,
+        reicht fuer Budget-Entscheidungen vor dem Call.
+        """
+        char_count = len(system_prompt)
+        for msg in messages:
+            content = msg.get("content", "")
+            if isinstance(content, str):
+                char_count += len(content)
+            elif isinstance(content, list):
+                for block in content:
+                    if isinstance(block, dict):
+                        char_count += len(block.get("content", ""))
+                        char_count += len(str(block.get("input", "")))
+                    elif hasattr(block, "text"):
+                        char_count += len(block.text or "")
+        for tool in tools:
+            char_count += len(str(tool))
+        return char_count // 4
+
+    @staticmethod
     def _find_tool_name_for_id(messages: list, user_idx: int, tool_use_id: str) -> str:
         """Findet den Tool-Namen fuer eine tool_use_id in der vorherigen Assistant-Message."""
         if user_idx < 1:
@@ -3038,29 +3144,28 @@ Antworte als JSON:
 
     def _run_sequence(self):
         """Fuehrt eine komplette Arbeitssequenz aus."""
+        # Event: Sequenz startet
+        self.event_bus.emit_simple(
+            Events.SEQUENCE_STARTED, source="run_sequence",
+            seq_num=self.sequences_total + 1,
+        )
+
         perception = self._build_perception()
         messages = [{"role": "user", "content": perception}]
         step_count = 0
         finished = False
         seq_start = time.time()
 
-        # Sequenz-Metriken initialisieren
-        self._seq_tool_calls = 0
-        self._seq_errors = 0
-        self._seq_files_written = 0
-        self._seq_tools_built = 0
-        self._seq_written_paths = []  # Pfade der geschriebenen Dateien
-        self._seq_step_count = 0       # Gesamte Tool-Aufrufe (fuer Effizienz-Berechnung)
-        self._seq_tool_sequence = []   # Tool-Namen in Reihenfolge (fuer Skill-Extraktion)
-        self._modify_count_this_seq = 0  # Max 3 modify_own_code pro Sequenz
-
-        # Spin-Detection: Wiederholte gescheiterte Aktionen tracken (intra-Sequenz)
-        failed_actions = {}  # "tool_name:key" -> Anzahl Fehlversuche
+        # Sequenz-Intelligence: State reset + Prompt-Fragmente
+        focus = self.goal_stack.get_current_focus()
+        init = self.seq_intel.init_sequence(focus)
+        self.sequence_input_tokens = 0
+        self.sequence_output_tokens = 0
+        self._seq_force_used = 0
 
         # Cross-Sequenz Spin-Detection: Aus State laden + aufraumen
         cross_seq_spins = self.state.get("spin_tracker", {})
         if len(cross_seq_spins) > 20:
-            # Nur die 20 hoechsten Counts behalten
             sorted_spins = sorted(cross_seq_spins.items(), key=lambda x: x[1], reverse=True)
             cross_seq_spins = dict(sorted_spins[:20])
             self.state["spin_tracker"] = cross_seq_spins
@@ -3068,10 +3173,9 @@ Antworte als JSON:
         # System-Prompt einmalig pro Sequenz bauen (nicht pro Step)
         cached_system_prompt = self._build_system_prompt()
 
-        # Meta-Regeln in System-Prompt injizieren (harte Guards)
-        meta_injections = self.meta_rules.get_prompt_injections()
-        if meta_injections:
-            cached_system_prompt += meta_injections
+        # Meta-Regeln in System-Prompt injizieren (via SequenceIntelligence)
+        if init.meta_injections:
+            cached_system_prompt += init.meta_injections
 
         # Cross-Sequenz Spin-Guard: Blockierte Aktionen in System-Prompt injizieren
         blocked_actions = [k for k, v in cross_seq_spins.items() if v >= 2]
@@ -3133,103 +3237,61 @@ Antworte als JSON:
 
         # Task-Typ bestimmen (einmal, wird fuer Step-Budget + Tool-Tiers genutzt)
         self._current_task_type = self._classify_task(mode, focus)
-        self._token_warning_sent = False  # Reset pro Sequenz
 
-        # Adaptives Step-Budget (spart 30-40% Tokens bei einfachen Tasks)
+        # Step-Budget = Sicherheitsnetz (Phi plant selbst via write_sequence_plan)
         step_budget = self._get_step_budget(mode, focus)
 
-        # Tool-Tiers: Dynamische Auswahl pro Step (spart ~42k Tokens/Sequenz)
-        # Basis-Tiers = aus Modus/Kontext/Task-Typ, Eskalation = aus LLM-Text
+        # Tool-Tiers: Dynamische Auswahl pro Step
         base_tiers = self._get_base_tiers(mode, task_type=self._current_task_type)
         escalated_tiers = set()
-        self._project_context_cache = None  # Cache pro Sequenz zuruecksetzen
-
-        # Stuck-Tracker: Zaehlt wiederholte Fehler pro Tool+Input
-        stuck_tracker = {}  # Key: "tool:input_hash" -> {"count": N, "last_error": str}
+        self._project_context_cache = None
 
         for step in range(step_budget):
-            # Step 0: Basis-Tiers mit VOLLEN Descriptions (Phi lernt was verfuegbar ist)
-            #         Nicht alle 5 Tiers — nur die fuer diesen Task-Typ relevanten
-            # Steps 1+: Basis + eskalierte Tiers, KOMPAKTE Definitionen
+            # Tool-Tier-Auswahl (bleibt in consciousness.py — ist Tool-Logik)
             if step == 0:
-                active_tiers = base_tiers | {1, 2}  # Core + Projekt immer zeigen bei Step 0
+                active_tiers = base_tiers | {1, 2}
             else:
                 active_tiers = base_tiers | escalated_tiers
             current_tools = select_tools(active_tiers, compact=(step > 0))
 
-            # === LIVE-DASHBOARD: Phi sieht seinen Status bei jedem Step ===
-            plan = self.planner.get_active_plan()
-            planned_max = plan.get("max_steps", 0) if plan else 0
-            token_pct = int(self.sequence_input_tokens / MAX_INPUT_TOKENS_PER_SEQUENCE * 100)
-            plan_info = f"/{planned_max}" if planned_max > 0 else ""
-            dashboard = (
-                f"\n[Step {step}{plan_info} | Token: {token_pct}% "
-                f"| Fehler: {self._seq_errors} | Dateien: {self._seq_files_written}]"
-            )
-            cached_system_prompt += dashboard
+            # === SEQUENZ-INTELLIGENCE: before_step() ===
+            token_pct = self.sequence_input_tokens / MAX_INPUT_TOKENS_PER_SEQUENCE
+            sp = self.seq_intel.before_step(step, step_budget, token_pct, focus)
 
-            # === WARNUNGEN: Gestuft nach Dringlichkeit ===
-            steps_remaining_hard = step_budget - step
+            # Checkpoint wenn faellig
+            if sp.should_checkpoint:
+                self.seq_intel.auto_checkpoint(step_count, self)
 
-            # Weiche Warnung aus Phi's Plan (3 Steps vor seinem geplanten Limit)
-            if planned_max > 0 and step == planned_max - 3:
-                cached_system_prompt += (
-                    f"\n\nHINWEIS: Du hast dir {planned_max} Steps geplant, "
-                    f"du bist bei Step {step}. Bist du auf Kurs? "
-                    "Wenn dein Ergebnis gut genug ist, nutze finish_sequence. "
-                    "Wenn nicht, arbeite weiter — du hast noch Spielraum."
-                )
-            # Harte Warnung: 5 Steps vor absolutem Limit
-            if steps_remaining_hard == 5:
-                cached_system_prompt += (
-                    "\n\nACHTUNG: Noch 5 Steps bis zum harten Limit. "
-                    "Sichere deine Zwischenergebnisse und nutze finish_sequence."
-                )
-
-            # Checkpoint: Alle N Steps automatisch sichern
-            if self.checkpointer.should_checkpoint(step_count):
-                self.checkpointer.auto_save(step_count, self)
-
-            # Planner-Checkpoint: Reminder wenn faellig
-            plan_reminder = self.planner.build_checkpoint_reminder(step_count)
-            if plan_reminder:
-                cached_system_prompt += plan_reminder
-
-            # Meta-Rule-Guards: Harte Regeln pruefen
-            focus = self.goal_stack.get_current_focus()
-            guard_actions = self.meta_rules.check_guards(
-                step_count, self._seq_files_written, self._seq_errors, focus
-            )
-            if "force_finish_partial" in guard_actions:
-                cached_system_prompt += (
-                    "\n\nMETA-REGEL AKTIV: Step-Limit fuer diesen Aufgabentyp erreicht. "
-                    "Schreibe JETZT dein Zwischenergebnis und nutze finish_sequence."
-                )
-
-            # Intelligentes Token-Budget: Soft-Limit bei 80%, Graceful-Finish bei 95%
-            token_usage_pct = self.sequence_input_tokens / MAX_INPUT_TOKENS_PER_SEQUENCE
-
-            if token_usage_pct >= 0.80 and not getattr(self, "_token_warning_sent", False):
-                # 80% — Phi warnen, er soll bald abschliessen
-                self._token_warning_sent = True
-                cached_system_prompt += (
-                    f"\n\n⚠ TOKEN-BUDGET: {token_usage_pct:.0%} verbraucht "
-                    f"({self.sequence_input_tokens:,} von {MAX_INPUT_TOKENS_PER_SEQUENCE:,}). "
-                    "Schliesse deine aktuelle Aufgabe AB und nutze finish_sequence. "
-                    "Sichere Zwischenergebnisse JETZT — schreibe was du herausgefunden hast."
-                )
-
-            if token_usage_pct >= 0.95:
-                # 95% — Graceful Finish: Sonnet 4.6 schreibt intelligente Summary
+            # Graceful Finish bei Token >= 95%
+            if sp.should_graceful_finish:
                 print(f"  [Token-Limit 95% — Sonnet Graceful Finish]")
                 finish_data = self._sonnet_graceful_finish(messages, step_count)
                 self._handle_finish_sequence(finish_data)
                 finished = True
                 break
 
+            # Step-Prompt zusammenbauen: cached (statisch) + step-spezifisch (dynamisch)
+            effective_system_prompt = cached_system_prompt + "".join(sp.prompt_parts)
+
             # Sliding Window: Alte Tool-Results komprimieren ab Step 2 (vorher 4 — zu spaet)
             if step >= 2:
                 self._compress_old_messages(messages, keep_recent=5)
+
+            # Pre-Count: Token-Verbrauch schaetzen BEVOR der Call rausgeht
+            estimated = self._estimate_tokens(effective_system_prompt, messages, current_tools)
+            if estimated > MAX_INPUT_TOKENS_PER_SEQUENCE * 0.90:
+                print(f"  [Pre-Count: ~{estimated:,} Token — komprimiere aggressiv]")
+                self._compress_old_messages(messages, keep_recent=3)
+                estimated = self._estimate_tokens(effective_system_prompt, messages, current_tools)
+                if estimated > MAX_INPUT_TOKENS_PER_SEQUENCE * 0.95:
+                    print(f"  [Pre-Count: ~{estimated:,} Tokens — Graceful Finish]")
+                    try:
+                        finish_data = self._sonnet_graceful_finish(messages, step_count)
+                        self._handle_finish_sequence(finish_data)
+                    except Exception as e:
+                        logger.warning("Pre-Count Graceful-Finish fehlgeschlagen: %s", e)
+                    finished = True
+                    break
 
             # Tier-Hint: Phi informieren welche Tool-Kategorien bei Bedarf verfuegbar sind
             if step == 1 and active_tiers != {1, 2, 3, 4, 5}:
@@ -3248,7 +3310,7 @@ Antworte als JSON:
 
             try:
                 response = self._call_llm(
-                    "main_work", cached_system_prompt, messages, current_tools
+                    "main_work", effective_system_prompt, messages, current_tools
                 )
             except Exception as e:
                 error_msg = str(e)
@@ -3259,9 +3321,12 @@ Antworte als JSON:
                     time.sleep(3)
                 break
 
-            # Token-Tracking (Router trackt intern, hier Session-Summen)
+            # Token-Tracking: prompt_tokens = Gesamt-Input pro Call (nicht Delta!)
+            # Daher max() statt += — misst tatsaechlichen Context-Window-Verbrauch
             usage = response.get("usage", {})
-            self.sequence_input_tokens += usage.get("input_tokens", 0)
+            self.sequence_input_tokens = max(
+                self.sequence_input_tokens, usage.get("input_tokens", 0)
+            )
             self.sequence_output_tokens += usage.get("output_tokens", 0)
 
             # Lyras Gedanken — nur erste sinnvolle Zeile
@@ -3320,97 +3385,53 @@ Antworte als JSON:
                 for block in response["content"]:
                     if getattr(block, "type", None) == "tool_use":
                         step_count += 1
-                        self._seq_step_count += 1
-                        self._seq_tool_sequence.append({"name": block.name})
-
-                        # Menschenlesbare Aktions-Beschreibungen
                         action_desc = self._describe_action(block.name, block.input)
 
-                        # === STUCK-DETECTION: Erkennt wiederholte Fehler VOR dem Tool-Call ===
-                        # Stuck-Key: Tool + relevanter Input (z.B. Dateipfad)
-                        stuck_input = block.input.get("path", block.input.get("name", str(block.input)[:80]))
-                        stuck_key = f"{block.name}:{stuck_input}"
-                        stuck_info = stuck_tracker.get(stuck_key, {"count": 0, "last_error": ""})
-
-                        # Proaktiver Failure-Check: Warnung BEVOR das Tool laeuft
+                        # Proaktiver Failure-Check (Cross-Sequenz Erfahrung)
                         failure_hint = self.failure_memory.check(
                             f"{block.name} {str(block.input)[:100]}"
                         )
 
-                        # Bei 2+ Fehlern: Phi VORHER warnen + bei read_file verfuegbare Dateien zeigen
-                        pre_warning = ""
-                        if stuck_info["count"] >= 2:
-                            pre_warning = (
-                                f"\n\n⚠ STUCK-WARNUNG: {block.name} mit '{stuck_input}' ist "
-                                f"bereits {stuck_info['count']}x fehlgeschlagen. "
-                                f"Letzter Fehler: {stuck_info['last_error'][:150]}\n"
-                                "STOPP und denk nach: Ist der Pfad/Name korrekt? "
-                                "Nutze list_directory um verfuegbare Dateien zu sehen."
-                            )
-                            print(f"  ⚠ Stuck: {block.name} {stuck_info['count']+1}x — {stuck_input[:60]}")
-
                         result = self._execute_tool(block.name, block.input)
                         result_str = str(result)[:3000]
 
-                        # Failure-Warnung an Ergebnis anhaengen (Phi sieht es VOR der naechsten Entscheidung)
                         if failure_hint and not result_str.startswith("FEHLER"):
                             result_str += f"\n\n[WARNUNG aus Erfahrung]\n{failure_hint[:300]}"
 
-                        # Erfolg oder Fehler
-                        is_error = result_str.startswith("FEHLER") or result_str.startswith("ROLLBACK")
+                        is_error = (result_str.startswith("FEHLER")
+                                    or result_str.startswith("WARNUNG")
+                                    or result_str.startswith("ROLLBACK"))
+
+                        # Sequenz-Intelligence: Stuck-Detection + Metriken
+                        atr = self.seq_intel.after_tool(block.name, block.input, result_str, is_error)
+                        if atr.guidance:
+                            result_str += atr.guidance
+
                         if is_error:
                             print(f"  ❌ {action_desc}")
                             error_preview = result_str.replace("\n", " ")[:120]
                             print(f"     {error_preview}")
-
-                            # Stuck-Tracker aktualisieren
-                            stuck_info["count"] += 1
-                            stuck_info["last_error"] = result_str[:200]
-                            stuck_tracker[stuck_key] = stuck_info
-
-                            # Pre-Warning an Result anhaengen (Phi sieht beides)
-                            if pre_warning:
-                                result_str += pre_warning
-
-                            # Bei 3+ Fehlern: Automatisch verfuegbare Dateien im selben Verzeichnis zeigen
-                            if stuck_info["count"] >= 3 and block.name == "read_file":
-                                try:
-                                    from pathlib import Path as _P
-                                    parent = _P(stuck_input).parent
-                                    if parent.exists():
-                                        files = sorted(p.name for p in parent.iterdir() if p.is_file())[:15]
-                                        result_str += (
-                                            f"\n\n📂 Verfuegbare Dateien in {parent}:\n"
-                                            + "\n".join(f"  - {f}" for f in files)
-                                        )
-                                except Exception:
-                                    pass
-
-                            # Cross-Sequenz Spin-Tracker (fuer create_project/create_goal)
+                            if atr.is_stuck:
+                                print(f"  ⚠ Stuck: {block.name} {atr.stuck_count}x")
+                            # Cross-Sequenz Spin-Tracker (create_project/create_goal)
                             if block.name in ("create_project", "create_goal"):
                                 spin_key = _normalize_spin_key(block.name, block.input.get("name", ""))
                                 cross_seq_spins[spin_key] = cross_seq_spins.get(spin_key, 0) + 1
                                 self.state["spin_tracker"] = cross_seq_spins
                                 safe_json_write(self.state_path, self.state)
-
                         else:
-                            # Erfolg: Stuck-Tracker zuruecksetzen
-                            stuck_tracker.pop(stuck_key, None)
-
                             if block.name == "finish_sequence":
                                 pass
                             elif block.name in ("web_search", "create_project", "send_telegram",
                                                 "create_goal", "modify_own_code", "create_tool",
                                                 "write_file", "git_commit"):
                                 print(f"  ✓ {action_desc}")
-
-                            # Cross-Sequenz Spin-Tracker resetten bei Erfolg
                             if block.name in ("create_project", "create_goal"):
                                 spin_key = _normalize_spin_key(block.name, block.input.get("name", ""))
                                 cross_seq_spins.pop(spin_key, None)
                                 self.state["spin_tracker"] = cross_seq_spins
 
-                        # Live-Notes: Wichtige Ergebnisse sofort festhalten
+                        # Live-Notes
                         if not is_error and block.name in (
                             "write_file", "create_project", "create_tool",
                             "modify_own_code", "complete_project",
@@ -3452,7 +3473,8 @@ Antworte als JSON:
             elif response["stop_reason"] == "end_turn":
                 text_parts = [b.text for b in response["content"] if hasattr(b, "text")]
                 summary = " ".join(text_parts)[:500] if text_parts else "Sequenz ohne explizites Ende"
-                auto_rating = min(7, max(2, self._seq_files_written * 2 + self._seq_tools_built * 3))
+                m = self.seq_intel.metrics
+                auto_rating = min(7, max(2, m.files_written * 2 + m.tools_built * 3))
                 self._handle_finish_sequence({
                     "summary": summary,
                     "performance_rating": auto_rating,
@@ -3466,35 +3488,25 @@ Antworte als JSON:
             print(f"\n  Max Steps ({step_budget}) erreicht — Sonnet Graceful Finish.")
             finish_data = self._sonnet_graceful_finish(messages, step_count)
             self._handle_finish_sequence(finish_data)
+            m = self.seq_intel.metrics
+            status = "FAILED" if m.errors > 3 and m.files_written == 0 else "PAUSED"
+            print(f"  Status: {status} ({m.errors} Fehler, {m.files_written} Dateien)")
 
-            # Differenzierter Checkpoint: Hartes Limit = paused oder failed
-            stuck_patterns = [k for k, v in stuck_tracker.items() if v["count"] >= 2]
-            if self._seq_errors > 3 and self._seq_files_written == 0:
-                self.checkpointer.mark_finished(
-                    "failed", self._seq_errors, self._seq_files_written, stuck_patterns
-                )
-                print(f"  Status: FAILED ({self._seq_errors} Fehler, 0 Dateien)")
-            else:
-                self.checkpointer.mark_finished(
-                    "paused", self._seq_errors, self._seq_files_written, stuck_patterns
-                )
-                print(f"  Status: PAUSED (Fortschritt: {self._seq_files_written} Dateien)")
-
-        # Step-History speichern (fuer lernendes Step-Budget)
-        # Nur saubere Abschluesse lernen — abgewuergte verfaelschen den Schnitt
+        # Step-History speichern
         task_type = getattr(self, "_current_task_type", "standard")
-        finished_cleanly = finished  # True = Phi hat selbst finish_sequence genutzt
+        finished_cleanly = finished
         self._record_step_history(task_type, step_count, finished_cleanly)
 
         # Effizienz tracken
+        m = self.seq_intel.metrics
         seq_duration = time.time() - seq_start
         seq_cost = self.llm.session_costs["cost_usd"] - getattr(self, '_last_session_cost', 0)
         self._last_session_cost = self.llm.session_costs["cost_usd"]
         self.efficiency.record_sequence({
-            "tool_calls": self._seq_tool_calls,
-            "errors": self._seq_errors,
-            "files_written": self._seq_files_written,
-            "tools_built": self._seq_tools_built,
+            "tool_calls": m.tool_calls,
+            "errors": m.errors,
+            "files_written": m.files_written,
+            "tools_built": m.tools_built,
             "tokens_used": self.sequence_input_tokens + self.sequence_output_tokens,
             "cost": round(seq_cost, 4),
             "duration_seconds": round(seq_duration, 1),
@@ -3510,15 +3522,15 @@ Antworte als JSON:
 
         # Kompakte Zusammenfassung
         duration_min = seq_duration / 60
-        error_note = f", {self._seq_errors} Fehler" if self._seq_errors > 0 else ""
+        error_note = f", {self.seq_intel.metrics.errors} Fehler" if self.seq_intel.metrics.errors > 0 else ""
         print(f"  [{step_count} Aktionen, {duration_min:.1f} Min{error_note}]")
 
         # Stille-Fehler nur wenn vorhanden
         silent_warnings = self.silent_failure_detector.check_after_sequence(
-            self.sequences_total, self._seq_tool_calls,
-            files_written=self._seq_files_written,
-            tools_built=self._seq_tools_built,
-            errors=self._seq_errors,
+            self.sequences_total, self.seq_intel.metrics.tool_calls,
+            files_written=self.seq_intel.metrics.files_written,
+            tools_built=self.seq_intel.metrics.tools_built,
+            errors=self.seq_intel.metrics.errors,
         )
         if silent_warnings:
             for w in silent_warnings:
