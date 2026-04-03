@@ -60,6 +60,7 @@ Du bekommst den aktuellen Stand aller Memory-Dateien. Deine Aufgabe:
 5. ZUSAMMENFASSUNG: Was hat Lyra in letzter Zeit gelernt? Ein Absatz.
 6. PROZESS-ANALYSE: Analysiere die Metacognition-Eintraege. Welche Engpaesse wiederholen sich? Welche Sequenzen hatten hohe Effizienz (viel Output pro Step) und was war anders? Welche Arbeitsgewohnheiten sind gut, welche schlecht?
 7. META-SKILLS: Wie arbeitet Lyra? Beschreibe den Arbeitsstil — plant sie gut? Fuehrt sie effizient aus? Springt sie zwischen Aufgaben? Nutzt sie finish_sequence rechtzeitig?
+8. RECOMMENDATIONS: Max 2 Empfehlungen, JEDE mit 2-3 konkreten Sub-Goals. Jedes Sub-Goal muss ein messbarer, ausfuehrbarer Schritt sein — keine Absichtserklaerungen.
 
 Antworte als JSON:
 {
@@ -68,7 +69,7 @@ Antworte als JSON:
   "strategy_updates": [{"rule": "...", "action": "keep|delete|update", "reason": "..."}],
   "skill_notes": "Freitext-Analyse der Skills",
   "memory_summary": "Was Lyra in letzter Zeit gelernt hat — 2-3 Saetze",
-  "recommendations": ["Konkrete Vorschlaege fuer Verbesserungen"],
+  "recommendations": [{"title": "Kurzer Titel (max 80 Zeichen)", "sub_goals": ["Konkreter Schritt 1", "Konkreter Schritt 2", "Messbares Erfolgskriterium"]}],
   "process_insights": "Was Lyra ueber ihren ARBEITSSTIL gelernt hat — nicht Aufgaben, sondern WIE sie arbeitet",
   "efficiency_patterns": ["Konkrete Beobachtungen ueber Produktivitaet und Effizienz"]
 }"""
@@ -333,15 +334,26 @@ Antworte als JSON:
 
             created = 0
             for rec in recommendations[:2]:
-                if not isinstance(rec, str) or len(rec) < 10:
+                # Neues Format: dict mit title + sub_goals
+                if isinstance(rec, dict):
+                    title = rec.get("title", "")[:100]
+                    sub_goals = rec.get("sub_goals", [])
+                    if not title or len(title) < 10:
+                        continue
+                elif isinstance(rec, str) and len(rec) >= 10:
+                    # Legacy-Fallback: String-Empfehlungen
+                    title = rec[:100]
+                    sub_goals = None
+                else:
                     continue
                 # Duplikat-Check: Nicht erstellen wenn aehnlich existiert
-                if rec[:30].lower() in summary.lower():
+                if title[:30].lower() in summary.lower():
                     continue
                 goal_stack.create_goal(
-                    title=rec[:100],
-                    description=f"[Dream-Empfehlung] {rec[:300]}",
+                    title=title,
+                    description=f"[Dream-Empfehlung] {title}",
                     priority="medium",
+                    sub_goals=sub_goals,
                 )
                 created += 1
                 if active_count + created >= 5:

@@ -90,6 +90,22 @@ class GoalStack:
                 return (i, goal)
         return None
 
+    def _find_similar_completed_goal(self, title: str) -> Optional[dict]:
+        """Prueft ob ein aehnliches Ziel bereits abgeschlossen wurde."""
+        new_words = normalize_name_words(title)
+        if not new_words:
+            return None
+        for goal in self.goals.get("completed", []):
+            existing_words = normalize_name_words(goal["title"])
+            if not existing_words:
+                continue
+            overlap = len(new_words & existing_words)
+            union = len(new_words | existing_words)
+            similarity = overlap / union if union else 0
+            if similarity >= 0.5:
+                return goal
+        return None
+
     def create_goal(self, title: str, description: str = "",
                     sub_goals: Optional[list[str]] = None,
                     priority: str = "medium") -> str:
@@ -136,6 +152,15 @@ class GoalStack:
                 f"AEHNLICHES ZIEL EXISTIERT: '{existing_goal['title']}' (Index {idx}).{merge_info} "
                 f"Offene Sub-Goals: {existing_sgs}. "
                 f"Arbeite am bestehenden Ziel weiter!"
+            )
+
+        # Completed-Check: Aehnliches Ziel schon abgeschlossen?
+        completed_match = self._find_similar_completed_goal(title)
+        if completed_match:
+            return (
+                f"AEHNLICHES ZIEL BEREITS ABGESCHLOSSEN: '{completed_match['title']}'. "
+                f"Waehle ein Ziel das eine NEUE Faehigkeit trainiert — "
+                f"nicht dieselbe Aufgabe wiederholen."
             )
 
         goal = {

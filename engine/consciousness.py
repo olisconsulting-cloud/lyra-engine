@@ -1382,6 +1382,30 @@ SEQUENZ-PLANUNG: Nutze write_sequence_plan am Anfang — plane dein Ziel, Exit-K
             for a in eff_alerts[:3]:
                 parts.append(f"  ! {a}")
 
+        # Produktivitaets-KPI (numerisch, aus Metacognition)
+        try:
+            kpi_entries = [
+                e for e in self.metacognition.entries[-5:]
+                if "productive_steps" in e and "wasted_steps" in e
+            ]
+            if kpi_entries:
+                total_prod = sum(e["productive_steps"] for e in kpi_entries)
+                total_waste = sum(e["wasted_steps"] for e in kpi_entries)
+                total = total_prod + total_waste
+                ratio = total_prod / max(total, 1)
+                avg_waste = total_waste / len(kpi_entries)
+                avg_prod = total_prod / len(kpi_entries)
+                bottlenecks = [e.get("bottleneck", "") for e in kpi_entries if e.get("bottleneck")]
+                top_bn = max(set(bottlenecks), key=bottlenecks.count) if bottlenecks else "unbekannt"
+                parts.append(
+                    f"\nPRODUKTIVITAET (letzte {len(kpi_entries)} Seq): "
+                    f"{ratio:.0%} produktiv "
+                    f"(Ø {avg_waste:.0f} wasted / {avg_prod:.0f} produktiv pro Seq) | "
+                    f"HAEUFIGSTER ENGPASS: \"{top_bn[:80]}\""
+                )
+        except Exception:
+            pass
+
         # Checkpoint-Resume: Falls letzte Sequenz abgebrochen wurde
         resume = self.seq_intel.build_resume_context()
         if resume:
