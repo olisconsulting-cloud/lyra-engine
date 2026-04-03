@@ -69,6 +69,43 @@ class SequencePlanner:
             f"Max {plan.get('max_steps', '?')} Steps)"
         )
 
+    def update_plan(self, updates: dict) -> str:
+        """Aktualisiert den laufenden Plan dynamisch.
+
+        Phi kann seinen Plan anpassen wenn sich die Situation aendert.
+        Alte Werte bleiben erhalten wenn sie nicht in updates stehen.
+        Die Update-History wird mitgespeichert fuer die Evaluation.
+        """
+        current = self.get_active_plan()
+        if not current:
+            return "FEHLER: Kein aktiver Plan zum Aktualisieren. Nutze write_sequence_plan."
+
+        reason = updates.get("reason", "Keine Begruendung")
+
+        # History der Aenderungen mitfuehren
+        history = current.get("update_history", [])
+        history.append({
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "reason": reason[:200],
+            "old_goal": current.get("goal", "")[:100] if "goal" in updates else None,
+            "old_max_steps": current.get("max_steps") if "max_steps" in updates else None,
+        })
+
+        # Erlaubte Felder aktualisieren
+        for field in ("goal", "exit_criteria", "max_steps", "checkpoint_at"):
+            if field in updates:
+                current[field] = updates[field]
+
+        current["update_history"] = history
+        current["last_updated"] = datetime.now(timezone.utc).isoformat()
+        safe_json_write(self.plan_path, current)
+
+        return (
+            f"Plan aktualisiert: {current.get('goal', '?')[:80]} "
+            f"(Grund: {reason[:60]}, "
+            f"Max {current.get('max_steps', '?')} Steps)"
+        )
+
     def get_active_plan(self) -> dict:
         """Laedt den aktuellen Plan (falls vorhanden)."""
         if not self.plan_path.exists():

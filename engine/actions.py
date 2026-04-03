@@ -128,6 +128,10 @@ class ActionEngine:
         if not target.exists():
             return f"FEHLER: {relative_path} existiert nicht."
 
+        # Ordner nicht als Datei lesen — automatisch Inhalt auflisten
+        if target.is_dir():
+            return self.list_directory(relative_path)
+
         try:
             content = target.read_text(encoding="utf-8")
             if len(content) > 5000:

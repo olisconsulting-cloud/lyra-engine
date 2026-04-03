@@ -795,39 +795,48 @@ class ConsciousnessEngine:
 
     def _get_step_budget(self, mode: dict, focus: str) -> int:
         """
-        Adaptives Step-Budget — lernt aus Erfahrung.
+        Step-Budget = MAX_STEPS_PER_SEQUENCE als Sicherheitsnetz.
 
-        1. Task klassifizieren (Modus + Keywords)
-        2. Historischen Durchschnitt fuer diesen Task-Typ checken
-        3. Wenn Historie: Durchschnitt + 20% Puffer (aber min 8, max 35)
-        4. Wenn keine Historie: Default-Wert pro Typ
+        Phi plant selbst wieviele Steps er braucht (write_sequence_plan).
+        Die Warnungen kommen aus seinem eigenen Plan + Token-Budget.
+        Das harte Limit hier ist nur der Fallback — nicht die Steuerung.
+
+        Die Step-History wird weiterhin aufgezeichnet, damit Phi lernt
+        wieviele Steps er fuer verschiedene Task-Typen tatsaechlich braucht.
         """
-        task_type = self._classify_task(mode, focus)
-
-        # Historische Steps aus Erfahrung lernen
-        history = self._get_task_type_history(task_type)
-        if history:
-            avg_steps = sum(history) / len(history)
-            learned_budget = int(avg_steps * 1.2)
-            return max(8, min(35, learned_budget))
-
-        # Defaults fuer unbekannte Task-Typen
-        defaults = {"cooldown": 10, "recherche": 15, "learning": 20,
-                     "evolution": 20, "projekt": 35, "standard": 25}
-        return defaults.get(task_type, 25)
+        return MAX_STEPS_PER_SEQUENCE
 
     def _get_task_type_history(self, task_type: str) -> list[int]:
-        """Holt historische Step-Counts fuer einen Task-Typ."""
-        data = safe_json_read(self.consciousness_path / "step_history.json", default={})
-        return data.get(task_type, [])[-10:]
+        """Holt historische Step-Counts fuer einen Task-Typ.
 
-    def _record_step_history(self, task_type: str, steps_used: int):
-        """Speichert wie viele Steps ein Task-Typ tatsaechlich gebraucht hat."""
+        Nur sauber beendete Sequenzen zaehlen — abgewuergte verfaelschen den Schnitt.
+        Versteht altes Format (int) und neues Format (dict mit 'steps' + 'clean').
+        """
+        data = safe_json_read(self.consciousness_path / "step_history.json", default={})
+        raw = data.get(task_type, [])[-10:]
+        result = []
+        for entry in raw:
+            if isinstance(entry, int):
+                result.append(entry)  # Altes Format — nehmen wir mit
+            elif isinstance(entry, dict) and entry.get("clean", True):
+                result.append(entry["steps"])  # Nur saubere Abschluesse
+        return result
+
+    def _record_step_history(self, task_type: str, steps_used: int,
+                             finished_cleanly: bool = True):
+        """Speichert wie viele Steps ein Task-Typ tatsaechlich gebraucht hat.
+
+        Nur sauber beendete Sequenzen (finish_sequence oder eigener Abschluss)
+        fliessen ins Lernen ein. Abgewuergte Sequenzen (hartes Limit erreicht)
+        werden separat als 'forced' markiert — verfaelschen nicht den Durchschnitt.
+        """
         history_path = self.consciousness_path / "step_history.json"
         data = safe_json_read(history_path, default={})
         if task_type not in data:
             data[task_type] = []
-        data[task_type].append(steps_used)
+
+        entry = {"steps": steps_used, "clean": finished_cleanly}
+        data[task_type].append(entry)
         data[task_type] = data[task_type][-20:]
         safe_json_write(history_path, data)
 
@@ -952,7 +961,7 @@ LEISTUNG: {rating_trend} | EFFIZIENZ: {efficiency_trend}
 AUDIT: {last_audit} | REVIEWS: {review_stats}
 BENCHMARKS: {benchmark_trend} | FOUNDRY: {foundry_status} | COMPOUND: {compound_stats}
 {optional_block}
-SEQUENZ-PLANUNG: Du hast max {MAX_STEPS_PER_SEQUENCE} Steps. Plane am Anfang was du schaffen willst. Wenn du ein sinnvolles Ergebnis hast, nutze finish_sequence — auch nach 5 Steps. Schreibe in die Summary WAS du herausgefunden hast (Erkenntnisse, Zahlen, Fakten). Qualitaet > Quantitaet."""
+SEQUENZ-PLANUNG: Nutze write_sequence_plan am Anfang — plane dein Ziel, Exit-Kriterium und wieviele Steps du brauchst. Du hast bis zu {MAX_STEPS_PER_SEQUENCE} Steps Spielraum, aber nutze nur was du brauchst. Wenn du ein sinnvolles Ergebnis hast, nutze finish_sequence — auch nach 5 Steps. Das System warnt dich rechtzeitig wenn dein geplantes Budget knapp wird. Schreibe in die Summary WAS du herausgefunden hast (Erkenntnisse, Zahlen, Fakten). Qualitaet > Quantitaet."""
 
         return self._static_prompt + "\n" + dynamic
 
@@ -1369,6 +1378,7 @@ SEQUENZ-PLANUNG: Du hast max {MAX_STEPS_PER_SEQUENCE} Steps. Plane am Anfang was
         "complete_task": [],
         "finish_sequence": [],
         "write_sequence_plan": ["goal", "exit_criteria", "max_steps"],
+        "update_sequence_plan": ["reason"],
     }
 
     def _execute_tool_inner(self, name: str, tool_input: dict) -> str:
@@ -1867,6 +1877,9 @@ SEQUENZ-PLANUNG: Du hast max {MAX_STEPS_PER_SEQUENCE} Steps. Plane am Anfang was
 
             elif name == "write_sequence_plan":
                 return self.planner.save_plan(tool_input)
+
+            elif name == "update_sequence_plan":
+                return self.planner.update_plan(tool_input)
 
             else:
                 return f"Unbekanntes Tool: {name}"
@@ -3086,6 +3099,9 @@ Antworte als JSON:
         escalated_tiers = set()
         self._project_context_cache = None  # Cache pro Sequenz zuruecksetzen
 
+        # Stuck-Tracker: Zaehlt wiederholte Fehler pro Tool+Input
+        stuck_tracker = {}  # Key: "tool:input_hash" -> {"count": N, "last_error": str}
+
         for step in range(step_budget):
             # Step 0: Basis-Tiers mit VOLLEN Descriptions (Phi lernt was verfuegbar ist)
             #         Nicht alle 5 Tiers — nur die fuer diesen Task-Typ relevanten
@@ -3096,11 +3112,32 @@ Antworte als JSON:
                 active_tiers = base_tiers | escalated_tiers
             current_tools = select_tools(active_tiers, compact=(step > 0))
 
-            # Step-basierte Warnung: 3 Steps vor Schluss → System-Prompt ergaenzen
-            steps_remaining = step_budget - step
-            if steps_remaining == 3:
+            # === LIVE-DASHBOARD: Phi sieht seinen Status bei jedem Step ===
+            plan = self.planner.get_active_plan()
+            planned_max = plan.get("max_steps", 0) if plan else 0
+            token_pct = int(self.sequence_input_tokens / MAX_INPUT_TOKENS_PER_SEQUENCE * 100)
+            plan_info = f"/{planned_max}" if planned_max > 0 else ""
+            dashboard = (
+                f"\n[Step {step}{plan_info} | Token: {token_pct}% "
+                f"| Fehler: {self._seq_errors} | Dateien: {self._seq_files_written}]"
+            )
+            cached_system_prompt += dashboard
+
+            # === WARNUNGEN: Gestuft nach Dringlichkeit ===
+            steps_remaining_hard = step_budget - step
+
+            # Weiche Warnung aus Phi's Plan (3 Steps vor seinem geplanten Limit)
+            if planned_max > 0 and step == planned_max - 3:
                 cached_system_prompt += (
-                    "\n\nACHTUNG: Noch 3 Steps uebrig. "
+                    f"\n\nHINWEIS: Du hast dir {planned_max} Steps geplant, "
+                    f"du bist bei Step {step}. Bist du auf Kurs? "
+                    "Wenn dein Ergebnis gut genug ist, nutze finish_sequence. "
+                    "Wenn nicht, arbeite weiter — du hast noch Spielraum."
+                )
+            # Harte Warnung: 5 Steps vor absolutem Limit
+            if steps_remaining_hard == 5:
+                cached_system_prompt += (
+                    "\n\nACHTUNG: Noch 5 Steps bis zum harten Limit. "
                     "Sichere deine Zwischenergebnisse und nutze finish_sequence."
                 )
 
@@ -3244,10 +3281,28 @@ Antworte als JSON:
                         # Menschenlesbare Aktions-Beschreibungen
                         action_desc = self._describe_action(block.name, block.input)
 
+                        # === STUCK-DETECTION: Erkennt wiederholte Fehler VOR dem Tool-Call ===
+                        # Stuck-Key: Tool + relevanter Input (z.B. Dateipfad)
+                        stuck_input = block.input.get("path", block.input.get("name", str(block.input)[:80]))
+                        stuck_key = f"{block.name}:{stuck_input}"
+                        stuck_info = stuck_tracker.get(stuck_key, {"count": 0, "last_error": ""})
+
                         # Proaktiver Failure-Check: Warnung BEVOR das Tool laeuft
                         failure_hint = self.failure_memory.check(
                             f"{block.name} {str(block.input)[:100]}"
                         )
+
+                        # Bei 2+ Fehlern: Phi VORHER warnen + bei read_file verfuegbare Dateien zeigen
+                        pre_warning = ""
+                        if stuck_info["count"] >= 2:
+                            pre_warning = (
+                                f"\n\n⚠ STUCK-WARNUNG: {block.name} mit '{stuck_input}' ist "
+                                f"bereits {stuck_info['count']}x fehlgeschlagen. "
+                                f"Letzter Fehler: {stuck_info['last_error'][:150]}\n"
+                                "STOPP und denk nach: Ist der Pfad/Name korrekt? "
+                                "Nutze list_directory um verfuegbare Dateien zu sehen."
+                            )
+                            print(f"  ⚠ Stuck: {block.name} {stuck_info['count']+1}x — {stuck_input[:60]}")
 
                         result = self._execute_tool(block.name, block.input)
                         result_str = str(result)[:3000]
@@ -3262,14 +3317,53 @@ Antworte als JSON:
                             print(f"  ❌ {action_desc}")
                             error_preview = result_str.replace("\n", " ")[:120]
                             print(f"     {error_preview}")
-                        elif block.name == "finish_sequence":
-                            pass
-                        elif block.name in ("web_search", "create_project", "send_telegram",
-                                            "create_goal", "modify_own_code", "create_tool",
-                                            "write_file", "git_commit"):
-                            # Wichtige Aktionen immer anzeigen
-                            print(f"  ✓ {action_desc}")
-                        # Alles andere (list_directory, read_file, etc.) still
+
+                            # Stuck-Tracker aktualisieren
+                            stuck_info["count"] += 1
+                            stuck_info["last_error"] = result_str[:200]
+                            stuck_tracker[stuck_key] = stuck_info
+
+                            # Pre-Warning an Result anhaengen (Phi sieht beides)
+                            if pre_warning:
+                                result_str += pre_warning
+
+                            # Bei 3+ Fehlern: Automatisch verfuegbare Dateien im selben Verzeichnis zeigen
+                            if stuck_info["count"] >= 3 and block.name == "read_file":
+                                try:
+                                    from pathlib import Path as _P
+                                    parent = _P(stuck_input).parent
+                                    if parent.exists():
+                                        files = sorted(p.name for p in parent.iterdir() if p.is_file())[:15]
+                                        result_str += (
+                                            f"\n\n📂 Verfuegbare Dateien in {parent}:\n"
+                                            + "\n".join(f"  - {f}" for f in files)
+                                        )
+                                except Exception:
+                                    pass
+
+                            # Cross-Sequenz Spin-Tracker (fuer create_project/create_goal)
+                            if block.name in ("create_project", "create_goal"):
+                                spin_key = _normalize_spin_key(block.name, block.input.get("name", ""))
+                                cross_seq_spins[spin_key] = cross_seq_spins.get(spin_key, 0) + 1
+                                self.state["spin_tracker"] = cross_seq_spins
+                                safe_json_write(self.state_path, self.state)
+
+                        else:
+                            # Erfolg: Stuck-Tracker zuruecksetzen
+                            stuck_tracker.pop(stuck_key, None)
+
+                            if block.name == "finish_sequence":
+                                pass
+                            elif block.name in ("web_search", "create_project", "send_telegram",
+                                                "create_goal", "modify_own_code", "create_tool",
+                                                "write_file", "git_commit"):
+                                print(f"  ✓ {action_desc}")
+
+                            # Cross-Sequenz Spin-Tracker resetten bei Erfolg
+                            if block.name in ("create_project", "create_goal"):
+                                spin_key = _normalize_spin_key(block.name, block.input.get("name", ""))
+                                cross_seq_spins.pop(spin_key, None)
+                                self.state["spin_tracker"] = cross_seq_spins
 
                         # Live-Notes: Wichtige Ergebnisse sofort festhalten
                         if not is_error and block.name in (
@@ -3277,30 +3371,6 @@ Antworte als JSON:
                             "modify_own_code", "complete_project",
                         ):
                             self._update_live_notes(block.name, action_desc)
-
-                        # Spin-Detection: Wiederholte gescheiterte Aktionen erkennen
-                        if is_error and block.name in ("create_project", "create_goal"):
-                            spin_key = _normalize_spin_key(block.name, block.input.get("name", ""))
-                            failed_actions[spin_key] = failed_actions.get(spin_key, 0) + 1
-                            # Cross-Sequenz Tracker updaten + sofort persistieren
-                            cross_seq_spins[spin_key] = cross_seq_spins.get(spin_key, 0) + 1
-                            self.state["spin_tracker"] = cross_seq_spins
-                            safe_json_write(self.state_path, self.state)
-                            if failed_actions[spin_key] >= 2:
-                                result_str += (
-                                    "\n\nSPIN-LOOP ERKANNT: Du hast diese Aktion bereits "
-                                    f"{failed_actions[spin_key]}x versucht und sie schlaegt fehl. "
-                                    "STOPP! Arbeite am BESTEHENDEN Projekt/Ziel weiter. "
-                                    "Nutze read_file um den aktuellen Stand zu lesen, "
-                                    "dann write_file um konkret weiterzuarbeiten."
-                                )
-                                print(f"  ⚠ Spin-Loop erkannt: {block.name} {failed_actions[spin_key]}x gescheitert")
-
-                        elif not is_error and block.name in ("create_project", "create_goal"):
-                            # Erfolg: Spin-Tracker fuer diese Aktion zuruecksetzen
-                            spin_key = _normalize_spin_key(block.name, block.input.get("name", ""))
-                            cross_seq_spins.pop(spin_key, None)
-                            self.state["spin_tracker"] = cross_seq_spins
 
                         tool_results.append({
                             "type": "tool_result",
@@ -3353,8 +3423,10 @@ Antworte als JSON:
             self._handle_finish_sequence(finish_data)
 
         # Step-History speichern (fuer lernendes Step-Budget)
+        # Nur saubere Abschluesse lernen — abgewuergte verfaelschen den Schnitt
         task_type = getattr(self, "_current_task_type", "standard")
-        self._record_step_history(task_type, step_count)
+        finished_cleanly = finished  # True = Phi hat selbst finish_sequence genutzt
+        self._record_step_history(task_type, step_count, finished_cleanly)
 
         # Effizienz tracken
         seq_duration = time.time() - seq_start
