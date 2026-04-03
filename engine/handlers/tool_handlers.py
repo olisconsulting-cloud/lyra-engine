@@ -36,20 +36,27 @@ def handle_use_tool(ctx: ToolContext, tool_input: dict) -> str:
 
 
 def handle_generate_tool(ctx: ToolContext, tool_input: dict) -> str:
-    """Tool per Foundry generieren mit Skill-Kompositions-Hint."""
+    """Tool per Foundry generieren mit Curator-Gate und Skill-Kompositions-Hint."""
     try:
-        # Composition-Hint isoliert abfragen (kann fehlschlagen)
-        try:
-            composition_hint = ctx.composer.suggest_composition(
-                tool_input.get("description", ""),
-            )
-        except Exception:
-            composition_hint = None
-
         name = tool_input.get("name", "")
         desc = tool_input.get("description", "")
         if not name or not desc:
             return "FEHLER: name und description erforderlich."
+
+        # Curator-Gate: Duplikate verhindern
+        if ctx.curator:
+            check = ctx.curator.check_before_create(
+                name, desc, force=tool_input.get("force", False),
+            )
+            if not check["allowed"]:
+                similar_names = [t["name"] for t in check.get("similar_tools", [])]
+                return f"BLOCKIERT: {check['reason']}\nAehnliche Tools: {similar_names}"
+
+        # Composition-Hint isoliert abfragen (kann fehlschlagen)
+        try:
+            composition_hint = ctx.composer.suggest_composition(desc)
+        except Exception:
+            composition_hint = None
 
         result = ctx.foundry.generate_tool(name, desc, ctx.toolchain)
 
