@@ -755,83 +755,101 @@ class StrategyEvolution:
 
         return "\n".join(lines)
 
+    def _load_belief_meta(self) -> dict:
+        """Laedt Belief-Metadata (Confidence, Contradictions) — separat von Beliefs."""
+        meta_path = Path(self.rules_path).parent / "belief_meta.json"
+        return safe_json_read(meta_path, default={})
+
+    def _save_belief_meta(self, meta: dict):
+        """Speichert Belief-Metadata."""
+        meta_path = Path(self.rules_path).parent / "belief_meta.json"
+        safe_json_write(meta_path, meta)
+
+    def _belief_key(self, text: str) -> str:
+        """Erzeugt einen stabilen Key aus Belief-Text (erste 60 Zeichen, lowercase)."""
+        return text.lower().strip()[:60]
+
     def validate_against_outcome(self, beliefs: list, outcome_positive: bool,
                                   context: str = "") -> list:
         """Dual-Loop: Prueft ob Beliefs mit dem Sequenz-Ergebnis konsistent sind.
 
-        Bei Widerspruch: Contradiction-Counter hoch. Bei 5+ → Belief wird challenged.
-        Bei Bestaetigung: Confidence steigt.
+        Beliefs bleiben STRINGS — Metadata wird separat in belief_meta.json gespeichert.
+        Bei 5+ Widerspruechen ohne Bestaetigung → Belief wird aus der Liste entfernt.
 
         Args:
-            beliefs: Liste von Belief-Dicts (oder Strings fuer Rueckwaerts-Kompatibilitaet)
+            beliefs: Liste von Belief-STRINGS (keine Dicts!)
             outcome_positive: War die Sequenz erfolgreich? (Rating >= 6)
             context: Kontext der Sequenz (Goal-Fokus)
 
         Returns:
-            Aktualisierte Belief-Liste mit Metadata.
+            Bereinigte Belief-Liste (nur Strings, challenged Beliefs entfernt).
         """
-        updated = []
+        meta = self._load_belief_meta()
+        surviving = []
+
         for belief in beliefs:
-            # Rueckwaerts-kompatibel: Strings in Dicts umwandeln
-            if isinstance(belief, str):
-                belief = {
-                    "text": belief,
-                    "confidence": 0.7,
-                    "contradictions": 0,
-                    "confirmations": 0,
-                    "status": "active",
-                }
+            # Nur Strings verarbeiten — Dicts aus altem Format bereinigen
+            text = belief if isinstance(belief, str) else belief.get("text", str(belief))
+            key = self._belief_key(text)
 
-            text = belief.get("text", str(belief))
-            conf = belief.get("confidence", 0.7)
-            contras = belief.get("contradictions", 0)
-            confirms = belief.get("confirmations", 0)
-
-            # Einfache Heuristik: Wenn Belief "wichtig" klingt und Ergebnis negativ → Challenge
-            # Wenn positives Ergebnis → Konfirmation
-            if outcome_positive:
-                confirms += 1
-                # Confidence steigt langsam bei Bestaetigung
-                conf = min(1.0, conf + 0.02)
-            else:
-                # Bei negativem Outcome: Confidence senken (nicht sofort loeschen)
-                contras += 1
-                conf = max(0.1, conf - 0.05)
-
-            status = "active"
-            if contras >= 5 and contras > confirms:
-                status = "challenged"
-                conf = max(0.1, conf * 0.5)  # Halbierte Confidence
-
-            updated.append({
-                "text": text,
-                "confidence": round(conf, 2),
-                "contradictions": contras,
-                "confirmations": confirms,
-                "status": status,
+            # Metadata laden oder initialisieren
+            entry = meta.get(key, {
+                "confidence": 0.7,
+                "contradictions": 0,
+                "confirmations": 0,
+                "status": "active",
             })
 
-        return updated
+            if outcome_positive:
+                entry["confirmations"] = entry.get("confirmations", 0) + 1
+                entry["confidence"] = min(1.0, entry.get("confidence", 0.7) + 0.02)
+            else:
+                entry["contradictions"] = entry.get("contradictions", 0) + 1
+                entry["confidence"] = max(0.1, entry.get("confidence", 0.7) - 0.05)
 
-    @staticmethod
-    def format_beliefs_for_prompt(beliefs: list) -> str:
-        """Formatiert Beliefs fuer den System-Prompt mit Confidence-Markierung."""
+            contras = entry.get("contradictions", 0)
+            confirms = entry.get("confirmations", 0)
+
+            # Challenged: 5+ Widersprueche und mehr Widersprueche als Bestaetigungen
+            if contras >= 5 and contras > confirms:
+                entry["status"] = "challenged"
+                entry["confidence"] = max(0.1, entry.get("confidence", 0.5) * 0.5)
+            else:
+                entry["status"] = "active"
+
+            meta[key] = entry
+
+            # Challenged Beliefs aus der Liste entfernen
+            if entry["status"] != "challenged":
+                surviving.append(text)
+
+        self._save_belief_meta(meta)
+        return surviving
+
+    def get_belief_meta(self, belief_text: str) -> dict:
+        """Holt Metadata fuer einen einzelnen Belief."""
+        meta = self._load_belief_meta()
+        key = self._belief_key(belief_text)
+        return meta.get(key, {"confidence": 0.7, "status": "active"})
+
+    def format_beliefs_for_prompt(self, beliefs: list) -> str:
+        """Formatiert Beliefs fuer den System-Prompt mit Confidence aus Metadata."""
         if not beliefs:
             return ""
+        meta = self._load_belief_meta()
         lines = []
         for b in beliefs[:10]:  # Max 10 im Prompt
-            if isinstance(b, str):
-                lines.append(f"  - {b[:80]}")
-                continue
-            text = b.get("text", "")[:80]
-            conf = b.get("confidence", 0.7)
-            status = b.get("status", "active")
+            text = b if isinstance(b, str) else b.get("text", str(b))
+            key = self._belief_key(text)
+            entry = meta.get(key, {})
+            conf = entry.get("confidence", 0.7)
+            status = entry.get("status", "active")
             if status == "challenged":
-                lines.append(f"  - ⚠ UMSTRITTEN [{conf:.0%}]: {text}")
+                lines.append(f"  - UMSTRITTEN [{conf:.0%}]: {text[:80]}")
             elif conf >= 0.8:
-                lines.append(f"  - ✓ [{conf:.0%}] {text}")
+                lines.append(f"  - [{conf:.0%}] {text[:80]}")
             else:
-                lines.append(f"  - [{conf:.0%}] {text}")
+                lines.append(f"  - {text[:80]}")
         return "\n".join(lines)
 
 

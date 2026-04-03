@@ -61,8 +61,8 @@ class SkillLibrary:
         Returns:
             Skill-ID oder None wenn Qualitaets-Gate nicht bestanden.
         """
-        # Qualitaets-Gate: Nur echte Erfolge extrahieren
-        if plan_score < 7 or rating < 7:
+        # Qualitaets-Gate: Gute Sequenzen extrahieren (nicht nur perfekte)
+        if plan_score < 5 or rating < 5:
             return None
 
         # Tool-Sequenz zu abstraktem Pattern verdichten

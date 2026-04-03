@@ -1119,8 +1119,8 @@ SEQUENZ-PLANUNG: Du hast max {MAX_STEPS_PER_SEQUENCE} Steps. Plane am Anfang was
                 notes = live_notes_path.read_text(encoding="utf-8").strip()
                 if notes:
                     parts.append(f"LETZTE AKTIONEN (Live-Mitschrift):\n{notes[-500:]}")
-                # Nach dem Laden loeschen — neue Sequenz startet frisch
-                live_notes_path.unlink()
+                # Ueberschreiben statt loeschen — vermeidet Race Condition mit _update_live_notes
+                live_notes_path.write_text("", encoding="utf-8")
             except OSError:
                 pass
 
@@ -1436,7 +1436,10 @@ SEQUENZ-PLANUNG: Du hast max {MAX_STEPS_PER_SEQUENCE} Steps. Plane am Anfang was
                         opus_sub_goals = self._opus_goal_planning(title, description)
                         if opus_sub_goals:
                             sub_goals = opus_sub_goals
-                return self.goal_stack.create_goal(title, description, sub_goals)
+                result = self.goal_stack.create_goal(title, description, sub_goals)
+                # Neues Goal → alten Checkpoint loeschen (sonst falscher Resume-Kontext)
+                self.checkpointer.clear()
+                return result
 
             elif name == "complete_subgoal":
                 result = self.goal_stack.complete_subgoal(
@@ -1865,8 +1868,10 @@ SEQUENZ-PLANUNG: Du hast max {MAX_STEPS_PER_SEQUENCE} Steps. Plane am Anfang was
         self.beliefs["formed_from_experience"] = formed[-30:]
 
         # Dual-Loop: Beliefs gegen Sequenz-Ergebnis validieren
+        # Gibt nur Strings zurueck — challenged Beliefs werden entfernt
         rating_val = tool_input.get("performance_rating", 5)
         outcome_positive = rating_val >= 6
+        before_count = len(self.beliefs.get("formed_from_experience", []))
         validated = self.strategies.validate_against_outcome(
             self.beliefs.get("formed_from_experience", []),
             outcome_positive,
@@ -1874,10 +1879,14 @@ SEQUENZ-PLANUNG: Du hast max {MAX_STEPS_PER_SEQUENCE} Steps. Plane am Anfang was
         )
         self.beliefs["formed_from_experience"] = validated[-30:]
 
-        # Challenged Beliefs ausgeben
-        challenged = [b for b in validated if isinstance(b, dict) and b.get("status") == "challenged"]
-        if challenged:
-            print(f"  ⚠ {len(challenged)} Belief(s) in Frage gestellt (Dual-Loop)")
+        # Challenged Beliefs wurden entfernt — melden wenn welche rausgeflogen sind
+        removed_count = before_count - len(validated)
+        challenged = [b for b in self.beliefs.get("formed_from_experience", [])
+                      if self.strategies.get_belief_meta(b).get("status") == "challenged"]
+        if removed_count > 0:
+            print(f"  ⚠ {removed_count} Belief(s) entfernt (Dual-Loop: zu oft widerlegt)")
+        elif challenged:
+            print(f"  ⚠ {len(challenged)} Belief(s) nahe am Challenge-Schwellwert")
 
         # Prozess-Metriken automatisch berechnen
         output_count = self._seq_files_written + self._seq_tools_built
@@ -2004,7 +2013,7 @@ SEQUENZ-PLANUNG: Du hast max {MAX_STEPS_PER_SEQUENCE} Steps. Plane am Anfang was
             plan_goal=plan.get("goal", summary[:100]),
             plan_score=plan_score,
             summary=summary,
-            tool_sequence=[],  # Wird spaeter aus Tracking gefuellt
+            tool_sequence=self._seq_tool_sequence,
             goal_type=goal_type,
             rating=rating,
         )
@@ -2840,6 +2849,7 @@ SEQUENZ-PLANUNG: Du hast max {MAX_STEPS_PER_SEQUENCE} Steps. Plane am Anfang was
         self._seq_tools_built = 0
         self._seq_written_paths = []  # Pfade der geschriebenen Dateien
         self._seq_step_count = 0       # Gesamte Tool-Aufrufe (fuer Effizienz-Berechnung)
+        self._seq_tool_sequence = []   # Tool-Namen in Reihenfolge (fuer Skill-Extraktion)
         self._modify_count_this_seq = 0  # Max 3 modify_own_code pro Sequenz
 
         # Spin-Detection: Wiederholte gescheiterte Aktionen tracken (intra-Sequenz)
@@ -2981,28 +2991,10 @@ SEQUENZ-PLANUNG: Du hast max {MAX_STEPS_PER_SEQUENCE} Steps. Plane am Anfang was
                 )
 
             if token_usage_pct >= 0.95:
-                # 95% — Graceful Finish: Ergebnisse retten + sauber beenden
-                print(f"  [Token-Limit 95% — Graceful Finish]")
-                last_thought = self._extract_last_llm_thought(messages)
-                budget_parts = [f"{step_count} Steps (Token-Budget 95%)."]
-                if self._seq_files_written > 0:
-                    paths_short = [Path(p).name for p in self._seq_written_paths[:5]]
-                    budget_parts.append(f"Dateien: {', '.join(paths_short)}")
-                if self._seq_tools_built > 0:
-                    budget_parts.append(f"{self._seq_tools_built} Tool(s)")
-                focus = self.goal_stack.get_current_focus()
-                if "FOKUS:" in focus:
-                    budget_parts.append(f"Fokus: {focus.split('FOKUS:')[1].strip()[:100]}")
-                if last_thought:
-                    budget_parts.append(f"Zuletzt: {last_thought}")
-                auto_rating = min(7, max(2, self._seq_files_written * 2 + self._seq_tools_built * 3))
-                self._handle_finish_sequence({
-                    "summary": " | ".join(budget_parts),
-                    "performance_rating": auto_rating,
-                    "bottleneck": "Token-Budget 95% — graceful beendet statt hart abgebrochen",
-                    "next_time_differently": "Frueher finish_sequence nutzen, Zwischenergebnisse sichern",
-                    "key_decision": "Auto-beendet: Token-Budget nahe Limit",
-                })
+                # 95% — Graceful Finish: Sonnet 4.6 schreibt intelligente Summary
+                print(f"  [Token-Limit 95% — Sonnet Graceful Finish]")
+                finish_data = self._sonnet_graceful_finish(messages, step_count)
+                self._handle_finish_sequence(finish_data)
                 finished = True
                 break
 
@@ -3078,6 +3070,7 @@ SEQUENZ-PLANUNG: Du hast max {MAX_STEPS_PER_SEQUENCE} Steps. Plane am Anfang was
                     if getattr(block, "type", None) == "tool_use":
                         step_count += 1
                         self._seq_step_count += 1
+                        self._seq_tool_sequence.append({"name": block.name})
 
                         # Menschenlesbare Aktions-Beschreibungen
                         action_desc = self._describe_action(block.name, block.input)
