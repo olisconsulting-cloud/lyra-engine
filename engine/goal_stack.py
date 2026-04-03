@@ -22,6 +22,10 @@ class GoalStack:
     def __init__(self, goals_path: Path):
         self.goals_path = goals_path
         self.goals = self._load()
+        # Focus-Tracking aus persistiertem State laden (ueberlebt Neustart)
+        tracker = self.goals.get("_focus_tracker", {})
+        self._last_focus: str = tracker.get("focus", "")
+        self._consecutive_count: int = tracker.get("count", 0)
 
     def _load(self) -> dict:
         default = {"active": [], "completed": [], "abandoned": []}
@@ -32,6 +36,33 @@ class GoalStack:
             safe_json_write(self.goals_path, self.goals)
         except (OSError, TypeError, ValueError) as e:
             print(f"  [WARNUNG] Goals nicht gespeichert: {e}")
+
+    def track_focus(self, current_focus: str) -> int:
+        """Zaehlt wie oft derselbe Focus hintereinander aktiv war.
+
+        Wird am Anfang jeder Sequenz aufgerufen. Wenn sich der Focus aendert,
+        wird der Zaehler zurueckgesetzt. Bei 3+ gleichen: Sub-Goal steckt fest.
+
+        Returns:
+            Anzahl aufeinanderfolgender Sequenzen mit gleichem Focus.
+        """
+        # Nur erste Zeile vergleichen (Status-Details aendern sich)
+        focus_key = current_focus.split("\n")[0].strip() if current_focus else ""
+        last_key = self._last_focus.split("\n")[0].strip() if self._last_focus else ""
+
+        if focus_key == last_key and focus_key:
+            self._consecutive_count += 1
+        else:
+            self._last_focus = current_focus
+            self._consecutive_count = 1
+
+        # Persistieren — ueberlebt Neustart
+        self.goals["_focus_tracker"] = {
+            "focus": focus_key,
+            "count": self._consecutive_count,
+        }
+        self._save()
+        return self._consecutive_count
 
     # === Ziel erstellen ===
 
@@ -134,6 +165,53 @@ class GoalStack:
 
     # === Sub-Goal bearbeiten ===
 
+    def fail_subgoal(self, goal_index: int, subgoal_index: int,
+                     reason: str, approach_tried: str = "") -> str:
+        """
+        Markiert ein Sub-Goal als gescheitert mit Grund.
+
+        Verhindert endlose Wiederholungsversuche — Phi lernt was NICHT funktioniert.
+        """
+        active = self.goals.get("active", [])
+        if goal_index < 0 or goal_index >= len(active):
+            valid = [f"{i}: {g['title']}" for i, g in enumerate(active)]
+            return f"FEHLER: Goal-Index {goal_index} ungueltig. Aktive Goals: {valid}"
+
+        goal = active[goal_index]
+        sgs = goal.get("sub_goals", [])
+        if subgoal_index < 0 or subgoal_index >= len(sgs):
+            valid = [f"{sg['index']}: {sg['title']} [{sg['status']}]" for sg in sgs]
+            return f"FEHLER: SubGoal-Index {subgoal_index} ungueltig. Sub-Goals: {valid}"
+
+        sg = sgs[subgoal_index]
+        sg["status"] = "failed"
+        sg["failure_reason"] = reason
+        sg["approach_tried"] = approach_tried
+        sg["failed_at"] = datetime.now(timezone.utc).isoformat()
+
+        goal.setdefault("progress_log", []).append({
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "event": f"Sub-Goal {subgoal_index} GESCHEITERT: {reason}",
+        })
+        self._save()
+
+        # Keine offenen Sub-Goals mehr? → Entscheiden ob done oder abandoned
+        remaining = [s for s in sgs if s["status"] in ("pending", "in_progress")]
+        if not remaining and sgs:
+            all_failed = all(s["status"] == "failed" for s in sgs)
+            if all_failed:
+                return self.abandon_goal(goal_index, f"Alle Sub-Goals gescheitert: {reason}")
+            # Mix aus done + failed → Ziel abschliessen (teilweise erreicht)
+            has_any_done = any(s["status"] == "done" for s in sgs)
+            if has_any_done:
+                done_count = sum(1 for s in sgs if s["status"] == "done")
+                failed_count = sum(1 for s in sgs if s["status"] == "failed")
+                return self.complete_goal(
+                    goal_index,
+                ) + f" (teilweise: {done_count} erledigt, {failed_count} gescheitert)"
+
+        return f"Sub-Goal als gescheitert markiert: {sg['title']} — Grund: {reason}"
+
     def start_next_subgoal(self, goal_index: int = 0) -> Optional[dict]:
         """
         Findet und startet das naechste offene Sub-Goal.
@@ -147,6 +225,8 @@ class GoalStack:
 
         goal = active[goal_index]
         for sg in goal.get("sub_goals", []):
+            if sg["status"] == "failed":
+                continue  # Gescheiterte Sub-Goals nicht nochmal versuchen
             # Stuck in_progress Sub-Goals reaktivieren (z.B. nach Crash)
             if sg["status"] == "in_progress":
                 return sg
@@ -244,11 +324,20 @@ class GoalStack:
             return "Keine aktiven Ziele. Setze ein neues Ziel!"
 
         for i, goal in enumerate(active):
+            # Gescheiterte Sub-Goals sichtbar machen
+            failed_sgs = [s for s in goal.get("sub_goals", []) if s["status"] == "failed"]
+            failed_info = ""
+            if failed_sgs:
+                reasons = [f"  GESCHEITERT: {s['title']} — {s.get('failure_reason', '?')}"
+                           for s in failed_sgs]
+                failed_info = "\n" + "\n".join(reasons)
+
             for sg in goal.get("sub_goals", []):
                 if sg["status"] in ("pending", "in_progress"):
                     return (
                         f"FOKUS: {goal['title']}\n"
                         f"  Naechster Schritt: {sg['title']} [{sg['status']}]"
+                        + failed_info
                     )
 
             # Ziel ohne Sub-Goals
@@ -274,7 +363,7 @@ class GoalStack:
                 lines.append(f"  {i}. {goal['title']} {progress}")
 
                 for sg in sgs:
-                    status_icon = {"pending": " ", "in_progress": ">", "done": "x"}
+                    status_icon = {"pending": " ", "in_progress": ">", "done": "x", "failed": "!"}
                     icon = status_icon.get(sg["status"], "?")
                     lines.append(f"     [{icon}] {sg['title']}")
         else:

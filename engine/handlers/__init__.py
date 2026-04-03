@@ -10,7 +10,7 @@ from .context import ToolContext
 from .file_handlers import handle_write_file, handle_read_file, handle_list_directory
 from .code_handlers import handle_execute_python, handle_read_own_code, handle_modify_own_code
 from .web_handlers import handle_web_search, handle_web_read, handle_send_telegram
-from .goal_handlers import handle_set_goal, handle_complete_subgoal
+from .goal_handlers import handle_set_goal, handle_complete_subgoal, handle_fail_subgoal
 from .project_handlers import (
     handle_create_project, handle_verify_project,
     handle_run_project_tests, handle_complete_project,
@@ -44,6 +44,7 @@ HANDLER_MAP: dict[str, callable] = {
     # Ziele
     "set_goal": handle_set_goal,
     "complete_subgoal": handle_complete_subgoal,
+    "fail_subgoal": handle_fail_subgoal,
 
     # Projekte
     "create_project": handle_create_project,

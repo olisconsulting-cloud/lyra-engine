@@ -95,3 +95,31 @@ def handle_complete_subgoal(ctx: ToolContext, tool_input: dict) -> str:
                 break
 
     return result
+
+
+def handle_fail_subgoal(ctx: ToolContext, tool_input: dict) -> str:
+    """Sub-Goal als gescheitert markieren mit Grund — verhindert endlose Loops."""
+    goal_index = tool_input["goal_index"]
+    subgoal_index = tool_input["subgoal_index"]
+    reason = tool_input["reason"]
+    approach = tool_input.get("approach_tried", "")
+
+    result = ctx.goal_stack.fail_subgoal(goal_index, subgoal_index, reason, approach)
+
+    # Fehler im FailureMemory speichern fuer zukuenftige Sequenzen
+    if ctx.failure_memory:
+        sg_title = ""
+        try:
+            active = ctx.goal_stack.goals.get("active", [])
+            goal = active[goal_index]
+            sg_title = goal["sub_goals"][subgoal_index].get("title", "")
+        except (IndexError, KeyError):
+            pass
+        ctx.failure_memory.record(
+            goal=sg_title or reason,
+            approach=approach or "unbekannt",
+            error=reason,
+            lesson=f"Ansatz '{approach}' funktioniert nicht: {reason}",
+        )
+
+    return result

@@ -36,6 +36,10 @@ class SeqMetrics:
     step_count: int = 0
     tool_sequence: list[dict] = field(default_factory=list)
     modify_count: int = 0
+    # Neuheits-Tracking fuer Fortschritts-Puls
+    read_paths: set = field(default_factory=set)
+    unique_tools: set = field(default_factory=set)
+    _last_pulse_snapshot: int = 0
 
 
 @dataclass
@@ -60,6 +64,7 @@ class AfterToolResult:
     guidance: str = ""
     is_stuck: bool = False
     stuck_count: int = 0
+    blocked: bool = False  # True → Tool wird nicht ausgefuehrt
 
 
 @dataclass
@@ -69,6 +74,8 @@ class FinishResult:
     plan_eval: dict = field(default_factory=dict)
     stuck_patterns: list[str] = field(default_factory=list)
     metrics: SeqMetrics = field(default_factory=SeqMetrics)
+    stagnation_detected: bool = False
+    stagnation_tools: list = field(default_factory=list)
 
 
 class SequenceIntelligence:
@@ -93,6 +100,7 @@ class SequenceIntelligence:
         self._cached_plan: dict = {}
         self._plan_cache_dirty = False
         self._focus = ""
+        self._stagnant_checks = 0  # Fortschritts-Puls: aufeinanderfolgende Checks ohne Neuheit
 
     # =========================================================
     # Phase 1: Sequenz-Start
@@ -112,6 +120,7 @@ class SequenceIntelligence:
         self._metrics = SeqMetrics()
         self._stuck_tracker = {}
         self._token_warning_sent = False
+        self._stagnant_checks = 0
         self._plan_cache_dirty = False
         self._focus = focus
 
@@ -203,6 +212,32 @@ class SequenceIntelligence:
                 "Schreibe JETZT dein Zwischenergebnis und nutze finish_sequence."
             )
 
+        # Fortschritts-Puls: Erkennt Schleifen ohne neue Information
+        if step > 0 and step % 5 == 0:
+            novelty = len(self._metrics.read_paths) + len(set(self._metrics.written_paths))
+            delta = novelty - self._metrics._last_pulse_snapshot
+            self._metrics._last_pulse_snapshot = novelty
+
+            if delta == 0:
+                self._stagnant_checks += 1
+            else:
+                self._stagnant_checks = 0
+
+            if self._stagnant_checks >= 3:  # 15 Steps ohne Neuheit
+                parts.append(
+                    "\n\nHARTE REGEL: 15 Steps ohne Fortschritt. "
+                    "Du MUSST jetzt finish_sequence aufrufen mit deinem bisherigen Stand. "
+                    "Weitermachen ohne neuen Ansatz ist VERBOTEN."
+                )
+            elif self._stagnant_checks >= 2:  # 10 Steps ohne Neuheit
+                parts.append(
+                    "\n\n⚠ FORTSCHRITTS-CHECK: In den letzten 10 Steps keine neuen "
+                    "Dateien gelesen oder geschrieben. "
+                    "REFLEKTIERE: Was blockiert dich? Aendere deinen Ansatz. "
+                    "(1) Andere Dateien/Quellen suchen, "
+                    "(2) Teilergebnis schreiben, oder (3) finish_sequence aufrufen."
+                )
+
         # Token-Budget Warnung bei 80%
         if token_pct >= 0.80 and not self._token_warning_sent:
             self._token_warning_sent = True
@@ -236,6 +271,13 @@ class SequenceIntelligence:
         # Metriken aktualisieren
         self._metrics.step_count += 1
         self._metrics.tool_sequence.append({"name": name})
+        self._metrics.unique_tools.add(name)
+
+        # Neuheits-Tracking: Gelesene Pfade erfassen
+        if name in ("read_file", "list_directory", "read_own_code"):
+            read_path = tool_input.get("path", "")
+            if read_path:
+                self._metrics.read_paths.add(read_path)
 
         # Stuck-Key: Tool + relevanter Input
         stuck_input = tool_input.get("path", tool_input.get("name", str(tool_input)[:80]))
@@ -293,6 +335,34 @@ class SequenceIntelligence:
                 del self._stuck_tracker[k]
 
             return AfterToolResult(guidance="", is_stuck=False, stuck_count=0)
+
+    @staticmethod
+    def _make_stuck_key(name: str, tool_input: dict) -> tuple[str, str]:
+        """Berechnet Stuck-Key aus Tool-Name + relevantem Input. DRY-Methode."""
+        stuck_input = tool_input.get("path", tool_input.get("name", str(tool_input)[:80]))
+        return f"{name}:{stuck_input}", stuck_input
+
+    def check_blocked(self, name: str, tool_input: dict) -> AfterToolResult:
+        """Prueft ob ein Tool blockiert ist (3+ Fehler mit gleichem Input).
+
+        Wird VOR Tool-Ausfuehrung aufgerufen. Bei Block wird das Tool
+        nicht ausgefuehrt — spart API-Call und verhindert Endlos-Schleifen.
+        """
+        stuck_key, stuck_input = self._make_stuck_key(name, tool_input)
+        info = self._stuck_tracker.get(stuck_key, {"count": 0, "last_error": ""})
+        if info["count"] >= 3:
+            return AfterToolResult(
+                guidance=(
+                    f"BLOCKIERT: {name} mit '{stuck_input}' ist "
+                    f"{info['count']}x gescheitert. Letzter Fehler: "
+                    f"{info['last_error'][:100]}. "
+                    "Anderer Ansatz noetig — dieses Tool+Input wird nicht mehr ausgefuehrt."
+                ),
+                is_stuck=True,
+                stuck_count=info["count"],
+                blocked=True,
+            )
+        return AfterToolResult(guidance="", is_stuck=False, stuck_count=0, blocked=False)
 
     def on_plan_updated(self) -> None:
         """Invalidiert Plan-Cache. Aufrufen nach update_sequence_plan."""
@@ -358,11 +428,17 @@ class SequenceIntelligence:
             stuck_patterns=stuck_patterns,
         )
 
+        # Stagnation erkennen fuer Lerneffekt
+        stagnation = self._stagnant_checks >= 2
+        stag_tools = list(self._metrics.unique_tools) if stagnation else []
+
         return FinishResult(
             finish_status=finish_status,
             plan_eval=plan_eval,
             stuck_patterns=stuck_patterns,
             metrics=self._metrics,
+            stagnation_detected=stagnation,
+            stagnation_tools=stag_tools,
         )
 
     # =========================================================

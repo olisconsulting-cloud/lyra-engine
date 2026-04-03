@@ -45,6 +45,7 @@ from .quantum import FailureMemory, CriticAgent, PromptMutator, SkillComposer
 from .skill_library import SkillLibrary
 from .proactive_learner import ProactiveLearner
 from .event_bus import EventBus, Events
+from .narrator import Narrator
 from .tool_registry import ToolRegistry
 from .quality_checks import check_markdown_quality
 from .message_compression import compress_old_messages, estimate_tokens
@@ -233,6 +234,20 @@ TOOLS = [
                 "result": {"type": "string", "description": "Was erreicht wurde"},
             },
             "required": ["goal_index", "subgoal_index"],
+        },
+    },
+    {
+        "name": "fail_subgoal",
+        "description": "Markiert ein Sub-Goal als GESCHEITERT mit Grund. Nutze dies statt endloser Wiederholungsversuche wenn ein Ansatz nicht funktioniert.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "goal_index": {"type": "integer", "description": "Index des Hauptziels"},
+                "subgoal_index": {"type": "integer", "description": "Index des Sub-Goals"},
+                "reason": {"type": "string", "description": "Warum ist es gescheitert?"},
+                "approach_tried": {"type": "string", "description": "Was wurde versucht?"},
+            },
+            "required": ["goal_index", "subgoal_index", "reason"],
         },
     },
     {
@@ -506,7 +521,7 @@ TOOLS = [
 TOOL_TIERS = {
     # Tier 1: CORE — immer verfuegbar (~950 Tokens)
     "write_file": 1, "read_file": 1, "list_directory": 1,
-    "execute_python": 1, "set_goal": 1, "complete_subgoal": 1,
+    "execute_python": 1, "set_goal": 1, "complete_subgoal": 1, "fail_subgoal": 1,
     "finish_sequence": 1, "send_telegram": 1, "complete_task": 1,
     "remember": 1, "write_sequence_plan": 1, "update_sequence_plan": 1,
     # Tier 2: PROJEKT — wenn Projekte existieren (~650 Tokens)
@@ -637,6 +652,7 @@ class ConsciousnessEngine:
 
         # Event-Bus — Echtzeit-Kommunikation zwischen Subsystemen
         self.event_bus = EventBus()
+        self.narrator = Narrator(self.genesis.get("name", "Lyra"))
 
         # Event-Subscriber: Subsysteme reagieren auf Events in Echtzeit
         self.event_bus.subscribe(Events.TOOL_FAILED, self._on_tool_failed)
@@ -1417,6 +1433,7 @@ SEQUENZ-PLANUNG: Nutze write_sequence_plan am Anfang — plane dein Ziel, Exit-K
             integration_tester=self.integration_tester,
             dependency_analyzer=self.dependency_analyzer,
             silent_failure_detector=self.silent_failure_detector,
+            failure_memory=self.failure_memory,
             sequences_total=self.sequences_total,
             _installed_packages=self._installed_packages,
             # Callbacks fuer Logik die in consciousness.py bleibt
@@ -1453,31 +1470,16 @@ SEQUENZ-PLANUNG: Nutze write_sequence_plan am Anfang — plane dein Ziel, Exit-K
     def _request_approval(self, name: str, tool_input: dict) -> bool:
         """Fragt Oliver um Erlaubnis fuer kritische Aktionen. Gibt True=genehmigt zurueck."""
         desc = self._describe_action(name, tool_input)
-        print(f"\n  {'=' * 40}")
-        print(f"  GENEHMIGUNG ERFORDERLICH")
-        print(f"  Aktion: {desc}")
+        details = {}
         if name == "pip_install":
-            print(f"  Paket: {tool_input.get('package', '?')}")
+            details["Paket"] = tool_input.get("package", "?")
         elif name in ("web_search", "web_read"):
-            print(f"  Ziel: {tool_input.get('query', tool_input.get('url', '?'))[:80]}")
+            details["Ziel"] = tool_input.get("query", tool_input.get("url", "?"))[:80]
         elif name == "modify_own_code":
-            print(f"  Datei: {tool_input.get('path', '?')}")
-            print(f"  Grund: {tool_input.get('reason', '?')[:80]}")
-        print(f"  Erlaube? (j/n): ", end="", flush=True)
-
-        try:
-            answer = input().strip().lower()
-            approved = answer in ("j", "ja", "y", "yes")
-            if approved:
-                print(f"  Genehmigt.")
-            else:
-                print(f"  Abgelehnt.")
-            print(f"  {'=' * 40}\n")
-            return approved
-        except (EOFError, KeyboardInterrupt):
-            print(f"\n  Abgelehnt (keine Antwort).")
-            print(f"  {'=' * 40}\n")
-            return False
+            details["Datei"] = tool_input.get("path", "?")
+            details["Grund"] = tool_input.get("reason", "?")[:80]
+        answer = self.narrator.approval_request(desc, details)
+        return answer in ("j", "ja", "y", "yes")
 
     def _execute_tool(self, name: str, tool_input: dict) -> str:
         """Fuehrt ein Tool aus und trackt Skills, Fehler und Strategien."""
@@ -1575,6 +1577,7 @@ SEQUENZ-PLANUNG: Nutze write_sequence_plan am Anfang — plane dein Ziel, Exit-K
         "use_tool": ["name"],
         "set_goal": ["title"],
         "complete_subgoal": ["goal_index", "subgoal_index"],
+        "fail_subgoal": ["goal_index", "subgoal_index", "reason"],
         "read_own_code": ["path"],
         "modify_own_code": ["path", "new_content", "reason"],
         "remember": ["query"],
@@ -1654,10 +1657,7 @@ SEQUENZ-PLANUNG: Nutze write_sequence_plan am Anfang — plane dein Ziel, Exit-K
         removed_count = before_count - len(validated)
         challenged = [b for b in self.beliefs.get("formed_from_experience", [])
                       if self.strategies.get_belief_meta(b).get("status") == "challenged"]
-        if removed_count > 0:
-            print(f"  ⚠ {removed_count} Belief(s) entfernt (Dual-Loop: zu oft widerlegt)")
-        elif challenged:
-            print(f"  ⚠ {len(challenged)} Belief(s) nahe am Challenge-Schwellwert")
+        self.narrator.belief_update(removed_count, len(challenged))
 
         # Prozess-Metriken automatisch berechnen
         output_count = self.seq_intel.metrics.files_written + self.seq_intel.metrics.tools_built
@@ -1809,8 +1809,20 @@ SEQUENZ-PLANUNG: Nutze write_sequence_plan am Anfang — plane dein Ziel, Exit-K
             step_count=m.step_count, seq_total=self.sequences_total,
             bottleneck=bottleneck, next_time=next_time,
         )
-        if fr.plan_eval.get("score", 0) <= 3:
-            print(f"  Plan-Score: {fr.plan_eval.get('score')}/10 — {fr.plan_eval.get('lesson', '')[:80]}")
+        self.narrator.plan_score(
+            fr.plan_eval.get("score", 0), fr.plan_eval.get("lesson", "")
+        )
+
+        # Lerneffekt bei Stagnation: Pattern + Tools in failure_memory speichern
+        if fr.stagnation_detected:
+            focus = self.goal_stack.get_current_focus()
+            tools_str = ", ".join(fr.stagnation_tools[:5])
+            self.failure_memory.record(
+                goal=focus[:100],
+                approach=f"Tools: {tools_str}",
+                error=f"Stagnation: Mehrere Puls-Checks ohne neue Dateien",
+                lesson=f"Bei diesem Ziel mit diesen Tools stagniert — anderen Ansatz waehlen oder Ziel aufteilen",
+            )
 
         # Skill-Extraktion: Bei Erfolg (Score >= 7 + Rating >= 7) als Template speichern
         plan = self.seq_intel.get_refreshed_plan()
@@ -1827,7 +1839,7 @@ SEQUENZ-PLANUNG: Nutze write_sequence_plan am Anfang — plane dein Ziel, Exit-K
             rating=rating,
         )
         if skill_id:
-            print(f"  Neuer Skill extrahiert: {skill_id}")
+            self.narrator.skill_extracted(skill_id)
 
         # Auto-Commit
         commit_msg = f"Sequenz {self.sequences_total}: {summary[:80]}"
@@ -1905,8 +1917,8 @@ SEQUENZ-PLANUNG: Nutze write_sequence_plan am Anfang — plane dein Ziel, Exit-K
 
         Wenn der primaere Provider fehlschlaegt:
         1. Retry im Provider selbst (Timeout, 429)
-        2. Fallback auf DeepSeek V3
-        3. Circuit Breaker: Nach 2 Fails → DeepSeek fuer 10 Sequenzen
+        2. Fallback-Kette: DeepSeek → GPT-4.1-mini → Sonnet 4.6
+        3. Circuit Breaker: Nach 2 Fails → 5 Sequenzen Cooldown
 
         Args:
             task: Aufgaben-Typ (main_work, code_review, audit_primary, etc.)
@@ -1927,7 +1939,7 @@ SEQUENZ-PLANUNG: Nutze write_sequence_plan am Anfang — plane dein Ziel, Exit-K
         if cooldown_until >= self.sequences_total:
             remaining = cooldown_until - self.sequences_total
             logger.info("Circuit Breaker: %s im Cooldown (%d Seq uebrig) → Fallback", provider, remaining)
-            for fb_key in ("deepseek_v3", "gemini_flash"):
+            for fb_key in ("deepseek_v3", "gpt4_1_mini", "claude_sonnet"):
                 fb_prov = MODELS.get(fb_key, {}).get("provider", "")
                 if fb_prov == provider:
                     continue
@@ -1941,8 +1953,9 @@ SEQUENZ-PLANUNG: Nutze write_sequence_plan am Anfang — plane dein Ziel, Exit-K
         # Primaerer Call (nur API-Fehler abfangen — Programmierfehler sollen laut scheitern)
         try:
             result = self._call_provider(model_key, system, messages, tools, max_tokens)
-            # Erfolg → Failure-Counter zuruecksetzen
+            # Erfolg → Failure-Counter UND Cooldown zuruecksetzen
             self._provider_failures[provider] = 0
+            self._provider_cooldown.pop(provider, None)
             return result
         except (ValueError, httpx.HTTPError, TimeoutError, ConnectionError, OSError) as primary_error:
             # Failure tracken
@@ -1952,18 +1965,19 @@ SEQUENZ-PLANUNG: Nutze write_sequence_plan am Anfang — plane dein Ziel, Exit-K
                 "LLM-Fehler %s (Versuch %d): %s", provider, failures, primary_error
             )
 
-            # Circuit Breaker: Ab 2 Failures → Cooldown fuer 10 Sequenzen
+            # Circuit Breaker: Ab 2 Failures → Cooldown fuer 5 Sequenzen
             if failures >= 2:
-                self._provider_cooldown[provider] = self.sequences_total + 10
+                self._provider_cooldown[provider] = self.sequences_total + 5
                 logger.warning(
-                    "Circuit Breaker AKTIV: %s gesperrt fuer 10 Sequenzen → Fallback-Kette",
+                    "Circuit Breaker AKTIV: %s gesperrt fuer 5 Sequenzen → Fallback-Kette",
                     provider,
                 )
 
-            # Fallback-Kette: DeepSeek → Gemini Flash
+            # Fallback-Kette: DeepSeek → GPT-4.1-mini → Sonnet 4.6
             fallback_chain = [
                 ("deepseek_v3", "DeepSeek V3"),
-                ("gemini_flash", "Gemini Flash"),
+                ("gpt4_1_mini", "GPT-4.1-mini"),
+                ("claude_sonnet", "Sonnet 4.6"),
             ]
 
             for fb_key, fb_name in fallback_chain:
@@ -1972,13 +1986,13 @@ SEQUENZ-PLANUNG: Nutze write_sequence_plan am Anfang — plane dein Ziel, Exit-K
                     continue  # Nicht auf sich selbst fallen
                 try:
                     logger.info("Fallback: %s → %s", provider, fb_name)
-                    print(f"  [Fallback: {provider} → {fb_name}]")
+                    self.narrator.fallback(provider, fb_name)
                     return self._call_provider(
                         fb_key, system, messages, tools, max_tokens
                     )
                 except Exception as fb_error:
                     logger.warning("Fallback %s fehlgeschlagen: %s", fb_name, fb_error)
-                    print(f"  [Fallback {fb_name} fehlgeschlagen: {fb_error}]")
+                    self.narrator.api_failed(f"Fallback {fb_name}: {fb_error}")
                     continue  # Naechsten Fallback versuchen
 
             # Alle Fallbacks gescheitert
@@ -2232,7 +2246,7 @@ Antworte als JSON:
 
             self.communication.send_message("\n".join(lines), channel="telegram")
             briefing_flag.write_text(today, encoding="utf-8")
-            print(f"  Morgen-Briefing gesendet.")
+            self.narrator.morning_briefing()
         except Exception as e:
             logger.warning(f" Morgen-Briefing fehlgeschlagen: {e}")
 
@@ -2252,8 +2266,7 @@ Antworte als JSON:
         self.running = True
         name = self.genesis.get("name", "Lyra")
 
-        print(f"\n  {name} laeuft. Telegram zum Schreiben, Ctrl+C zum Stoppen.")
-        print(f"{'=' * 60}\n")
+        self.narrator.loop_start(name)
 
         try:
             while self.running:
@@ -2266,8 +2279,7 @@ Antworte als JSON:
 
                 # Dream-Konsolidierung (alle 10 Sequenzen)
                 if self.dream.should_dream(self._sequences_since_dream):
-                    print(f"  {'=' * 40}")
-                    print(f"  DREAM — Memory-Konsolidierung...")
+                    self.narrator.dream_start()
                     result = self.dream.dream()
                     # Dream-Empfehlungen als Goals (Feedback-Loop schliessen)
                     dream_log = safe_json_read(self.dream.dream_log_path, default=[])
@@ -2283,16 +2295,14 @@ Antworte als JSON:
                             result += f" | {removed} alte Erinnerungen konsolidiert"
                     except Exception as e:
                         logger.warning(f" Memory-Konsolidierung fehlgeschlagen: {e}")
-                    print(f"  {result}")
-                    print(f"  {'=' * 40}\n")
+                    self.narrator.dream_end(result)
                     self._sequences_since_dream = 0
 
                 # Selbst-Audit (alle 15 Sequenzen)
                 if self.self_audit.should_audit(self._sequences_since_audit):
-                    print(f"  {'=' * 40}")
-                    print(f"  SELBST-AUDIT — Dual Code-Analyse...")
+                    self.narrator.audit_start()
                     result = self.self_audit.run_audit()
-                    print(f"  {result}")
+                    self.narrator.audit_end(result)
 
                     # Findings automatisch zu Goals konvertieren
                     try:
@@ -2305,52 +2315,41 @@ Antworte als JSON:
                                     goals_result = self.self_audit.create_goals_from_findings(
                                         last_findings, self.goal_stack
                                     )
-                                    print(f"  {goals_result}")
+                                    if goals_result:
+                                        print(f"  {goals_result}")
                     except Exception as e:
                         logger.warning(f" Audit/Goals fehlgeschlagen: {e}")
 
-                    # Integrations-Check (laeuft zusammen mit Audit)
-                    print(f"\n  INTEGRATIONS-CHECK:")
-                    integ_report = self.integration_tester.get_report()
-                    print(f"  {integ_report}")
-
-                    # Dependency-Analyse
+                    # Integrations-Check + Dependency-Analyse
+                    self.narrator.integration_check(self.integration_tester.get_report())
                     dep_result = self.dependency_analyzer.analyze()
                     if dep_result["orphaned"]:
-                        print(f"\n  {dep_result['report']}")
+                        self.narrator.dependency_check(dep_result["report"])
 
-                    print(f"  {'=' * 40}\n")
                     self._sequences_since_audit = 0
 
                 # Selbst-Diagnose (alle 10 Sequenzen — unabhaengig vom Audit)
                 if (self.sequences_total % 10 == 0) and self.sequences_total > 0 and self._sequences_since_audit > 0:
-                    print(f"  {'─' * 40}")
-                    print(f"  AUTO-DIAGNOSE...")
                     integ = self.integration_tester.get_report()
-                    print(f"  {integ}")
+                    self.narrator.diagnose(integ)
                     dep = self.dependency_analyzer.analyze()
                     if dep["orphaned"]:
-                        print(f"  {dep['report']}")
-                    print(f"  {'─' * 40}\n")
+                        self.narrator.dependency_check(dep["report"])
 
                 # Benchmark (alle 20 Sequenzen)
                 self._sequences_since_benchmark += 1
                 if self.benchmark.should_benchmark(self._sequences_since_benchmark):
-                    print(f"  {'=' * 40}")
-                    print(f"  BENCHMARK — Leistungsmessung...")
                     result = self.benchmark.run_all_benchmarks()
-                    print(f"  {result}")
-                    print(f"  {'=' * 40}\n")
+                    self.narrator.benchmark(result)
                     self._sequences_since_benchmark = 0
 
                 # Kurze Pause — oder sofort bei Telegram-Nachricht
                 woke = self._wake_event.wait(timeout=1.0)
                 self._wake_event.clear()
                 if woke:
-                    print(f"  >> Oliver hat geschrieben!\n")
+                    self.narrator.telegram_received()
 
         except KeyboardInterrupt:
-            print(f"\n\n  {name} wird pausiert...")
             self._save_all()
             self.memory.store_experience({
                 "type": "pause",
@@ -2359,43 +2358,14 @@ Antworte als JSON:
                 "emotions": {},
                 "tags": ["pause"],
             })
-            print(f"  {self.llm.get_cost_summary()}")
-            print("  State gespeichert. Bis zum naechsten Mal.\n")
+            self.narrator.shutdown(self.llm.get_cost_summary())
 
     # Sliding Window lebt jetzt in engine/message_compression.py
     # LLM-Ops (Opus Validation, Goal Planning, Cross-Review) in engine/llm_ops.py
 
     def _describe_action(self, tool_name: str, tool_input: dict) -> str:
-        """Uebersetzt Tool-Calls in menschenlesbare Beschreibungen."""
-        descriptions = {
-            "write_file": lambda i: f"Schreibe Datei: {i.get('path', '?')}",
-            "read_file": lambda i: f"Lese: {i.get('path', '?')}",
-            "list_directory": lambda i: f"Schaue in Ordner: {i.get('path', '/')}",
-            "execute_python": lambda i: f"Fuehre Code aus ({len(i.get('code', ''))} Zeichen)",
-            "web_search": lambda i: f"Suche im Web: {i.get('query', '?')}",
-            "web_read": lambda i: f"Lese Webseite: {i.get('url', '?')[:60]}",
-            "create_project": lambda i: f"Neues Projekt: {i.get('name', '?')}",
-            "set_goal": lambda i: f"Neues Ziel: {i.get('title', '?')}",
-            "complete_subgoal": lambda i: f"Sub-Ziel erledigt!",
-            "send_telegram": lambda i: f"Nachricht an Oliver: {i.get('message', '?')[:60]}",
-            "remember": lambda i: f"Erinnere mich: {i.get('query', '?')[:50]}",
-            "read_own_code": lambda i: f"Lese eigenen Code: {i.get('path', '?')}",
-            "modify_own_code": lambda i: f"Aendere eigenen Code: {i.get('path', '?')}",
-            "pip_install": lambda i: f"Installiere Paket: {i.get('package', '?')}",
-            "git_commit": lambda i: f"Git Commit: {i.get('message', '?')[:50]}",
-            "git_status": lambda i: "Pruefe Git-Status",
-            "create_tool": lambda i: f"Baue neues Tool: {i.get('name', '?')}",
-            "use_tool": lambda i: f"Nutze Tool: {i.get('name', '?')}",
-            "generate_tool": lambda i: f"Generiere Tool: {i.get('name', '?')}",
-            "finish_sequence": lambda i: f"Sequenz beendet",
-        }
-        desc_fn = descriptions.get(tool_name)
-        if desc_fn:
-            try:
-                return desc_fn(tool_input)
-            except (KeyError, TypeError, ValueError):
-                pass
-        return f"{tool_name}"
+        """Delegiert an Narrator.describe_action()."""
+        return self.narrator.describe_action(tool_name, tool_input)
 
     _project_context_cache = None  # Sentinel: None = nicht berechnet
 
@@ -2542,16 +2512,13 @@ Antworte als JSON:
 
         # Sequenz-Header: Nummer + aktueller Fokus
         focus = self.goal_stack.get_current_focus()
-        focus_short = focus.split("\n")[0].replace("FOKUS: ", "") if "FOKUS:" in focus else ""
-        print(f"\n  --- Sequenz {self.sequences_total + 1}: {focus_short} ---" if focus_short
-              else f"\n  --- Sequenz {self.sequences_total + 1} ---")
 
-        # Alle 5 Sequenzen: Gesamtplan mit Checkmarks anzeigen
-        if self.sequences_total % 5 == 0:
-            summary = self.goal_stack.get_summary()
-            if summary and "Keine aktiven" not in summary:
-                for line in summary.split("\n"):
-                    print(f"  {line}")
+        # Subgoal-Stuck: Pruefen ob wir am gleichen Ziel haengen
+        consecutive = self.goal_stack.track_focus(focus)
+        if consecutive >= 3:
+            self.seq_intel._meta_rules.check_subgoal_stuck(
+                focus.split("\n")[0][:50], consecutive
+            )
 
         # Task-Typ bestimmen (einmal, wird fuer Step-Budget + Tool-Tiers genutzt)
         self._current_task_type = self._classify_task(mode, focus)
@@ -2559,13 +2526,21 @@ Antworte als JSON:
         # Step-Budget = Sicherheitsnetz (Phi plant selbst via write_sequence_plan)
         step_budget = self._get_step_budget(mode, focus)
 
+        self.narrator.sequence_start(
+            self.sequences_total + 1, focus, mode.get("mode", "standard"), step_budget
+        )
+
+        # Alle 5 Sequenzen: Gesamtplan mit Checkmarks anzeigen
+        if self.sequences_total % 5 == 0:
+            self.narrator.goal_summary(self.goal_stack.get_summary())
+
         # Tool-Tiers: Dynamische Auswahl pro Step
         base_tiers = self._get_base_tiers(mode, task_type=self._current_task_type)
         escalated_tiers = set()
         self._project_context_cache = None
 
         # Fortschritts-Indikator: Zeigt dass Phi arbeitet (LLM-Call kann dauern)
-        print(f"  Modus: {mode['mode']} | Budget: {step_budget} Steps | Warte auf LLM...", end="", flush=True)
+        self.narrator.waiting()
 
         for step in range(step_budget):
             # Tool-Tier-Auswahl (bleibt in consciousness.py — ist Tool-Logik)
@@ -2585,7 +2560,7 @@ Antworte als JSON:
 
             # Graceful Finish bei Token >= 95%
             if sp.should_graceful_finish:
-                print(f"  [Token-Limit 95% — Graceful Finish]")
+                self.narrator.token_warning(95, "graceful_finish")
                 finish_data = self._graceful_finish(messages, step_count)
                 self._handle_finish_sequence(finish_data)
                 finished = True
@@ -2601,11 +2576,11 @@ Antworte als JSON:
             # Pre-Count: Token-Verbrauch schaetzen BEVOR der Call rausgeht
             estimated = estimate_tokens(effective_system_prompt, messages, current_tools)
             if estimated > MAX_INPUT_TOKENS_PER_SEQUENCE * 0.90:
-                print(f"  [Pre-Count: ~{estimated:,} Token — komprimiere aggressiv]")
+                self.narrator.token_precount(estimated, "compress")
                 compress_old_messages(messages, keep_recent=3)
                 estimated = estimate_tokens(effective_system_prompt, messages, current_tools)
                 if estimated > MAX_INPUT_TOKENS_PER_SEQUENCE * 0.95:
-                    print(f"  [Pre-Count: ~{estimated:,} Tokens — Graceful Finish]")
+                    self.narrator.token_precount(estimated, "graceful_finish")
                     try:
                         finish_data = self._graceful_finish(messages, step_count)
                         self._handle_finish_sequence(finish_data)
@@ -2632,24 +2607,40 @@ Antworte als JSON:
             # Step-Level Retry: API-Fehler duerfen einzelne Steps wiederholen,
             # nicht sofort die ganze Sequenz toeten (H6)
             response = None
+            cascade_count = getattr(self, '_cascade_failures', 0)
             for _retry in range(3):
                 try:
                     response = self._call_llm(
                         "main_work", effective_system_prompt, messages, current_tools
                     )
+                    self._cascade_failures = 0  # Erfolg → Cascade-Counter reset
                     break  # Erfolg → weiter
                 except (ValueError, httpx.HTTPError, TimeoutError, ConnectionError, OSError) as e:
                     error_msg = str(e)
                     if "tool_result" in error_msg or "tool_use" in error_msg:
-                        print(f"  Nachrichten-Sync verloren — starte neue Sequenz")
+                        self.narrator.emergency("Nachrichten-Sync verloren — starte neue Sequenz")
                         break  # Nicht retrybar
+
+                    # Cascade-Failure: Alle Provider tot → sofort Sequenz beenden
+                    if "Alle Fallbacks fehlgeschlagen" in error_msg:
+                        self._cascade_failures = cascade_count + 1
+                        if self._cascade_failures >= 2:
+                            self.narrator.emergency(
+                                f"API-Kaskade {self._cascade_failures}x gescheitert — Sequenz beendet"
+                            )
+                            logger.error("Cascade-Failure %d — Sequenz-Abbruch", self._cascade_failures)
+                            break
+                        logger.warning("Cascade-Failure %d — letzter Retry", self._cascade_failures)
+                        time.sleep(2)
+                        continue
+
                     if _retry < 2:
                         wait = 2 ** _retry  # 1s, 2s
-                        print(f"  API-Fehler (Retry {_retry + 1}/2): {e}")
+                        self.narrator.api_retry(_retry + 1, 2, e)
                         logger.warning("Step-Retry %d/2: %s", _retry + 1, e)
                         time.sleep(wait)
                     else:
-                        print(f"  API-Fehler nach 3 Versuchen: {e}")
+                        self.narrator.api_failed(e)
                         logger.error("Step-Loop: 3 Versuche fehlgeschlagen: %s", e)
             if response is None:
                 break
@@ -2662,26 +2653,19 @@ Antworte als JSON:
             )
             self.sequence_output_tokens += usage.get("output_tokens", 0)
 
-            # Zeilenumbruch nach "Warte auf LLM..." beim ersten Step
-            if step == 0:
-                print()  # Schliesst die "Warte auf LLM..." Zeile ab
+            # Effizienz-Check: Entfernt — Fortschritts-Puls in before_step() ist smarter
+            # (misst Neuheit statt nur files_written==0, vermeidet doppelte Warnungen)
 
-            # Lyras Gedanken — erste Zeile, am Satzende gekuerzt (nicht mitten im Wort)
+            # Zeilenumbruch nach "Denke nach..." beim ersten Step
+            if step == 0:
+                self.narrator.waiting_done()
+
+            # Lyras Gedanken — erste Zeile, am Satzende gekuerzt
             for block in response["content"]:
                 if hasattr(block, "text") and block.text.strip():
                     first_line = block.text.strip().split("\n")[0].strip()
                     if first_line and len(first_line) > 5:
-                        if len(first_line) <= 150:
-                            thought = first_line
-                        else:
-                            # Naechstes Satzende nach Zeichen 80 suchen
-                            cut = -1
-                            for end_char in ".!?":
-                                pos = first_line.find(end_char, 80)
-                                if pos != -1 and (cut == -1 or pos < cut):
-                                    cut = pos
-                            thought = first_line[:cut + 1] if cut != -1 else first_line[:150] + "…"
-                        print(f"  💭 {thought}")
+                        self.narrator.thought(first_line)
 
             # Reaktive Tool-Eskalation: Phi erwaehnt fehlende Tools → naechster Step bekommt sie
             # Erweitert: Auch natuerliche Sprache erkennen + genutzte Tools tracken
@@ -2734,24 +2718,39 @@ Antworte als JSON:
                         step_count += 1
                         action_desc = self._describe_action(block.name, block.input)
 
-                        result = self._execute_tool(block.name, block.input)
-                        result_str = str(result)[:3000]
-
-                        is_error = (result_str.startswith("FEHLER")
-                                    or result_str.startswith("WARNUNG")
-                                    or result_str.startswith("ROLLBACK"))
-
-                        # Sequenz-Intelligence: Stuck-Detection + Metriken
-                        atr = self.seq_intel.after_tool(block.name, block.input, result_str, is_error)
-                        if atr.guidance:
-                            result_str += atr.guidance
+                        # Ebene 3: Tool-Blocker — 3x gleicher Fehler → nicht ausfuehren
+                        is_error = False  # Reset — verhindert stale state vom vorherigen Loop
+                        pre_check = self.seq_intel.check_blocked(block.name, block.input)
+                        if pre_check.blocked:
+                            result_str = pre_check.guidance
+                            is_error = True
+                            atr = pre_check  # pre_check IST ein AfterToolResult
+                            # Lerneffekt: Blockade in failure_memory speichern
+                            self.failure_memory.record(
+                                goal=focus[:100],
+                                approach=f"{block.name}: {str(block.input)[:100]}",
+                                error=pre_check.guidance[:200],
+                                lesson=f"Tool {block.name} wiederholt gescheitert — anderen Ansatz waehlen",
+                            )
+                        else:
+                            result = self._execute_tool(block.name, block.input)
+                            result_str = str(result)[:3000]
+                            is_error = (
+                                result_str.startswith("FEHLER")
+                                or result_str.startswith("WARNUNG")
+                                or result_str.startswith("ROLLBACK")
+                            )
+                            # Stuck-Detection + Metriken nur bei echten Tool-Calls
+                            atr = self.seq_intel.after_tool(block.name, block.input, result_str, is_error)
+                            if atr.guidance:
+                                result_str += atr.guidance
 
                         if is_error:
-                            print(f"  ❌ {action_desc}")
                             error_preview = result_str.replace("\n", " ")[:120]
-                            print(f"     {error_preview}")
-                            if atr.is_stuck:
-                                print(f"  ⚠ Stuck: {block.name} {atr.stuck_count}x")
+                            self.narrator.tool_error(
+                                block.name, action_desc, error_preview,
+                                stuck_count=atr.stuck_count if atr.is_stuck else 0,
+                            )
                             # Cross-Sequenz Spin-Tracker (create_project/create_goal)
                             if block.name in ("create_project", "create_goal"):
                                 spin_key = _normalize_spin_key(block.name, block.input.get("name", ""))
@@ -2764,7 +2763,7 @@ Antworte als JSON:
                             elif block.name in ("web_search", "create_project", "send_telegram",
                                                 "create_goal", "modify_own_code", "create_tool",
                                                 "write_file", "git_commit"):
-                                print(f"  ✓ {action_desc}")
+                                self.narrator.tool_success(block.name, action_desc)
                             if block.name in ("create_project", "create_goal"):
                                 spin_key = _normalize_spin_key(block.name, block.input.get("name", ""))
                                 cross_seq_spins.pop(spin_key, None)
@@ -2793,7 +2792,7 @@ Antworte als JSON:
 
             elif response["stop_reason"] == "length":
                 # Token-Limit erreicht — Output wurde abgeschnitten!
-                print(f"  ⚠ Output abgeschnitten (max_tokens erreicht)")
+                self.narrator.token_warning(100, "truncated")
                 # Abgeschnittene Assistant-Message entfernen (koennte halbes JSON enthalten)
                 if messages and messages[-1].get("role") == "assistant":
                     messages.pop()
@@ -2824,16 +2823,14 @@ Antworte als JSON:
                 break
 
         if not finished and step_count >= step_budget:
-            print(f"\n  Max Steps ({step_budget}) erreicht — Graceful Finish.")
+            self.narrator.max_steps(step_budget, self.seq_intel.metrics.errors,
+                                    self.seq_intel.metrics.files_written)
             finish_data = self._graceful_finish(messages, step_count)
             self._handle_finish_sequence(finish_data)
-            m = self.seq_intel.metrics
-            status = "FAILED" if m.errors > 3 and m.files_written == 0 else "PAUSED"
-            print(f"  Status: {status} ({m.errors} Fehler, {m.files_written} Dateien)")
 
         # Emergency-Finish: API komplett ausgefallen, Schleife ohne finish_sequence beendet
         if not finished and step_count < step_budget:
-            print(f"  ⚠ Sequenz ohne finish_sequence beendet — Emergency-Save")
+            self.narrator.emergency("Sequenz ohne finish_sequence beendet")
             self._save_sequence_memory(
                 f"Sequenz abgebrochen nach {step_count} Steps — API komplett ausgefallen"
             )
@@ -2866,12 +2863,13 @@ Antworte als JSON:
             if eff_alerts:
                 self._efficiency_alerts = eff_alerts  # Fuer naechste Perception
                 for alert in eff_alerts:
-                    print(f"  ⚠ EFFIZIENZ: {alert}")
+                    self.narrator.efficiency_alert(alert)
 
         # Kompakte Zusammenfassung
-        duration_min = seq_duration / 60
-        error_note = f", {self.seq_intel.metrics.errors} Fehler" if self.seq_intel.metrics.errors > 0 else ""
-        print(f"  [{step_count} Aktionen, {duration_min:.1f} Min{error_note}]")
+        self.narrator.sequence_end(
+            step_count, seq_duration, self.seq_intel.metrics.errors,
+            self.seq_intel.metrics.files_written,
+        )
 
         # Stille-Fehler nur wenn vorhanden
         silent_warnings = self.silent_failure_detector.check_after_sequence(
@@ -2882,7 +2880,7 @@ Antworte als JSON:
         )
         if silent_warnings:
             for w in silent_warnings:
-                print(f"  ⚠ {w}")
+                self.narrator.silent_warning(w)
 
         self.sequence_input_tokens = 0
         self.sequence_output_tokens = 0

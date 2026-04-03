@@ -176,8 +176,11 @@ class TelegramBridge:
             self._polling_active = False
 
     def close(self):
-        """Stoppt Polling und schliesst den HTTP-Client sauber."""
+        """Stoppt Polling, wartet auf Thread-Ende, schliesst HTTP-Client."""
         self.stop_polling()
+        # Auf Polling-Thread warten damit kein Request auf geschlossenem Socket laeuft
+        if hasattr(self, '_polling_thread') and self._polling_thread.is_alive():
+            self._polling_thread.join(timeout=3.0)
         try:
             if self.client:
                 self.client.close()
@@ -192,7 +195,7 @@ class TelegramBridge:
             try:
                 updates = self.get_updates(
                     offset=self._last_update_id + 1,
-                    timeout=15,
+                    timeout=5,  # Kurz halten damit stop_polling() schnell greift
                 )
 
                 # Erfolgreicher Poll — Fehler-Zaehler zuruecksetzen

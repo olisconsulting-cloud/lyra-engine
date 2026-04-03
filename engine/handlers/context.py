@@ -46,6 +46,9 @@ class ToolContext:
     dependency_analyzer: Any = None  # DependencyAnalyzer
     silent_failure_detector: Any = None  # SilentFailureDetector
 
+    # Fehler-Gedaechtnis
+    failure_memory: Any = None       # FailureMemory
+
     # Laufzeit-State (mutable — wird pro Sequenz zurueckgesetzt)
     sequences_total: int = 0
     _installed_packages: set = field(default_factory=set)

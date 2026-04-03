@@ -88,13 +88,19 @@ class MetaRuleEngine:
                 ),
             },
             "same_subgoal_stuck": {
-                "type": "escalation",
+                "type": "reflection",
                 "condition": "3x gleiches Sub-Goal ohne Fortschritt",
-                "action": "skip_or_reframe",
+                "action": "reflect_and_learn",
                 "prompt_injection": (
-                    "HARTE REGEL: Dieses Sub-Goal blockiert seit 3 Sequenzen. "
-                    "Optionen: (1) Vereinfache das Ziel, (2) Ueberspringe es, "
-                    "(3) Breche es in kleinere Teile. Weiter wie bisher ist VERBOTEN."
+                    "HARTE REGEL: Du arbeitest zum dritten Mal am gleichen Ziel "
+                    "ohne Fortschritt. BEVOR du weitermachst:\n"
+                    "1. REFLEKTIERE: Was genau blockiert dieses Ziel?\n"
+                    "2. ANALYSIERE: Was hast du bisher versucht und warum hat es nicht funktioniert?\n"
+                    "3. LERNE: Was ist die Ursache des Problems?\n"
+                    "4. ENTSCHEIDE: Neuer Ansatz ODER Ziel als gescheitert markieren "
+                    "(fail_subgoal) mit klarer Begruendung.\n"
+                    "Schreibe deine Analyse in finish_sequence unter 'bottleneck' "
+                    "und 'next_time_differently'."
                 ),
             },
         }

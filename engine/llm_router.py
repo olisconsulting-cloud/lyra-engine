@@ -3,10 +3,12 @@ Multi-LLM Router — Waehlt das optimale Modell je nach Aufgabe.
 
 Aufstellung:
 - Kimi K2.5 (NVIDIA): Haupt-Arbeit (80%) — Tool-Use, Code, Telegram ($0)
-- Claude Sonnet 4.6: Code-Review — praezises Diff-Verstaendnis, nativer Tool-Use
-- Claude Opus 4.6: Audit, Result-Validation — Tiefenanalyse (hier lohnt sich Opus)
-- GPT-4.1-mini (OpenAI): Dream, Goal-Planning — 89% guenstiger als Sonnet, JSON-Garantie
-- DeepSeek V3.2: Fallback (~35x guenstiger als Claude Sonnet)
+- Claude Sonnet 4.6: Code-Review + letzter Fallback — nativer Tool-Use
+- Claude Opus 4.6: Audit, Result-Validation — Tiefenanalyse
+- GPT-4.1-mini (OpenAI): Dream, Goal-Planning, Fallback-Stufe 2
+- DeepSeek V3.2: Fallback-Stufe 1 (~35x guenstiger als Sonnet)
+
+Fallback-Kette: NVIDIA → DeepSeek → GPT-4.1-mini → Sonnet 4.6
 
 TASK_MODEL_MAP ist die EINZIGE Stelle fuer Modell-Zuordnung.
 Alle Module importieren von hier — keine hardcodierten Modell-IDs.
@@ -19,6 +21,7 @@ import logging
 import os
 import re
 import threading
+import time
 from typing import Optional
 
 logger = logging.getLogger(__name__)
@@ -63,7 +66,7 @@ MODELS = {
         "model_id": "gemini-2.5-flash",
         "input_cost": 0.10,
         "output_cost": 0.40,
-        "use_for": "Zweiter Fallback wenn DeepSeek versagt",
+        "use_for": "Nicht in Fallback-Kette — nur fuer explizite Gemini-Tasks",
     },
     "gpt4_1_mini": {
         "provider": "openai",
@@ -86,7 +89,7 @@ TASK_MODEL_MAP = {
     "goal_planning": "gpt4_1_mini",        # GPT-4.1-mini — Goal-Zerlegung (89% guenstiger als Sonnet, Structured Outputs)
     "result_validation": "claude_opus",    # Opus 4.6 — Ergebnis-Pruefung (kritisch, hier keine Abstriche)
     "graceful_finish": "kimi_k25",          # Kimi K2.5 — Sequenz-Zusammenfassungen bei Auto-Finish ($0, vorher Sonnet)
-    "fallback": "deepseek_v3",             # DeepSeek V3 — Fallback wenn Kimi versagt
+    "fallback": "deepseek_v3",             # DeepSeek V3 — Fallback Stufe 1 (Kette: DeepSeek → GPT-4.1-mini → Sonnet)
 }
 
 
@@ -107,7 +110,15 @@ class LLMRouter:
         self.deepseek_key = os.getenv("DEEPSEEK_API_KEY", "").strip()
         self.nvidia_key = os.getenv("NVIDIA_API_KEY", "").strip()
         self.openai_key = os.getenv("OPENAI_API_KEY", "").strip()
-        self.http = httpx.Client(timeout=15.0)  # 15s — schneller Fallback bei Timeout
+        # Getrennte Pools: Primary-Timeout blockiert nicht den Fallback-Pool
+        _timeout = httpx.Timeout(
+            connect=10.0,   # Verbindung aufbauen: 10s reicht
+            read=45.0,      # Antwort abwarten: 45s (grosse Prompts brauchen Zeit)
+            write=15.0,     # Request senden: 15s
+            pool=10.0,      # Connection-Pool: 10s
+        )
+        self.http_primary = httpx.Client(timeout=_timeout)   # NVIDIA/Kimi
+        self.http_fallback = httpx.Client(timeout=_timeout)  # DeepSeek, OpenAI (Sonnet nutzt eigenen Anthropic-Client)
         self._http_owned = True  # Marker fuer Cleanup
 
         # Kosten-Tracking (thread-safe)
@@ -116,15 +127,15 @@ class LLMRouter:
         self.model_usage = {}  # {model: {calls, input_tokens, output_tokens, cost}}
 
     def close(self):
-        """Schliesst den HTTP-Client sauber."""
+        """Schliesst beide HTTP-Clients sauber."""
         if self._http_owned:
-            try:
-                if self.http:
-                    self.http.close()
-            except Exception:
-                pass
-            finally:
-                self._http_owned = False
+            for client in (self.http_primary, self.http_fallback):
+                try:
+                    if client:
+                        client.close()
+                except Exception:
+                    pass
+            self._http_owned = False
 
     def __del__(self):
         self.close()
@@ -215,13 +226,26 @@ class LLMRouter:
             if gemini_tools:
                 body["tools"] = gemini_tools
 
-        # API Call
-        resp = self.http.post(
-            f"https://generativelanguage.googleapis.com/v1beta/models/{model_id}:generateContent",
-            params={"key": self.google_key},
-            json=body,
-        )
+        # API Call mit Retry
 
+        resp = None
+        for attempt in range(2):
+            try:
+                resp = self.http_fallback.post(
+                    f"https://generativelanguage.googleapis.com/v1beta/models/{model_id}:generateContent",
+                    params={"key": self.google_key},
+                    json=body,
+                )
+            except (httpx.TimeoutException, httpx.ConnectError) as e:
+                logger.warning("Gemini Timeout (Versuch %d/2): %s", attempt + 1, e)
+                if attempt < 1:
+                    time.sleep(2)
+                    continue
+                raise ValueError("Gemini API Timeout nach 2 Versuchen") from e
+            break
+
+        if resp is None:
+            raise ValueError("Gemini API: Kein Response erhalten")
         if resp.status_code != 200:
             raise ValueError(f"Gemini API Fehler {resp.status_code}: {resp.text[:200]}")
 
@@ -264,15 +288,28 @@ class LLMRouter:
             if oai_tools:
                 body["tools"] = oai_tools
 
-        resp = self.http.post(
-            "https://api.deepseek.com/chat/completions",
-            headers={
-                "Authorization": f"Bearer {self.deepseek_key}",
-                "Content-Type": "application/json",
-            },
-            json=body,
-        )
 
+        resp = None
+        for attempt in range(2):
+            try:
+                resp = self.http_fallback.post(
+                    "https://api.deepseek.com/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {self.deepseek_key}",
+                        "Content-Type": "application/json",
+                    },
+                    json=body,
+                )
+            except (httpx.TimeoutException, httpx.ConnectError) as e:
+                logger.warning("DeepSeek Timeout (Versuch %d/2): %s", attempt + 1, e)
+                if attempt < 1:
+                    time.sleep(2)
+                    continue
+                raise ValueError("DeepSeek API Timeout nach 2 Versuchen") from e
+            break
+
+        if resp is None:
+            raise ValueError("DeepSeek API: Kein Response erhalten")
         if resp.status_code != 200:
             raise ValueError(f"DeepSeek API Fehler {resp.status_code}: {resp.text[:200]}")
 
@@ -306,12 +343,12 @@ class LLMRouter:
                 body["tools"] = oai_tools
 
         # Retry mit Backoff (429 Rate-Limit + Timeout)
-        import time as _time
+
         last_error = None
         resp = None
         for attempt in range(2):
             try:
-                resp = self.http.post(
+                resp = self.http_primary.post(
                     "https://integrate.api.nvidia.com/v1/chat/completions",
                     headers={
                         "Authorization": f"Bearer {self.nvidia_key}",
@@ -319,18 +356,18 @@ class LLMRouter:
                     },
                     json=body,
                 )
-            except httpx.TimeoutException as e:
+            except (httpx.TimeoutException, httpx.ConnectError) as e:
                 last_error = e
                 logger.warning("NVIDIA Timeout (Versuch %d/2): %s", attempt + 1, e)
                 if attempt < 1:
-                    _time.sleep(1)
+                    time.sleep(1)
                     continue
                 raise ValueError(f"NVIDIA API Timeout nach 2 Versuchen") from e
 
             if resp.status_code == 429:
                 logger.warning("NVIDIA Rate-Limit 429 (Versuch %d/2)", attempt + 1)
                 if attempt < 1:
-                    _time.sleep(1)
+                    time.sleep(1)
                     continue
             break
 
@@ -366,15 +403,27 @@ class LLMRouter:
             if oai_tools:
                 body["tools"] = oai_tools
 
-        resp = self.http.post(
-            "https://api.openai.com/v1/chat/completions",
-            headers={
-                "Authorization": f"Bearer {self.openai_key}",
-                "Content-Type": "application/json",
-            },
-            json=body,
-        )
+        resp = None
+        for attempt in range(2):
+            try:
+                resp = self.http_fallback.post(
+                    "https://api.openai.com/v1/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {self.openai_key}",
+                        "Content-Type": "application/json",
+                    },
+                    json=body,
+                )
+            except (httpx.TimeoutException, httpx.ConnectError) as e:
+                logger.warning("OpenAI Timeout (Versuch %d/2): %s", attempt + 1, e)
+                if attempt < 1:
+                    time.sleep(2)
+                    continue
+                raise ValueError("OpenAI API Timeout nach 2 Versuchen") from e
+            break
 
+        if resp is None:
+            raise ValueError("OpenAI API: Kein Response erhalten")
         if resp.status_code != 200:
             raise ValueError(f"OpenAI API Fehler {resp.status_code}: {resp.text[:200]}")
 

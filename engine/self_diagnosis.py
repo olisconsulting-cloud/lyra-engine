@@ -276,22 +276,27 @@ class IntegrationTester:
         return {"name": "Router-Konsistenz", "passed": True, "detail": "Alle Module nutzen TASK_MODEL_MAP"}
 
     def _check_tool_handler_sync(self) -> dict:
-        """Prueft: Hat jedes Tool in TOOLS einen Handler in _execute_tool_inner?"""
+        """Prueft: Hat jedes Tool in TOOLS einen Handler in HANDLER_MAP?"""
+        # Tool-Namen aus consciousness.py TOOLS-Liste
         consciousness_path = self.root_path / "engine" / "consciousness.py"
         try:
             content = consciousness_path.read_text(encoding="utf-8")
         except Exception:
             return {"name": "Tool-Handler-Sync", "passed": False, "detail": "consciousness.py nicht lesbar"}
 
-        # Tool-Namen aus TOOLS-Liste extrahieren (name-Felder)
-        import re
         tool_defs = set(re.findall(r'"name":\s*"(\w+)"', content))
 
-        # Handler aus _execute_tool_inner extrahieren (elif name == "xxx")
-        handlers = set(re.findall(r'(?:if|elif)\s+name\s*==\s*"(\w+)"', content))
+        # Handler aus engine/handlers/__init__.py HANDLER_MAP extrahieren
+        handler_file = self.root_path / "engine" / "handlers" / "__init__.py"
+        try:
+            handler_content = handler_file.read_text(encoding="utf-8")
+        except Exception:
+            return {"name": "Tool-Handler-Sync", "passed": False, "detail": "handlers/__init__.py nicht lesbar"}
 
-        missing_handlers = tool_defs - handlers
-        orphan_handlers = handlers - tool_defs
+        handler_names = set(re.findall(r'"(\w+)":\s*handle_', handler_content))
+
+        missing_handlers = tool_defs - handler_names
+        orphan_handlers = handler_names - tool_defs
 
         issues = []
         if missing_handlers:

@@ -126,3 +126,13 @@ def compress_old_messages(messages: list, keep_recent: int = 5) -> None:
                 if last_nl > 400:
                     cut = cut[:last_nl]
                 block["content"] = cut + "\n[...gekuerzt]"
+
+    # Hard-Limit: Payload > 200KB → aelteste Message-Paare droppen
+    # Paarweise (assistant+user) entfernen um role-Alternation nicht zu brechen
+    total_chars = sum(len(str(msg.get("content", ""))) for msg in messages)
+    while total_chars > 200_000 and len(messages) > keep_recent * 2 + 2:
+        # Immer 2 Messages entfernen (Index 1+2 = aeltestes assistant+user Paar)
+        for _ in range(2):
+            if len(messages) > keep_recent * 2 + 1:
+                removed = messages.pop(1)  # Index 0 = Perception behalten
+                total_chars -= len(str(removed.get("content", "")))
