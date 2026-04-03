@@ -116,39 +116,85 @@ class CheckpointManager:
     def build_resume_context(self) -> str:
         """Baut Kontext-Text aus dem Checkpoint fuer die Perception.
 
+        Differenziert zwischen completed/paused/failed und gibt der naechsten
+        Sequenz die richtigen Hinweise mit.
+
         Returns:
             Resume-Text oder leerer String wenn kein Checkpoint.
         """
-        checkpoint = self.load()
-        if not checkpoint:
+        if not self.checkpoint_path.exists():
+            return ""
+        data = safe_json_read(self.checkpoint_path, default={})
+        status = data.get("status", "")
+
+        # Nur aktive oder gescheiterte Checkpoints sind relevant
+        if status == "completed":
+            return ""
+        if not status:
             return ""
 
-        parts = ["CHECKPOINT (Fortsetzen der letzten Sequenz):"]
-        parts.append(f"  Unterbrochen bei Step {checkpoint.get('step', '?')}")
+        parts = []
 
-        if checkpoint.get("plan_goal"):
-            parts.append(f"  Plan-Ziel: {checkpoint['plan_goal'][:150]}")
-
-        if checkpoint.get("sub_goal"):
-            parts.append(f"  Sub-Goal: {checkpoint['sub_goal'][:150]}")
-
-        if checkpoint.get("findings"):
-            parts.append(f"  Bisherige Erkenntnisse: {checkpoint['findings'][:300]}")
-
-        if checkpoint.get("files_written"):
-            files = ", ".join(Path(p).name for p in checkpoint["files_written"][:5])
-            parts.append(f"  Geschriebene Dateien: {files}")
-
-        parts.append("  → Setze GENAU hier an. Lies nicht alles nochmal von vorne.")
+        if status == "failed":
+            parts.append("⚠ LETZTE SEQUENZ GESCHEITERT:")
+            parts.append(f"  Fehler: {data.get('errors', '?')}, Dateien: {data.get('files_written', 0)}")
+            if data.get("stuck_patterns"):
+                patterns = ", ".join(data["stuck_patterns"][:3])
+                parts.append(f"  Stuck bei: {patterns}")
+            parts.append("  → ANDERER ANSATZ noetig! Nicht das Gleiche nochmal versuchen.")
+            parts.append("  → Pruefe erst mit list_directory ob die Dateien existieren.")
+        elif status == "paused":
+            parts.append("CHECKPOINT (Fortsetzen — letztes Mal Limit erreicht):")
+            parts.append(f"  Unterbrochen bei Step {data.get('step', '?')}")
+            if data.get("plan_goal"):
+                parts.append(f"  Plan-Ziel: {data['plan_goal'][:150]}")
+            if data.get("findings"):
+                parts.append(f"  Bisherige Erkenntnisse: {data['findings'][:300]}")
+            if data.get("files_written") and isinstance(data["files_written"], list):
+                files = ", ".join(Path(p).name for p in data["files_written"][:5])
+                parts.append(f"  Geschriebene Dateien: {files}")
+            parts.append("  → Setze GENAU hier an. Lies nicht alles nochmal von vorne.")
+        else:
+            # status == "active" — mitten drin abgebrochen
+            parts.append("CHECKPOINT (Fortsetzen der letzten Sequenz):")
+            parts.append(f"  Unterbrochen bei Step {data.get('step', '?')}")
+            if data.get("plan_goal"):
+                parts.append(f"  Plan-Ziel: {data['plan_goal'][:150]}")
+            if data.get("sub_goal"):
+                parts.append(f"  Sub-Goal: {data['sub_goal'][:150]}")
+            if data.get("findings"):
+                parts.append(f"  Bisherige Erkenntnisse: {data['findings'][:300]}")
+            parts.append("  → Setze GENAU hier an. Lies nicht alles nochmal von vorne.")
 
         return "\n".join(parts)
 
-    def mark_completed(self):
-        """Markiert den Checkpoint als abgeschlossen (Sequenz normal beendet)."""
+    def mark_finished(self, status: str = "completed", errors: int = 0,
+                      files_written: int = 0, stuck_patterns: list = None):
+        """Markiert den Checkpoint mit differenziertem Status.
+
+        Status-Typen:
+          completed — Phi hat finish_sequence selbst aufgerufen, Ergebnis erreicht
+          paused    — Hartes Limit erreicht aber Fortschritt gemacht
+          failed    — Viele Fehler, kein Fortschritt, anderer Ansatz noetig
+
+        Args:
+            status: "completed", "paused", oder "failed"
+            errors: Anzahl Fehler in dieser Sequenz
+            files_written: Anzahl geschriebener Dateien
+            stuck_patterns: Liste von Stuck-Keys die erkannt wurden
+        """
         if self.checkpoint_path.exists():
             data = safe_json_read(self.checkpoint_path, default={})
-            data["status"] = "completed"
+            data["status"] = status
+            data["errors"] = errors
+            data["files_written"] = files_written
+            if stuck_patterns:
+                data["stuck_patterns"] = stuck_patterns[:5]
             safe_json_write(self.checkpoint_path, data)
+
+    def mark_completed(self):
+        """Abwaertskompatibel: Markiert als completed."""
+        self.mark_finished("completed")
 
     def clear(self):
         """Loescht den Checkpoint (neuer Fokus, kein Resume noetig)."""

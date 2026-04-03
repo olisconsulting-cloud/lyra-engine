@@ -452,6 +452,37 @@ TOOLS = [
             "required": ["goal", "exit_criteria", "max_steps"],
         },
     },
+    # === update_sequence_plan (Plan dynamisch anpassen) ===
+    {
+        "name": "update_sequence_plan",
+        "description": "Passe deinen laufenden Plan an wenn sich die Situation aendert. Nutze dies wenn dein urspruenglicher Plan nicht mehr passt.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "reason": {
+                    "type": "string",
+                    "description": "Warum muss der Plan angepasst werden? (1 Satz)",
+                },
+                "goal": {
+                    "type": "string",
+                    "description": "Neues Ziel (nur wenn es sich geaendert hat)",
+                },
+                "exit_criteria": {
+                    "type": "string",
+                    "description": "Neues Exit-Kriterium (nur wenn es sich geaendert hat)",
+                },
+                "max_steps": {
+                    "type": "integer",
+                    "description": "Neues Step-Budget (nur wenn noetig)",
+                },
+                "checkpoint_at": {
+                    "type": "integer",
+                    "description": "Neuer Checkpoint-Step (nur wenn noetig)",
+                },
+            },
+            "required": ["reason"],
+        },
+    },
 ]
 
 # Tool-Tiers: Je hoeher, desto seltener gebraucht
@@ -461,7 +492,7 @@ TOOL_TIERS = {
     "write_file": 1, "read_file": 1, "list_directory": 1,
     "execute_python": 1, "set_goal": 1, "complete_subgoal": 1,
     "finish_sequence": 1, "send_telegram": 1, "complete_task": 1,
-    "remember": 1, "write_sequence_plan": 1,
+    "remember": 1, "write_sequence_plan": 1, "update_sequence_plan": 1,
     # Tier 2: PROJEKT — wenn Projekte existieren (~650 Tokens)
     "create_project": 2, "verify_project": 2,
     "run_project_tests": 2, "complete_project": 2,
@@ -961,7 +992,7 @@ LEISTUNG: {rating_trend} | EFFIZIENZ: {efficiency_trend}
 AUDIT: {last_audit} | REVIEWS: {review_stats}
 BENCHMARKS: {benchmark_trend} | FOUNDRY: {foundry_status} | COMPOUND: {compound_stats}
 {optional_block}
-SEQUENZ-PLANUNG: Nutze write_sequence_plan am Anfang — plane dein Ziel, Exit-Kriterium und wieviele Steps du brauchst. Du hast bis zu {MAX_STEPS_PER_SEQUENCE} Steps Spielraum, aber nutze nur was du brauchst. Wenn du ein sinnvolles Ergebnis hast, nutze finish_sequence — auch nach 5 Steps. Das System warnt dich rechtzeitig wenn dein geplantes Budget knapp wird. Schreibe in die Summary WAS du herausgefunden hast (Erkenntnisse, Zahlen, Fakten). Qualitaet > Quantitaet."""
+SEQUENZ-PLANUNG: Nutze write_sequence_plan am Anfang — plane dein Ziel, Exit-Kriterium und wieviele Steps du brauchst. Du hast bis zu {MAX_STEPS_PER_SEQUENCE} Steps Spielraum, aber nutze nur was du brauchst. Wenn sich dein Plan als falsch herausstellt (z.B. Dateien existieren nicht, neuer Ansatz noetig), nutze update_sequence_plan um deinen Plan ANZUPASSEN statt blind weiterzumachen. Das Dashboard zeigt dir deinen Status. Wenn du ein sinnvolles Ergebnis hast, nutze finish_sequence — auch nach 5 Steps. Qualitaet > Quantitaet."""
 
         return self._static_prompt + "\n" + dynamic
 
@@ -2065,8 +2096,22 @@ SEQUENZ-PLANUNG: Nutze write_sequence_plan am Anfang — plane dein Ziel, Exit-K
             self._seq_step_count, self._seq_files_written, self._seq_errors,
         )
 
-        # Checkpoint als abgeschlossen markieren (sauberes Ende)
-        self.checkpointer.mark_completed()
+        # Checkpoint mit differenziertem Status markieren
+        rating = tool_input.get("performance_rating", 5)
+        if self._seq_errors > 3 and self._seq_files_written == 0:
+            # Viele Fehler, kein Output → gescheitert
+            finish_status = "failed"
+        elif rating >= 5 or self._seq_files_written > 0:
+            # Phi hat etwas geschafft
+            finish_status = "completed"
+        else:
+            # Phi hat aufgegeben / niedrige Bewertung
+            finish_status = "paused"
+        self.checkpointer.mark_finished(
+            status=finish_status,
+            errors=self._seq_errors,
+            files_written=self._seq_files_written,
+        )
 
         # Auto-Commit
         commit_msg = f"Sequenz {self.sequences_total}: {summary[:80]}"
@@ -3421,6 +3466,19 @@ Antworte als JSON:
             print(f"\n  Max Steps ({step_budget}) erreicht — Sonnet Graceful Finish.")
             finish_data = self._sonnet_graceful_finish(messages, step_count)
             self._handle_finish_sequence(finish_data)
+
+            # Differenzierter Checkpoint: Hartes Limit = paused oder failed
+            stuck_patterns = [k for k, v in stuck_tracker.items() if v["count"] >= 2]
+            if self._seq_errors > 3 and self._seq_files_written == 0:
+                self.checkpointer.mark_finished(
+                    "failed", self._seq_errors, self._seq_files_written, stuck_patterns
+                )
+                print(f"  Status: FAILED ({self._seq_errors} Fehler, 0 Dateien)")
+            else:
+                self.checkpointer.mark_finished(
+                    "paused", self._seq_errors, self._seq_files_written, stuck_patterns
+                )
+                print(f"  Status: PAUSED (Fortschritt: {self._seq_files_written} Dateien)")
 
         # Step-History speichern (fuer lernendes Step-Budget)
         # Nur saubere Abschluesse lernen — abgewuergte verfaelschen den Schnitt
