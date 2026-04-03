@@ -27,11 +27,13 @@ logger = logging.getLogger(__name__)
 class DreamEngine:
     """Konsolidiert Lyras Gedaechtnis im Hintergrund."""
 
-    def __init__(self, base_path: Path, call_llm: Callable = None):
+    def __init__(self, base_path: Path, call_llm: Callable = None,
+                 tool_dream_bridge=None):
         self.base_path = base_path
         self.consciousness_path = base_path / "consciousness"
         self.dream_log_path = self.consciousness_path / "dream_log.json"
         self.call_llm = call_llm
+        self.tool_dream_bridge = tool_dream_bridge
 
     @staticmethod
     def _is_belief_duplicate(new_belief: str, existing_beliefs: list,

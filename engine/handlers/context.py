@@ -50,6 +50,10 @@ class ToolContext:
     # Fehler-Gedaechtnis
     failure_memory: Any = None       # FailureMemory
 
+    # Tool-Lifecycle
+    tool_metrics: Any = None         # ToolMetrics
+    tool_meta_patterns: Any = None   # ToolMetaPatterns
+
     # Laufzeit-State (mutable — wird pro Sequenz zurueckgesetzt)
     sequences_total: int = 0
     _installed_packages: set = field(default_factory=set)

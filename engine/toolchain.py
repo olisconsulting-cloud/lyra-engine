@@ -36,6 +36,9 @@ class Toolchain:
         self.registry = self._load_registry()
         self.loaded_tools: dict = {}
 
+        # Tool-Lifecycle: Metrics-Callback (wird von consciousness.py gesetzt)
+        self._metrics_callback = None
+
         # Alle registrierten Tools laden
         self._load_all_tools()
 
@@ -177,6 +180,8 @@ class Toolchain:
             info = self.registry.get("tools", {}).get(name)
             if not info:
                 return f"FEHLER: Tool '{name}' nicht gefunden. Verfuegbar: {self.list_tools()}"
+            if info.get("status") == "archived":
+                return f"FEHLER: Tool '{name}' ist archiviert."
             filepath = self.tools_path / info["file"]
             try:
                 self.loaded_tools[name] = self._load_module(name, filepath)
@@ -194,10 +199,20 @@ class Toolchain:
                     self.registry["tools"][name].get("uses", 0) + 1
                 self._save_registry()
 
+            # Tool-Lifecycle: Erfolg melden
+            if self._metrics_callback:
+                self._metrics_callback(name, True)
+
             return str(result)[:3000]
 
         except Exception as e:
-            return f"FEHLER bei Ausfuehrung von '{name}': {e}\n{traceback.format_exc()[:500]}"
+            error_msg = f"FEHLER bei Ausfuehrung von '{name}': {e}\n{traceback.format_exc()[:500]}"
+
+            # Tool-Lifecycle: Fehler melden
+            if self._metrics_callback:
+                self._metrics_callback(name, False, str(e)[:200])
+
+            return error_msg
 
     # === Tool aktualisieren ===
 
@@ -314,6 +329,8 @@ class Toolchain:
         """
         Registriert einen Alias: use_tool(old_name) wird auf new_name umgeleitet.
 
+        Prueft auf zirkulaere Alias-Ketten (max 10 Stufen).
+
         Args:
             old_name: Alter Tool-Name (der umgeleitet werden soll)
             new_name: Neuer Tool-Name (das Ziel)
@@ -323,6 +340,16 @@ class Toolchain:
         """
         if new_name not in self.registry.get("tools", {}):
             return f"FEHLER: Ziel-Tool '{new_name}' nicht in Registry."
+
+        # Zyklus-Erkennung: Folge der Alias-Kette vom Ziel aus
+        aliases = self.registry.get("aliases", {})
+        current = new_name
+        for _ in range(10):
+            current = aliases.get(current)
+            if current is None:
+                break
+            if current == old_name:
+                return f"FEHLER: Zirkulaerer Alias erkannt ({old_name} -> {new_name} -> ... -> {old_name})"
 
         if "aliases" not in self.registry:
             self.registry["aliases"] = {}
@@ -341,7 +368,7 @@ class Toolchain:
         if not filepath.exists():
             return f"FEHLER: Datei {info['file']} nicht gefunden."
 
-        return filepath.read_text(encoding="utf-8")[:5000]
+        return filepath.read_text(encoding="utf-8")[:50000]
 
     def get_stats(self) -> dict:
         """Statistiken ueber die Toolchain."""

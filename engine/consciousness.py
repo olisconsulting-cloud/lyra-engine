@@ -861,7 +861,12 @@ class ConsciousnessEngine:
         self._approved_packages = set(self.state.get("approved_packages", []))
         # Circuit Breaker: Aus State laden (ueberlebt Neustarts)
         self._provider_failures = self.state.get("provider_failures", {})
-        self._provider_cooldown = self.state.get("provider_cooldown", {})
+        raw_cooldown = self.state.get("provider_cooldown", {})
+        # Validierung: Abgelaufene Cooldowns bereinigen, korrupte Werte entfernen
+        self._provider_cooldown = {
+            k: v for k, v in raw_cooldown.items()
+            if isinstance(v, (int, float)) and v >= self.sequences_total
+        }
         self.preferences = self._load_preferences()
 
     def _save_all(self):
@@ -2873,18 +2878,19 @@ Antworte als JSON:
                 if finished:
                     break
 
-                # === ENFORCEMENT: Auto-Finish ab Step 15 ===
+                # === ENFORCEMENT: Auto-Finish ===
                 # Meta-Rules als Code — nicht bitten, erzwingen.
-                # Ausnahme: evolution/sprint braucht Raum fuer Selbstverbesserung.
-                enforcement_limit = 15
-                if (step_count >= enforcement_limit
-                        and mode.get("mode") not in ("evolution", "sprint")
-                        and not finished):
-                    self.narrator.enforcement("auto_finish", step_count, enforcement_limit)
+                # step = LLM-Calls (Loop-Variable), step_count = Tool-Calls.
+                # Enforcement basiert auf step (LLM-Calls), nicht step_count.
+                # evolution/sprint: erhoehtes Limit (25 statt 15).
+                is_evo = mode.get("mode") in ("evolution", "sprint")
+                enforcement_limit = 25 if is_evo else 15
+                if step >= enforcement_limit and not finished:
+                    self.narrator.enforcement("auto_finish", step, enforcement_limit)
                     # MetaCognition: Enforcement loggen (Lern-Feedback)
                     m = self.seq_intel.metrics
                     self.metacognition.record(
-                        bottleneck=f"Enforcement: Auto-Finish bei Step {step_count} (Limit {enforcement_limit})",
+                        bottleneck=f"Enforcement: Auto-Finish bei LLM-Call {step} (Limit {enforcement_limit})",
                         strategy_change="Code-Enforcement statt Prompt — Sequenz automatisch beendet",
                         sequence=self.sequences_total + 1,
                         wasted_steps=max(0, step_count - m.files_written - m.tools_built),
@@ -2893,10 +2899,18 @@ Antworte als JSON:
                     )
                     try:
                         finish_data = self._graceful_finish(messages, step_count)
-                        finish_data["enforcement"] = "auto_finish_step_limit"
-                        self._handle_finish_sequence(finish_data)
                     except Exception as e:
-                        logger.warning("Enforcement Auto-Finish fehlgeschlagen: %s", e)
+                        logger.warning("Enforcement Graceful-Finish fehlgeschlagen: %s", e)
+                        # Fallback: Mechanische Beendigung ohne LLM-Call
+                        finish_data = {
+                            "summary": f"Auto-Finish nach {step} LLM-Calls (Enforcement)",
+                            "performance_rating": max(2, m.files_written * 2),
+                            "bottleneck": f"Enforcement-Limit {enforcement_limit} erreicht",
+                            "next_time_differently": "Frueher finish_sequence aufrufen",
+                            "key_decision": "enforcement_fallback",
+                        }
+                    finish_data["enforcement"] = "auto_finish_step_limit"
+                    self._handle_finish_sequence(finish_data)
                     finished = True
                     break
 

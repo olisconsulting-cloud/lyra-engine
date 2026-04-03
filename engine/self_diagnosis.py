@@ -165,9 +165,13 @@ class IntegrationTester:
             with open(registry, "r", encoding="utf-8") as f:
                 data = json.load(f)
             tools = data.get("tools", {})
-            # Pruefen ob Tool-Dateien existieren
+            # Pruefen ob aktive Tool-Dateien existieren (archivierte ignorieren)
             missing = []
+            active_count = 0
             for name, info in tools.items():
+                if info.get("status") == "archived":
+                    continue
+                active_count += 1
                 filepath = self.data_path / "tools" / info.get("file", "")
                 if not filepath.exists():
                     missing.append(name)

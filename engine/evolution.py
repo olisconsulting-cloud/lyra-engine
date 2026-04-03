@@ -535,8 +535,6 @@ class ToolCurator:
         similar = []
 
         for tool_name, info in registry.get("tools", {}).items():
-            if info.get("status") == "archived":
-                continue
             if tool_name == name:
                 continue  # Sich selbst nicht als Benchmark
 
@@ -544,15 +542,18 @@ class ToolCurator:
             sim = self._compute_similarity(description, tool_desc)
 
             if sim >= 0.4:
+                is_archived = info.get("status") == "archived"
                 similar.append({
                     "name": tool_name,
                     "description": tool_desc[:100],
                     "similarity": round(sim, 2),
                     "uses": info.get("uses", 0),
                     "version": info.get("version", 1),
+                    "archived": is_archived,
                 })
 
-        similar.sort(key=lambda x: (-x["similarity"], -x["uses"]))
+        # Sortierung: Aktive zuerst, dann nach Aehnlichkeit + Uses
+        similar.sort(key=lambda x: (x.get("archived", False), -x["similarity"], -x["uses"]))
 
         if not similar:
             return {
@@ -562,10 +563,11 @@ class ToolCurator:
                 "challenge_text": "Neues Gebiet — kein Benchmark vorhanden. Baue frei.",
             }
 
-        # Bester Kandidat wird Benchmark
+        # Bester Kandidat wird Benchmark (aktive bevorzugt)
         benchmark = similar[0]
+        status_hint = " (archiviert)" if benchmark.get("archived") else ""
         challenge_text = (
-            f"EVOLUTION-CHALLENGE: '{benchmark['name']}' existiert "
+            f"EVOLUTION-CHALLENGE: '{benchmark['name']}'{status_hint} existiert "
             f"({benchmark['uses']}x bewaehrt, {int(benchmark['similarity']*100)}% aehnlich). "
             f"Dein neues Tool muss BESSER sein. "
             f"Benchmark-Features: {benchmark['description']}"
@@ -696,25 +698,35 @@ class ToolCurator:
         """
         Bewertet Tool-Code-Qualitaet ohne ihn auszufuehren.
 
-        Kriterien (je 0-10 Punkte, max 40):
-        - error_handling: try/except Bloecke
-        - docstrings: Dokumentation vorhanden
+        Kriterien (je 0-10 Punkte, max 50):
+        - error_handling: try/except Bloecke, normalisiert nach LOC
+        - docstrings: Dokumentation mit echtem Inhalt (>10 Zeichen)
         - features: Keyword-Vielfalt (verschiedene Funktionalitaeten)
-        - structure: Funktionen/Klassen statt monolithischer Code
+        - structure: Funktionen/Klassen mit echtem Body (nicht nur pass)
+        - robustness: Validierung, Typ-Checks, Return-Konsistenz
+
+        Gehaertet gegen Gaming: Stub-Funktionen und leere Docstrings
+        werden nicht gezaehlt.
         """
         lines = code.splitlines()
         loc = len([l for l in lines if l.strip() and not l.strip().startswith('#')])
 
-        # Error Handling: try/except Nutzung
+        # Error Handling: try/except normalisiert nach LOC
+        # Viele try/except in wenig Code = wahrscheinlich Gaming
         try_count = sum(1 for l in lines if 'try:' in l)
         except_count = sum(1 for l in lines if 'except' in l)
-        error_score = min(10, (try_count + except_count) * 2)
+        error_pairs = min(try_count, except_count)
+        # Max 1 try/except pro 20 LOC zaehlt
+        reasonable_pairs = min(error_pairs, max(1, loc // 20))
+        error_score = min(10, reasonable_pairs * 3)
 
-        # Docstrings: Dreifach-Quotes
-        docstring_count = code.count('"""')
-        docstring_score = min(10, docstring_count * 2)
+        # Docstrings: Nur echte Docstrings zaehlen (>10 Zeichen Inhalt)
+        import re as _re
+        docstrings = _re.findall(r'"""(.+?)"""', code, _re.DOTALL)
+        real_docstrings = [d for d in docstrings if len(d.strip()) > 10]
+        docstring_score = min(10, len(real_docstrings) * 2)
 
-        # Features: Verschiedene Keywords = breitere Funktionalitaet
+        # Features: Keyword-Vielfalt
         feature_keywords = {
             'import', 'class', 'def', 'return', 'json', 'dict',
             'list', 'str', 'int', 'float', 'bool', 'Path',
@@ -725,12 +737,42 @@ class ToolCurator:
         found_features = sum(1 for kw in feature_keywords if kw in code.lower())
         feature_score = min(10, found_features)
 
-        # Structure: Funktionen und Klassen statt flacher Code
-        def_count = sum(1 for l in lines if l.strip().startswith('def '))
-        class_count = sum(1 for l in lines if l.strip().startswith('class '))
-        structure_score = min(10, def_count * 2 + class_count * 3)
+        # Structure: Nur Funktionen mit echtem Body (>1 Zeile, nicht nur pass/return)
+        real_defs = 0
+        real_classes = 0
+        for i, line in enumerate(lines):
+            stripped = line.strip()
+            if stripped.startswith('def '):
+                # Naechste nicht-leere Zeile pruefen
+                body_lines = 0
+                for j in range(i + 1, min(i + 20, len(lines))):
+                    body = lines[j].strip()
+                    if body and not body.startswith(('def ', 'class ', '"""', '#')):
+                        if body not in ('pass', 'return', 'return None', '...'):
+                            body_lines += 1
+                    elif body.startswith(('def ', 'class ')) and j > i + 1:
+                        break
+                if body_lines >= 1:
+                    real_defs += 1
+            elif stripped.startswith('class '):
+                real_classes += 1
+        structure_score = min(10, real_defs * 2 + real_classes * 3)
 
-        total = error_score + docstring_score + feature_score + structure_score
+        # Robustness: Validierung und defensive Programmierung
+        robustness_signals = 0
+        if 'if not ' in code or 'if not(' in code:
+            robustness_signals += 1  # Guard-Clauses
+        if 'isinstance(' in code:
+            robustness_signals += 1  # Typ-Checks
+        if '.get(' in code:
+            robustness_signals += 1  # Safe dict access
+        if 'raise ' in code or 'ValueError' in code:
+            robustness_signals += 1  # Explizite Fehler
+        if 'kwargs.get(' in code:
+            robustness_signals += 1  # Defensive Parameter
+        robustness_score = min(10, robustness_signals * 2)
+
+        total = error_score + docstring_score + feature_score + structure_score + robustness_score
 
         return {
             "name": name,
@@ -739,6 +781,7 @@ class ToolCurator:
             "docstrings": docstring_score,
             "features": feature_score,
             "structure": structure_score,
+            "robustness": robustness_score,
             "total": total,
         }
 
@@ -775,6 +818,11 @@ class ToolCurator:
         if loser_uses > 0 and winner in registry.get("tools", {}):
             registry["tools"][winner]["uses"] = \
                 registry["tools"][winner].get("uses", 0) + loser_uses
+            # Registry persistieren (sonst geht Uses-Transfer verloren)
+            with open(self.registry_path, "w", encoding="utf-8") as f:
+                json.dump(registry, f, indent=2, ensure_ascii=False)
+            # Toolchain-interne Registry synchronisieren
+            toolchain.registry = registry
 
         # Archivieren wenn gewuenscht
         if archive_loser:
