@@ -113,31 +113,43 @@ class LLMRouter:
         tools: Optional[list] = None, max_tokens: int = 16000,
     ) -> dict:
         """
-        Ruft Claude auf.
+        Ruft Claude auf mit Prompt-Caching fuer System + Tools.
 
         Returns:
             {"content": list, "stop_reason": str, "usage": dict, "model": str}
         """
         model_id = MODELS[model_key]["model_id"]
 
+        # System-Prompt als cacheable Content-Block (spart Tokens bei wiederholten Calls)
         kwargs = {
             "model": model_id,
             "max_tokens": max_tokens,
-            "system": system,
+            "system": [{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
             "messages": messages,
         }
         if tools:
-            kwargs["tools"] = tools
+            import copy
+            cached_tools = copy.deepcopy(tools)
+            cached_tools[-1]["cache_control"] = {"type": "ephemeral"}
+            kwargs["tools"] = cached_tools
 
         response = self.anthropic.messages.create(**kwargs)
 
-        # Kosten tracken
-        self._track_cost(model_key, response.usage.input_tokens, response.usage.output_tokens)
+        # Kosten tracken (mit Cache-Awareness)
+        usage = response.usage
+        cache_read = getattr(usage, "cache_read_input_tokens", 0) or 0
+        cache_creation = getattr(usage, "cache_creation_input_tokens", 0) or 0
+        self._track_cost(model_key, usage.input_tokens, usage.output_tokens)
 
         return {
             "content": response.content,
             "stop_reason": response.stop_reason,
-            "usage": {"input_tokens": response.usage.input_tokens, "output_tokens": response.usage.output_tokens},
+            "usage": {
+                "input_tokens": usage.input_tokens,
+                "output_tokens": usage.output_tokens,
+                "cache_read_input_tokens": cache_read,
+                "cache_creation_input_tokens": cache_creation,
+            },
             "model": model_id,
         }
 

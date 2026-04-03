@@ -190,6 +190,11 @@ Antworte als JSON:
         if failures:
             parts.append(f"\n=== FEHLER-LEKTIONEN ===\n{json.dumps(failures[-10:], indent=2, ensure_ascii=False)}")
 
+        # Metacognition (Selbstreflexionen mit Prozess-Metriken)
+        metacog = self._safe_load_json(self.consciousness_path / "metacognition.json")
+        if metacog:
+            parts.append(f"\n=== METACOGNITION (letzte 15 Reflexionen) ===\n{json.dumps(metacog[-15:], ensure_ascii=False)}")
+
         # Semantic Memory (letzte 20 Eintraege — nicht alle)
         sem_index = self._safe_load_json(self.base_path / "memory" / "semantic" / "index.json")
         if sem_index and sem_index.get("entries"):
@@ -260,6 +265,42 @@ Antworte als JSON:
             except (OSError, json.JSONDecodeError) as e:
                 applied.append(f"Summary-Speicherung fehlgeschlagen: {e}")
 
+        # Prozess-Insights speichern (in metacognition.json als Dream-Eintrag)
+        process_insights = result.get("process_insights", "")
+        if process_insights:
+            metacog_path = self.consciousness_path / "metacognition.json"
+            try:
+                metacog = self._safe_load_json(metacog_path) or []
+                metacog.append({
+                    "sequence": "dream",
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "bottleneck": "",
+                    "strategy_change": process_insights[:500],
+                    "source": "dream_consolidation",
+                })
+                with open(metacog_path, "w", encoding="utf-8") as f:
+                    json.dump(metacog[-30:], f, indent=2, ensure_ascii=False)
+                applied.append("Prozess-Insights gespeichert")
+            except (OSError, json.JSONDecodeError):
+                pass
+
+        # Effizienz-Muster als neue Beliefs speichern
+        eff_patterns = result.get("efficiency_patterns", [])
+        if eff_patterns:
+            beliefs_path = self.consciousness_path / "beliefs.json"
+            try:
+                beliefs = self._safe_load_json(beliefs_path) or {}
+                formed = beliefs.get("formed_from_experience", [])
+                for pattern in eff_patterns[:3]:
+                    if pattern and pattern not in formed:
+                        formed.append(pattern)
+                beliefs["formed_from_experience"] = formed[-30:]
+                with open(beliefs_path, "w", encoding="utf-8") as f:
+                    json.dump(beliefs, f, indent=2, ensure_ascii=False)
+                applied.append(f"{len(eff_patterns)} Effizienz-Muster gespeichert")
+            except (OSError, json.JSONDecodeError):
+                pass
+
         return ", ".join(applied) if applied else "Keine Aenderungen"
 
     def _log_dream(self, result: dict, applied: str):
@@ -275,6 +316,8 @@ Antworte als JSON:
                 "applied": applied,
                 "recommendations": result.get("recommendations", []),
                 "skill_notes": result.get("skill_notes", ""),
+                "process_insights": result.get("process_insights", ""),
+                "efficiency_patterns": result.get("efficiency_patterns", []),
             })
             log = log[-20:]
 

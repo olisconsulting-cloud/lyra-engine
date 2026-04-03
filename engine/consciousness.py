@@ -38,6 +38,9 @@ from .code_review import DualReviewSystem
 from .evolution import AdaptiveRhythm, ToolFoundry, SelfBenchmark, LearningEngine, MetaCognition
 from .self_diagnosis import IntegrationTester, DependencyAnalyzer, SilentFailureDetector
 from .quantum import FailureMemory, CriticAgent, PromptMutator, SkillComposer
+from .sequence_planner import SequencePlanner
+from .checkpoint import CheckpointManager
+from .meta_rules import MetaRuleEngine
 from . import config
 from .config import safe_json_write, safe_json_read
 
@@ -420,7 +423,96 @@ TOOLS = [
             "required": ["summary", "performance_rating", "bottleneck", "next_time_differently", "key_decision"],
         },
     },
+    # === write_sequence_plan (Sequenz-Planung) ===
+    {
+        "name": "write_sequence_plan",
+        "description": "Schreibe deinen Plan fuer diese Sequenz BEVOR du arbeitest. Pflicht am Anfang jeder Sequenz.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "goal": {
+                    "type": "string",
+                    "description": "Was willst du in DIESER Sequenz konkret erreichen? (1 Satz, klar und messbar)",
+                },
+                "exit_criteria": {
+                    "type": "string",
+                    "description": "Woran erkennst du dass du fertig bist?",
+                },
+                "max_steps": {
+                    "type": "integer",
+                    "description": "Wieviele Steps brauchst du realistisch? (5-30)",
+                },
+                "checkpoint_at": {
+                    "type": "integer",
+                    "description": "Nach welchem Step pruefst du ob du auf Kurs bist?",
+                },
+            },
+            "required": ["goal", "exit_criteria", "max_steps"],
+        },
+    },
 ]
+
+# Tool-Tiers: Je hoeher, desto seltener gebraucht
+# Tier 1 wird IMMER gesendet, hoehere Tiers nur bei Bedarf
+TOOL_TIERS = {
+    # Tier 1: CORE — immer verfuegbar (~950 Tokens)
+    "write_file": 1, "read_file": 1, "list_directory": 1,
+    "execute_python": 1, "set_goal": 1, "complete_subgoal": 1,
+    "finish_sequence": 1, "send_telegram": 1, "complete_task": 1,
+    "remember": 1, "write_sequence_plan": 1,
+    # Tier 2: PROJEKT — wenn Projekte existieren (~650 Tokens)
+    "create_project": 2, "verify_project": 2,
+    "run_project_tests": 2, "complete_project": 2,
+    "create_tool": 2, "use_tool": 2,
+    # Tier 3: EVOLUTION — nur in evolution/sprint Modus (~250 Tokens)
+    "read_own_code": 3, "modify_own_code": 3,
+    # Tier 4: WEB/GIT — selten gebraucht (~350 Tokens)
+    "web_search": 4, "web_read": 4, "pip_install": 4,
+    "git_commit": 4, "git_status": 4,
+    # Tier 5: META — sehr selten (~300 Tokens)
+    "generate_tool": 5, "combine_tools": 5,
+    "self_diagnose": 5, "update_memory": 5, "delete_memory": 5,
+}
+
+# Kompakte Tool-Definitionen: Nur Name + Parameter-Typen, keine Descriptions
+# Phi kennt die Tools nach Step 0 — danach reichen die Schemas
+_COMPACT_TOOLS_CACHE = None
+
+
+def _build_compact_tools() -> list:
+    """Erstellt minimale Tool-Definitionen ohne Descriptions."""
+    compact = []
+    for t in TOOLS:
+        schema = t.get("input_schema", {})
+        props = schema.get("properties", {})
+        # Nur Typ behalten, keine Property-Descriptions
+        minimal_props = {k: {"type": v.get("type", "string")} for k, v in props.items()}
+        ct = {"name": t["name"], "description": t["name"].replace("_", " ")}
+        ct["input_schema"] = {"type": "object", "properties": minimal_props}
+        req = schema.get("required")
+        if req:
+            ct["input_schema"]["required"] = req
+        compact.append(ct)
+    return compact
+
+
+def _get_compact_tools() -> list:
+    """Gibt gecachte kompakte Tool-Definitionen zurueck."""
+    global _COMPACT_TOOLS_CACHE
+    if _COMPACT_TOOLS_CACHE is None:
+        _COMPACT_TOOLS_CACHE = _build_compact_tools()
+    return _COMPACT_TOOLS_CACHE
+
+
+def select_tools(active_tiers: set[int], compact: bool = False) -> list:
+    """Gibt Tool-Definitionen fuer die aktiven Tiers zurueck.
+
+    Args:
+        active_tiers: Welche Tiers aktiv sind (1-5)
+        compact: True = minimale Defs ohne Descriptions (spart ~47% Tokens)
+    """
+    source = _get_compact_tools() if compact else TOOLS
+    return [t for t in source if TOOL_TIERS.get(t["name"], 1) in active_tiers]
 
 
 class ConsciousnessEngine:
@@ -483,6 +575,11 @@ class ConsciousnessEngine:
         self.running = False
         self._wake_event = threading.Event()
         self.sequences_total = 0
+
+        # Neue Module: Sequenz-Planung, Checkpoints, Meta-Regeln
+        self.planner = SequencePlanner(self.consciousness_path)
+        self.checkpointer = CheckpointManager(self.consciousness_path)
+        self.meta_rules = MetaRuleEngine(self.consciousness_path)
 
         # Genehmigungspflicht — diese Tools brauchen Olivers OK
         # NUR pip_install braucht Genehmigung (laedt aus dem Internet)
@@ -1036,6 +1133,18 @@ REGELN:
             for a in eff_alerts[:3]:
                 parts.append(f"  ! {a}")
 
+        # Checkpoint-Resume: Falls letzte Sequenz abgebrochen wurde
+        resume = self.checkpointer.build_resume_context()
+        if resume:
+            parts.append(f"\n{resume}")
+
+        # Sequenz-Planung: Phi soll am Anfang planen
+        plan_history = self.planner.get_plan_history()
+        plan_prompt = self.planner.build_planning_prompt(
+            focus, working_memory, plan_history
+        )
+        parts.append(plan_prompt)
+
         return "\n".join(parts)
 
     # === Tool-Ausfuehrung ===
@@ -1165,6 +1274,7 @@ REGELN:
         "combine_tools": ["tool_a", "tool_b", "new_name"],
         "complete_task": [],
         "finish_sequence": [],
+        "write_sequence_plan": ["goal", "exit_criteria", "max_steps"],
     }
 
     def _execute_tool_inner(self, name: str, tool_input: dict) -> str:
@@ -1641,6 +1751,9 @@ REGELN:
             elif name == "finish_sequence":
                 return self._handle_finish_sequence(tool_input)
 
+            elif name == "write_sequence_plan":
+                return self.planner.save_plan(tool_input)
+
             else:
                 return f"Unbekanntes Tool: {name}"
 
@@ -1772,6 +1885,23 @@ REGELN:
                 self.communication.send_message(report, channel="telegram")
             except Exception as e:
                 logger.warning(f" Telegram-Report fehlgeschlagen: {e}")
+
+        # Plan-Evaluation: War der Sequenz-Plan erfolgreich?
+        rating = tool_input.get("performance_rating", 5)
+        plan_eval = self.planner.evaluate_plan(
+            summary, rating, self._seq_step_count, self._seq_errors
+        )
+        if plan_eval.get("score", 0) <= 3:
+            print(f"  Plan-Score: {plan_eval.get('score')}/10 — {plan_eval.get('lesson', '')[:80]}")
+
+        # Meta-Regeln aus Erfahrung ableiten
+        self.meta_rules.learn_from_metacognition(
+            bottleneck, next_time, self.sequences_total,
+            self._seq_step_count, self._seq_files_written, self._seq_errors,
+        )
+
+        # Checkpoint als abgeschlossen markieren (sauberes Ende)
+        self.checkpointer.mark_completed()
 
         # Auto-Commit
         commit_msg = f"Sequenz {self.sequences_total}: {summary[:80]}"
@@ -2010,7 +2140,9 @@ REGELN:
 
         for step in range(MAX_STEPS_PER_SEQUENCE):
             try:
-                response = self._call_llm("main_work", self._build_system_prompt(), messages, TOOLS)
+                # Interaktion: Alle Tiers, kompakte Defs ab Step 1
+                interact_tools = select_tools({1, 2, 3, 4, 5}, compact=(step > 0))
+                response = self._call_llm("main_work", self._build_system_prompt(), messages, interact_tools)
             except Exception as e:
                 full_response += f"\n(Fehler: {e})"
                 break
@@ -2528,6 +2660,38 @@ REGELN:
                 pass
         return f"{tool_name}"
 
+    _project_context_cache = None  # Sentinel: None = nicht berechnet
+
+    def _has_project_context_cached(self) -> bool:
+        """Prueft ob Projekt-relevante Arbeit laeuft (gecached pro Sequenz)."""
+        if self._project_context_cache is not None:
+            return self._project_context_cache
+        result = False
+        try:
+            if self.actions.projects_path.exists():
+                result = any(self.actions.projects_path.iterdir())
+        except Exception:
+            pass
+        if not result:
+            focus = self.goal_stack.get_current_focus()
+            result = "projekt" in focus.lower() or "project" in focus.lower()
+        self._project_context_cache = result
+        return result
+
+    def _get_base_tiers(self, mode: dict) -> set[int]:
+        """Bestimmt die Basis-Tiers aus Modus und Kontext (ohne Eskalation)."""
+        tiers = {1}  # Core immer aktiv
+
+        # Projekt-Tools wenn Projekte existieren
+        if self._has_project_context_cached():
+            tiers.add(2)
+
+        # Evolution-Tools nur in evolution/sprint/cooldown
+        if mode.get("mode") in ("evolution", "sprint", "cooldown"):
+            tiers.add(3)
+
+        return tiers
+
     def _run_sequence(self):
         """Fuehrt eine komplette Arbeitssequenz aus."""
         perception = self._build_perception()
@@ -2558,6 +2722,11 @@ REGELN:
 
         # System-Prompt einmalig pro Sequenz bauen (nicht pro Step)
         cached_system_prompt = self._build_system_prompt()
+
+        # Meta-Regeln in System-Prompt injizieren (harte Guards)
+        meta_injections = self.meta_rules.get_prompt_injections()
+        if meta_injections:
+            cached_system_prompt += meta_injections
 
         # Cross-Sequenz Spin-Guard: Blockierte Aktionen in System-Prompt injizieren
         blocked_actions = [k for k, v in cross_seq_spins.items() if v >= 2]
@@ -2617,13 +2786,47 @@ REGELN:
                 for line in summary.split("\n"):
                     print(f"  {line}")
 
+        # Tool-Tiers: Dynamische Auswahl pro Step (spart ~42k Tokens/Sequenz)
+        # Basis-Tiers = aus Modus/Kontext, Eskalation = aus LLM-Text-Requests
+        base_tiers = self._get_base_tiers(mode)
+        escalated_tiers = set()  # Tiers die durch reaktive Eskalation hinzukamen
+        self._project_context_cache = None  # Cache pro Sequenz zuruecksetzen
+
         for step in range(MAX_STEPS_PER_SEQUENCE):
+            # Step 0: Alle Tools mit vollen Definitionen (Phi lernt das Angebot)
+            # Steps 1+: Basis + eskalierte Tiers, kompakte Definitionen
+            if step == 0:
+                active_tiers = {1, 2, 3, 4, 5}
+            else:
+                active_tiers = base_tiers | escalated_tiers
+            current_tools = select_tools(active_tiers, compact=(step > 0))
+
             # Step-basierte Warnung: 3 Steps vor Schluss → System-Prompt ergaenzen
             steps_remaining = MAX_STEPS_PER_SEQUENCE - step
             if steps_remaining == 3:
                 cached_system_prompt += (
                     "\n\nACHTUNG: Noch 3 Steps uebrig. "
                     "Sichere deine Zwischenergebnisse und nutze finish_sequence."
+                )
+
+            # Checkpoint: Alle N Steps automatisch sichern
+            if self.checkpointer.should_checkpoint(step_count):
+                self.checkpointer.auto_save(step_count, self)
+
+            # Planner-Checkpoint: Reminder wenn faellig
+            plan_reminder = self.planner.build_checkpoint_reminder(step_count)
+            if plan_reminder:
+                cached_system_prompt += plan_reminder
+
+            # Meta-Rule-Guards: Harte Regeln pruefen
+            focus = self.goal_stack.get_current_focus()
+            guard_actions = self.meta_rules.check_guards(
+                step_count, self._seq_files_written, self._seq_errors, focus
+            )
+            if "force_finish_partial" in guard_actions:
+                cached_system_prompt += (
+                    "\n\nMETA-REGEL AKTIV: Step-Limit fuer diesen Aufgabentyp erreicht. "
+                    "Schreibe JETZT dein Zwischenergebnis und nutze finish_sequence."
                 )
 
             # Token-Budget als Sicherheitsnetz
@@ -2658,9 +2861,24 @@ REGELN:
             if step >= 4:
                 self._compress_old_messages(messages, keep_recent=5)
 
+            # Tier-Hint: Phi informieren welche Tool-Kategorien bei Bedarf verfuegbar sind
+            if step == 1 and active_tiers != {1, 2, 3, 4, 5}:
+                tier_names = {
+                    2: "Projekt-Tools (create_project, verify_project, etc.)",
+                    3: "Code-Lesen/Aendern (read_own_code, modify_own_code)",
+                    4: "Web/Git/Packages (web_search, git_commit, pip_install)",
+                    5: "Meta-Tools (generate_tool, self_diagnose, combine_tools)",
+                }
+                missing = [tier_names[t] for t in sorted({2, 3, 4, 5} - active_tiers) if t in tier_names]
+                if missing:
+                    messages.append({
+                        "role": "user",
+                        "content": "[System] Weitere Tools bei Bedarf verfuegbar: " + "; ".join(missing) + ". Erwaehne den Tool-Namen wenn du ihn brauchst.",
+                    })
+
             try:
                 response = self._call_llm(
-                    "main_work", cached_system_prompt, messages, TOOLS
+                    "main_work", cached_system_prompt, messages, current_tools
                 )
             except Exception as e:
                 error_msg = str(e)
@@ -2682,6 +2900,19 @@ REGELN:
                     first_line = block.text.strip().split("\n")[0].strip()
                     if first_line and len(first_line) > 5:
                         print(f"  💭 {first_line[:120]}")
+
+            # Reaktive Tool-Eskalation: Phi erwaehnt fehlende Tools → naechster Step bekommt sie
+            for block in response["content"]:
+                if hasattr(block, "text") and block.text:
+                    t = block.text.lower()
+                    if "web_search" in t or "web_read" in t or "recherch" in t:
+                        escalated_tiers.add(4)
+                    if "read_own_code" in t or "modify_own_code" in t or "selbstverbesserung" in t:
+                        escalated_tiers.add(3)
+                    if "generate_tool" in t or "self_diagnose" in t or "combine_tools" in t:
+                        escalated_tiers.add(5)
+                    if "create_project" in t or "projekt erstellen" in t:
+                        escalated_tiers.add(2)
 
             # Serialisierung (kompatibel mit Anthropic + Gemini Objekten)
             messages.append({
