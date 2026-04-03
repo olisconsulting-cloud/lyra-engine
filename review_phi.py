@@ -72,6 +72,7 @@ def run():
     sys.path.insert(0, str(ROOT))
     try:
         from engine.consciousness import ConsciousnessEngine, TOOLS, TOOL_TIERS, select_tools
+        from engine.tool_registry import ToolRegistry
         from engine.actions import ActionEngine
         from engine.goal_stack import GoalStack
         from engine.config import normalize_name_words, STOP_WORDS

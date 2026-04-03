@@ -43,13 +43,13 @@ from .quantum import FailureMemory, CriticAgent, PromptMutator, SkillComposer
 from .skill_library import SkillLibrary
 from .proactive_learner import ProactiveLearner
 from .event_bus import EventBus, Events
-from .tool_registry import ToolRegistry, ToolDefinition
-from .perception_pipeline import PerceptionPipeline, PerceptionChannel
+from .tool_registry import ToolRegistry
+from .perception_pipeline import PerceptionPipeline
 from .unified_memory import (
     UnifiedMemory, semantic_adapter, experience_adapter,
     failure_adapter, skill_adapter, strategy_adapter,
 )
-from .sequence_runner import SequenceRunner, SequenceContext
+from .sequence_runner import SequenceRunner
 from .sequence_finisher import SequenceFinisher
 from . import config
 from .config import safe_json_write, safe_json_read
@@ -626,6 +626,11 @@ class ConsciousnessEngine:
 
         # Event-Bus — Echtzeit-Kommunikation zwischen Subsystemen
         self.event_bus = EventBus()
+
+        # Event-Subscriber: Subsysteme reagieren auf Events in Echtzeit
+        self.event_bus.subscribe(Events.TOOL_FAILED, self._on_tool_failed)
+        self.event_bus.subscribe(Events.FILE_WRITTEN, self._on_file_written)
+        self.event_bus.subscribe(Events.SEQUENCE_FINISHED, self._on_sequence_finished)
 
         # Genehmigungspflicht — diese Tools brauchen Olivers OK
         # NUR pip_install braucht Genehmigung (laedt aus dem Internet)
@@ -1378,6 +1383,25 @@ SEQUENZ-PLANUNG: Nutze write_sequence_plan am Anfang — plane dein Ziel, Exit-K
             self.tool_registry.set_handler(
                 name, lambda inp, n=name: self._execute_tool_inner(n, inp)
             )
+
+    # === Event-Handler — Subsysteme reagieren in Echtzeit ===
+
+    def _on_tool_failed(self, event):
+        """Reagiert auf fehlgeschlagene Tools: Loggt fuer Trend-Analyse."""
+        tool = event.data.get("tool", "?")
+        error = event.data.get("error", "")[:100]
+        logger.info(f"EventBus: Tool '{tool}' fehlgeschlagen: {error}")
+
+    def _on_file_written(self, event):
+        """Reagiert auf geschriebene Dateien: Zaehlt fuer Effizienz-Tracking."""
+        path = event.data.get("path", "?")
+        logger.debug(f"EventBus: Datei geschrieben: {path}")
+
+    def _on_sequence_finished(self, event):
+        """Reagiert auf Sequenz-Ende: Perception-Feedback fuer Gewichts-Lernen."""
+        rating = event.data.get("rating", 5)
+        if hasattr(self, "perception_pipeline"):
+            self.perception_pipeline.record_feedback("standard", rating)
 
     def _request_approval(self, name: str, tool_input: dict) -> bool:
         """Fragt Oliver um Erlaubnis fuer kritische Aktionen. Gibt True=genehmigt zurueck."""

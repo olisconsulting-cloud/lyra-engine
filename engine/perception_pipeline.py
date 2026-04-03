@@ -87,14 +87,13 @@ class PerceptionPipeline:
         """Registriert einen Wahrnehmungskanal."""
         self._channels.append(channel)
 
-    def build(self, task_type: str = "standard", focus: str = "",
+    def build(self, task_type: str = "standard",
               token_budget: int = 0) -> str:
         """
         Baut Perception: Score pro Kanal berechnen, sortieren, laden bis Budget.
 
         Args:
             task_type: Art der Aufgabe (standard, projekt, recherche, evolution)
-            focus: Aktueller Fokus-Text (fuer Kontext-Entscheidungen)
             token_budget: Max Tokens fuer Perception (0 = self._max_tokens)
 
         Returns:
