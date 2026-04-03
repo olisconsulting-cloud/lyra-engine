@@ -37,6 +37,28 @@ class GoalStack:
         except (OSError, TypeError, ValueError) as e:
             print(f"  [WARNUNG] Goals nicht gespeichert: {e}")
 
+    def sync_from_disk(self):
+        """
+        Mergt extern hinzugefuegte Goals aus der Datei in den Memory-State.
+
+        Verhindert Race-Condition: Externe Aenderungen (z.B. von Oliver)
+        werden beim naechsten Sequenz-Start uebernommen statt ueberschrieben.
+        """
+        disk = self._load()
+        memory_ids = {g["id"] for g in self.goals.get("active", [])}
+        memory_ids |= {g["id"] for g in self.goals.get("completed", [])}
+        memory_ids |= {g["id"] for g in self.goals.get("abandoned", [])}
+
+        merged = 0
+        for goal in disk.get("active", []):
+            if goal["id"] not in memory_ids:
+                self.goals.setdefault("active", []).append(goal)
+                merged += 1
+
+        if merged:
+            self._save()
+            print(f"  [SYNC] {merged} extern hinzugefuegte Goals uebernommen")
+
     def track_focus(self, current_focus: str) -> int:
         """Zaehlt wie oft derselbe Focus hintereinander aktiv war.
 

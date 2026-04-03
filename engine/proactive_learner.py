@@ -155,6 +155,10 @@ class ProactiveLearner:
             "analyse": "Fuer Hintergrundinformationen: web_search \"{focus_short}\"",
             "documentation": "Fuer Format-Standards: web_search \"{focus_short} template\"",
             "testing": "Fuer Test-Patterns: web_search \"Python testing {focus_short}\"",
+            "api_integration": "Fuer API-Docs: web_search \"{focus_short} API documentation\"",
+            "report_building": "Fuer Report-Formate: web_search \"{focus_short} template beispiel\"",
+            "project_work": "Fuer Projekt-Patterns: web_search \"Python {focus_short} tutorial\"",
+            "self_improvement": "Fuer Optimierung: web_search \"{focus_short} best practices\"",
         }
 
         template = search_templates.get(goal_type)

@@ -1193,6 +1193,29 @@ SEQUENZ-PLANUNG: Nutze write_sequence_plan am Anfang — plane dein Ziel, Exit-K
         except OSError as e:
             logger.warning(f" Working-Memory speichern fehlgeschlagen: {e}")
 
+    # === Baseline-Tracking (Unified Memory Metriken) ===
+
+    def _track_baseline(self, metric: str, value: int, goal_type: str = ""):
+        """Schreibt Baseline-Metriken in eine JSON-Datei fuer spaetere Analyse."""
+        try:
+            path = self.consciousness_path / "baseline_metrics.json"
+            data = []
+            if path.exists():
+                with open(path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+            data.append({
+                "seq": self.sequences_total,
+                "metric": metric,
+                "value": value,
+                "goal_type": goal_type,
+                "ts": datetime.now(timezone.utc).isoformat(),
+            })
+            # Max 500 Eintraege behalten (reicht fuer ~250 Sequenzen)
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(data[-500:], f, ensure_ascii=False)
+        except Exception:
+            pass  # Tracking darf nie den Hauptloop stoeren
+
     # === Wahrnehmung ===
 
     def _build_perception(self) -> str:
@@ -1243,6 +1266,9 @@ SEQUENZ-PLANUNG: Nutze write_sequence_plan am Anfang — plane dein Ziel, Exit-K
             for msg in messages:
                 parts.append(f"\nOLIVER SAGT: {msg.get('content', '')}")
 
+        # Extern hinzugefuegte Goals mergen (verhindert Race-Condition)
+        self.goal_stack.sync_from_disk()
+
         # Aktueller Fokus — naechstes pending Sub-Goal auf in_progress setzen
         self.goal_stack.start_next_subgoal()
         focus = self.goal_stack.get_current_focus()
@@ -1253,9 +1279,8 @@ SEQUENZ-PLANUNG: Nutze write_sequence_plan am Anfang — plane dein Ziel, Exit-K
         skill_prompt = self.skill_library.build_skill_prompt(goal_type)
         if skill_prompt:
             parts.append(skill_prompt)
-            logger.info("BASELINE: skill_hit=1 goal_type=%s", goal_type)
-        else:
-            logger.info("BASELINE: skill_hit=0 goal_type=%s", goal_type)
+        # Baseline-Tracking: Skill-Hit pro Sequenz (fuer Unified Memory Metriken)
+        self._track_baseline("skill_hit", 1 if skill_prompt else 0, goal_type)
 
         # Proaktives Lernen: Intern-first, Internet-Fallback
         learn_context = self.proactive_learner.build_context(
@@ -1360,7 +1385,7 @@ SEQUENZ-PLANUNG: Nutze write_sequence_plan am Anfang — plane dein Ziel, Exit-K
         # Failure-Memory + Skill-Komposition: Vor jeder Sequenz checken
         # (focus wurde oben schon geholt — wiederverwenden)
         failure_check = self.failure_memory.check(focus)
-        logger.info("BASELINE: fm_match=%d", 1 if failure_check else 0)
+        self._track_baseline("fm_match", 1 if failure_check else 0)
 
         # Skill-Komposition: Relevante existierende Tools anzeigen
         composition = self.composer.suggest_composition(focus)

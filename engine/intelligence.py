@@ -149,7 +149,8 @@ class SemanticMemory:
     # Bekannte Goal-Typen fuer situativen Recall
     GOAL_TYPES = {
         "recherche", "tool_building", "bug_fix", "analyse",
-        "self_improvement", "documentation", "testing", "deployment",
+        "self_improvement", "documentation", "testing",
+        "api_integration", "report_building", "project_work",
     }
 
     @staticmethod
