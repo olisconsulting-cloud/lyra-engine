@@ -253,6 +253,61 @@ def run():
     else:
         check("FAIL", "API-Keys", ".env Datei fehlt!")
 
+    # === 11. NEUE MODULE (Gehirn-Session) ===
+    new_modules = {
+        "sequence_planner": "Sequenz-Planung",
+        "checkpoint": "Checkpoint-System",
+        "meta_rules": "Meta-Regeln",
+        "skill_library": "Skill-Library",
+        "proactive_learner": "Proaktives Lernen",
+    }
+    missing_modules = []
+    for mod, label in new_modules.items():
+        mod_path = ENGINE / f"{mod}.py"
+        if not mod_path.exists():
+            missing_modules.append(label)
+    if missing_modules:
+        check("WARN", f"Lern-Module ({len(new_modules) - len(missing_modules)}/{len(new_modules)})",
+              f"Fehlend: {', '.join(missing_modules)}")
+    else:
+        check("PASS", f"Lern-Module ({len(new_modules)}/{len(new_modules)})")
+
+    # === 12. BELIEFS-KONSISTENZ ===
+    beliefs_path = DATA / "consciousness" / "beliefs.json"
+    beliefs = _safe_json_load(beliefs_path)
+    if beliefs:
+        formed = beliefs.get("formed_from_experience", [])
+        dict_beliefs = [b for b in formed if isinstance(b, dict)]
+        if dict_beliefs:
+            check("WARN", f"Beliefs ({len(formed)} Eintraege)",
+                  f"{len(dict_beliefs)} sind Dicts statt Strings — Format-Bug! "
+                  "Bitte bereinigen: Dicts zu Strings konvertieren.")
+        else:
+            check("PASS", f"Beliefs ({len(formed)} Eintraege)")
+    elif beliefs_path.exists():
+        check("WARN", "Beliefs", "beliefs.json ist leer oder korrupt")
+
+    # === 13. LOOP-DETECTION ===
+    seq_mem_path = DATA / "consciousness" / "sequence_memory.json"
+    seq_mem = _safe_json_load(seq_mem_path)
+    if seq_mem:
+        entries = seq_mem.get("entries", [])
+        if len(entries) >= 3:
+            last_3 = [e.get("summary", "")[:80] for e in entries[-3:]]
+            # Pruefen ob die letzten 3 Summaries fast identisch sind
+            if len(set(last_3)) == 1:
+                check("WARN", "Loop-Detection",
+                      f"Letzte 3 Sequenzen identisch: '{last_3[0][:60]}'")
+            else:
+                check("PASS", "Loop-Detection")
+
+    # === 14. SKILL-LIBRARY + PLAN-HISTORY ===
+    skill_index = _safe_json_load(DATA / "skill_library" / "index.json")
+    plan_history = _safe_json_load(DATA / "consciousness" / "plan_history.json")
+    skill_count = len(skill_index.get("skills", [])) if skill_index else 0
+    plan_count = len(plan_history.get("plans", [])) if plan_history else 0
+    check("INFO", f"Skill-Library: {skill_count} Skills, Plan-History: {plan_count} Plaene")
+
     # === VENV ===
     venv_python = ROOT / "venv" / "Scripts" / "python.exe"  # Windows
     venv_python_unix = ROOT / "venv" / "bin" / "python"     # Linux/Mac
