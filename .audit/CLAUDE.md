@@ -19,16 +19,21 @@ Kern: `engine/consciousness.py` (~3.600 Zeilen) orchestriert ~30 Subsysteme.
 
 ## Dein Workflow
 
+Working Directory: `c:\Users\olisc\Claude\Lyra` (Repo-Root).
+Python: 3.14, kein venv noetig.
+
 ```
-1. Lies .audit/BACKLOG.md              — Was ist das Naechste?
-2. Lies .audit/FINDINGS.md             — Kontext zum aktuellen Finding
-3. Lies den betroffenen Code           — IMMER erst verstehen, dann aendern
-4. Aendere EINE Sache                  — Minimal, testbar
-5. Teste: python review_phi.py         — Laeuft es noch?
-6. Committe                            — Kleiner Commit, klare Message
-7. Update FINDINGS.md                  — Status auf "fixed"
-8. Update BACKLOG.md                   — Naechstes Item nach oben
-9. Session-Log schreiben               — Was gemacht, was offen
+1.  Lies .audit/BACKLOG.md              — Was ist das Naechste?
+2.  Lies FINDINGS.md zum naechsten Item — Kontext + Done-Definition
+2b. Verifiziere Zeilennummern im Code  — Zeilen koennen sich verschoben haben!
+3.  Lies den betroffenen Code           — IMMER erst verstehen, dann aendern
+4.  Aendere EINE Sache                  — Minimal, testbar
+5.  Teste: python review_phi.py         — Laeuft es noch?
+6.  Committe                            — Kleiner Commit, klare Message
+7.  Update FINDINGS.md                  — Status auf "fixed", dann nach FINDINGS_ARCHIVE.md
+8.  Update BACKLOG.md                   — Erledigtes Item entfernen
+9.  Session-Log schreiben               — Was gemacht, was offen
+10. Kernmetriken-Tabelle aktualisieren  — Wenn ein Bug gefixt oder Modul aktiviert wurde
 ```
 
 ## Prinzipien
@@ -39,7 +44,9 @@ Kern: `engine/consciousness.py` (~3.600 Zeilen) orchestriert ~30 Subsysteme.
 4. **Erst lesen, dann aendern** — Min. 50 Zeilen Kontext um jede Aenderung
 5. **Token-Effizienz ist Kernmetrik** — Jeder Token in Phis Perception kostet Rechenzeit
 6. **Stabilitaet vor Features** — Ein Fix > drei neue Features
-7. **Agent-Findings verifizieren** — Audit-Agents machen Fehler (2/3 CRITICAL waren falsch)
+7. **Agent-Findings verifizieren** — JEDEN Zeilenreferenz im Code lesen, JEDE Signatur
+   gegen die `def`-Zeile pruefen. Agents halluzinieren Zeilennummern und Parameter-
+   reihenfolgen. Beim initialen Audit waren 2/3 CRITICAL-Findings falsch.
 
 ## Kernmetriken
 
@@ -49,6 +56,8 @@ Kern: `engine/consciousness.py` (~3.600 Zeilen) orchestriert ~30 Subsysteme.
 | Verifizierte Bugs | 7 offen | 0 |
 | Inaktive Module | 4 von 4 | 0 von 4 |
 | Dead Code Zeilen | ~50 | 0 |
+
+Aktualisiere diese Tabelle am Ende jeder Session die einen Bug fixt oder ein Modul aktiviert.
 
 ## Schluessel-Dateien
 
@@ -77,4 +86,13 @@ Nicht schneller. Nicht groesser. Besser. Stabiler. Effizienter. Sicherer.
 - Commit-Messages: Deutsch, Format `typ: beschreibung`
 - Kein Code ohne Regressions-Check (`python review_phi.py`)
 - .audit/ Dateien immer mit-committen
-- Session-Logs: `sessions/YYYY-MM-DD_NNN.md`
+- Session-Logs: `sessions/YYYY-MM-DD_kurzbeschreibung.md`
+- Fixed Findings: nach `FINDINGS_ARCHIVE.md` verschieben, FINDINGS.md nur fuer offene
+- Bei Merge-Konflikten in .audit/: IMMER manuell loesen, beide Versionen lesen
+
+## Aktueller Status (nach jeder Session aktualisieren)
+
+- **Naechster Fix**: C1 (combine_tools crash) — siehe BACKLOG.md
+- **Offene Bugs**: 7 (1 CRITICAL, 6 HIGH)
+- **Inaktive Module**: 4 (PerceptionPipeline, UnifiedMemory, SequenceRunner, SequenceFinisher)
+- **Letzte Session**: 2026-04-03 (Initiales Audit + .audit/ Setup)

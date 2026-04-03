@@ -2,7 +2,9 @@
 
 > Status: `open` | `in-progress` | `fixed` | `wontfix`
 > Severity: `CRITICAL` | `HIGH` | `MEDIUM` | `LOW`
-> Alle Findings sind gegen den tatsaechlichen Code verifiziert.
+> Alle Findings gegen tatsaechlichen Code verifiziert.
+> Verfallsdatum: Findings aelter als 30 Tage ohne Aktivitaet → re-validieren oder wontfix.
+> Fixed/wontfix Findings → nach FINDINGS_ARCHIVE.md verschieben.
 
 ---
 
@@ -10,10 +12,12 @@
 
 ### C1: self.client existiert nicht in ToolFoundry.combine_tools()
 - **Status**: `open`
+- **Erstellt**: 2026-04-03
 - **Datei**: `engine/evolution.py:371`
 - **Problem**: `self.client.messages.create(...)` — aber `ToolFoundry.__init__()` setzt kein `self.client`. Die Methode `generate_tool()` (gleiche Klasse) erstellt den Client korrekt inline je nach Provider.
 - **Auswirkung**: `AttributeError` bei jedem Versuch, zwei Tools zu kombinieren.
 - **Fix**: Provider-Logik aus `generate_tool()` extrahieren in `_get_client()` und in beiden Methoden nutzen.
+- **Done**: review_phi.py passed + `combine_tools()` wirft keinen AttributeError mehr.
 
 ---
 
@@ -25,63 +29,104 @@
 
 ### H1: validate_against_outcome() — falsche Argument-Typen
 - **Status**: `open`
+- **Erstellt**: 2026-04-03
 - **Datei**: `engine/sequence_finisher.py:167`
 - **Problem**: Aufruf `strategies.validate_against_outcome(new_beliefs, summary, rating)`.
   Signatur erwartet `(beliefs: list, outcome_positive: bool, context: str)`.
   `summary` (str) wird als `outcome_positive` (bool) interpretiert — immer True.
   `rating` (int) wird als `context` (str) interpretiert.
 - **Fix**: `strategies.validate_against_outcome(new_beliefs, rating >= 6, summary[:200])`
+- **Done**: Aufruf matcht Signatur in `intelligence.py:772`.
 
 ### H2: write_journal() — fehlendes Pflichtargument cycle
 - **Status**: `open`
+- **Erstellt**: 2026-04-03
 - **Datei**: `engine/sequence_finisher.py:259`
 - **Problem**: `comm.write_journal(f"Sequenz {sequences_total}: {summary[:200]}")`.
   Signatur ist `write_journal(content: str, cycle: int)`. `cycle` fehlt.
 - **Fix**: `comm.write_journal(f"Sequenz {sequences_total}: {summary[:200]}", sequences_total)`
+- **Done**: Aufruf matcht Signatur in `communication.py:140`.
 
 ### H3: record_process_pattern() — fehlendes Pflichtargument description
 - **Status**: `open`
+- **Erstellt**: 2026-04-03
 - **Datei**: `engine/sequence_finisher.py:241`
 - **Problem**: `strategies.record_process_pattern(pattern)`.
   Signatur ist `record_process_pattern(pattern_type: str, description: str, occurrences=1)`.
 - **Fix**: `strategies.record_process_pattern(pattern, pattern)`
+- **Done**: Aufruf matcht Signatur in `intelligence.py:709`.
 
 ### H4: SequenceRunner._plan() — 3 falsche Methodensignaturen
 - **Status**: `open`
+- **Erstellt**: 2026-04-03
 - **Datei**: `engine/sequence_runner.py:151-153`
 - **Problem**:
   - `engine.rhythm.get_mode()` — braucht `(state: dict)`
   - `engine._classify_task(ctx.perception)` — braucht `(mode, focus)`
   - `engine._get_step_budget(ctx.task_type)` — braucht `(mode, focus)`
-- **Fix**: Signaturen an tatsaechliche API anpassen.
+- **Fix**:
+  - `engine.rhythm.get_mode(engine.state)`
+  - `engine._classify_task(ctx.mode, focus)` (focus aus perception extrahieren)
+  - `engine._get_step_budget(ctx.mode, focus)`
+- **Done**: Alle 3 Aufrufe matchen tatsaechliche Signaturen + review_phi.py passed.
 
-### H5: _load() Methoden ohne try/except bei JSON-Parse
+### H5: _load() Methoden ohne try/except bei JSON-Parse (2 Stellen)
 - **Status**: `open`
-- **Dateien**: `engine/evolution.py:477` (SelfBenchmark), `engine/evolution.py:837` (MetaCognition)
+- **Erstellt**: 2026-04-03
+- **Dateien**: `engine/evolution.py:477` (SelfBenchmark._load), `engine/evolution.py:837` (MetaCognition._load)
 - **Problem**: Nacktes `json.load()`. Korrupte JSON → Crash beim Konstruktor.
   Hinweis: `LearningEngine._load_log()` (Zeile 709) HAT bereits try/except — als Vorbild nutzen.
 - **Fix**: `safe_json_read()` aus config.py verwenden oder try/except wie LearningEngine.
+- **Done**: Beide _load()-Methoden haben try/except + korrupte JSON gibt leere Liste zurueck.
 
 ### H6: Kein Retry/Fallback im Step-Loop bei API-Fehler
 - **Status**: `open`
-- **Datei**: `engine/consciousness.py:2913-2924`
+- **Erstellt**: 2026-04-03
+- **Datei**: `engine/consciousness.py:~2992-3003` (API-Error-Handler im Step-Loop)
 - **Problem**: Bei API-Fehler wird die Sequenz sofort abgebrochen (`break`).
   Kein Retry, kein Fallback auf alternatives Modell.
   `TASK_MODEL_MAP["fallback"]` existiert bereits, wird aber nie automatisch genutzt.
 - **Fix**: Max 2 Retries, dann Fallback-Modell, dann erst Sequenz abbrechen.
+- **Done**: Sequenz ueberlebt transienten API-Fehler + nutzt Fallback-Modell automatisch.
 
 ---
 
 ## ARCHITEKTUR — Inaktive Module & doppelte Logik
 
-### A1: 4 Module gebaut aber nicht aktiviert
+### A1a: PerceptionPipeline gebaut aber nicht aktiviert
 - **Status**: `open`
-- **Module**: SequenceRunner, SequenceFinisher, PerceptionPipeline, UnifiedMemory
-- **Detail**: Alle 4 werden in `consciousness.py:651-681` instanziiert.
-  Keines wird im aktiven Code-Pfad aufgerufen. `_run_sequence()` und
-  `_handle_finish_sequence()` in consciousness.py machen alles selbst.
-- **Strategie**: Schrittweise aktivieren (ADR-003). Erst Bugs fixen (H1-H4),
-  dann einzeln verdrahten.
+- **Erstellt**: 2026-04-03
+- **Datei**: `engine/perception_pipeline.py` + `consciousness.py:~659`
+- **Detail**: Instanziiert, hat Budget-System + Channel-Gewichtung + Feedback-Learning.
+  `build()` wird nie aufgerufen. `_build_perception()` baut Perception manuell.
+  0 Channels registriert. Siehe auch T1 (Token-Ersparnis).
+- **Done**: `_build_perception()` delegiert an Pipeline, Channels registriert, Feedback fliesst.
+
+### A1b: UnifiedMemory gebaut aber nicht aktiviert
+- **Status**: `open`
+- **Erstellt**: 2026-04-03
+- **Datei**: `engine/unified_memory.py` + `consciousness.py:~651-656`
+- **Detail**: Instanziiert mit 5 Adaptern (semantic, experience, failure, skill, strategy).
+  `query()` und `get_context_for()` werden nie aufgerufen. Perception macht 4 einzelne
+  Memory-Queries. Siehe auch T3.
+- **Done**: Perception nutzt `unified_memory.query()` statt 4 separate Abfragen.
+
+### A1c: SequenceRunner gebaut aber nicht aktiviert
+- **Status**: `open`
+- **Erstellt**: 2026-04-03
+- **Datei**: `engine/sequence_runner.py` + `consciousness.py:~662`
+- **Detail**: Instanziiert, `run()` nie aufgerufen. `_execute()` und `_reflect()` sind `pass`.
+  `_run_sequence()` macht alles selbst. Hat Signatur-Bugs (H4) — erst fixen.
+- **Done**: `_run_sequence()` delegiert an SequenceRunner, Step-Loop extrahiert.
+
+### A1d: SequenceFinisher gebaut aber nicht aktiviert
+- **Status**: `open`
+- **Erstellt**: 2026-04-03
+- **Datei**: `engine/sequence_finisher.py` + `consciousness.py:~665-681`
+- **Detail**: Instanziiert mit 14 Subsystem-Referenzen, `finish()` nie aufgerufen.
+  `_handle_finish_sequence()` macht alles selbst. Hat Signatur-Bugs (H1-H3) — erst fixen.
+  Doppelte Valenz-Formel (A2) und Wasted-Steps-Logik (A3) muessen konsolidiert werden.
+- **Done**: `_handle_finish_sequence()` delegiert an SequenceFinisher, Formeln einheitlich.
 
 ### A2: Doppelte Valenz-Berechnung — unterschiedliche Formeln
 - **Status**: `open`
@@ -117,13 +162,15 @@
   Channel-Gewichtung, und Feedback-Learning. Wird aber nicht genutzt.
   `_build_perception()` baut Perception manuell mit allen Quellen.
 
-### T2: Failure-Check pro Tool-Call — redundant
+### T2: Failure-Check pro Tool-Call — redundant (Quick-Win)
 - **Status**: `open`
-- **Datei**: `engine/consciousness.py:2992-3001`
+- **Erstellt**: 2026-04-03
+- **Datei**: `engine/consciousness.py:~3071-3080` (pro-Tool-Check), `~1362` (Perception-Check)
 - **Ersparnis**: 2.000-4.000 Tok/Seq
 - **Detail**: `failure_memory.check()` wird bei JEDEM Tool-Call ausgefuehrt
-  UND bereits in der Perception (Zeile 1327). Pro-Tool-Check ist redundant.
+  UND bereits in der Perception. Pro-Tool-Check ist redundant.
 - **Quick-Win**: Pro-Tool-Check entfernen, nur Perception behalten.
+- **Done**: Nur noch ein failure_memory.check() in der Perception, keiner pro Tool-Call.
 
 ### T3: 4 separate Memory-Abfragen statt UnifiedMemory
 - **Status**: `open`
@@ -134,7 +181,8 @@
 
 ### T4: System-Prompt laedt 12 Subsystem-Summaries bei jedem Call
 - **Status**: `open`
-- **Datei**: `engine/consciousness.py:976-1051` (`_build_system_prompt`)
+- **Erstellt**: 2026-04-03
+- **Datei**: `engine/consciousness.py:~985-1057` (`_build_system_prompt`, Summaries bei ~1005-1023)
 - **Ersparnis**: 800-1.500 Tok/Seq
 - **Detail**: Goals, Tools, Tasks, Rating-Trend, Skills, Strategien, Effizienz,
   Kompetenz, Audit, Review, Benchmark, Foundry — alles bei JEDEM Call geladen.
@@ -142,9 +190,13 @@
 
 ### T5: Dream JSON mit indent=2 statt kompakt
 - **Status**: `open`
+- **Erstellt**: 2026-04-03
 - **Datei**: `engine/dream.py:148-206`
 - **Ersparnis**: 1.000-2.000 Tok (nur bei Dream-Calls, alle ~10 Seq)
-- **Quick-Win**: `json.dumps(data, separators=(',', ':'))` statt `indent=2`
+- **Vorschlag**: `json.dumps(data, separators=(',', ':'))` statt `indent=2`
+- **VORSICHT**: LLM muss diesen JSON-Block LESEN. Kompaktes JSON kann
+  Dream-Qualitaet verschlechtern. Erst testen wenn andere Token-Optimierungen
+  ausgeschoepft sind. Severity: LOW.
 
 ### T6: Graceful-Finish auf Sonnet statt guenstigerem Modell
 - **Status**: `open`
@@ -164,12 +216,15 @@
 
 ## STABILITAET
 
-### S1: SemanticMemory Index waechst unbegrenzt
+### S1: SemanticMemory Index hat nur Soft-Limit (teilweise mitigiert)
 - **Status**: `open`
+- **Erstellt**: 2026-04-03
 - **Datei**: `engine/intelligence.py:199`
-- **Problem**: `self.index["entries"].append(entry)` ohne Limit.
-  `_update_idf()` iteriert ueber ALLE Eintraege bei jedem Store.
-- **Fix**: Max 500 Eintraege, Importance-basierte Eviction.
+- **Problem**: `_compress_memories()` greift ab 400 Eintraegen, aber kein hartes Cap.
+  `_update_idf()` iteriert ueber ALLE verbleibenden Eintraege bei jedem Store.
+  Ueber Wochen koennen dennoch hunderte Eintraege akkumulieren.
+- **Fix**: Pruefen ob _compress_memories ausreicht oder hartes Cap (z.B. 500) noetig.
+  Severity: LOW-MEDIUM (bereits teilweise mitigiert).
 
 ### S2: _file_locks LRU-Eviction ist Insertion-Order
 - **Status**: `open`
@@ -178,15 +233,22 @@
   Insertion-Order statt Usage-Order. Haeufig genutzte Locks koennen entfernt werden.
 - **Fix**: `move_to_end()` bei Zugriff oder `functools.lru_cache`.
 
-### S3: goal_stack._save() schluckt Fehler
+### S3: goal_stack._save() loggt Fehler nur mit print (teilweise mitigiert)
 - **Status**: `open`
+- **Erstellt**: 2026-04-03
 - **Datei**: `engine/goal_stack.py:31-34`
-- **Problem**: Nur `print()` bei Save-Fehler. Goals im RAM != Disk nach Crash.
+- **Problem**: Nutzt `safe_json_write()` (atomares Schreiben mit temp+rename — robust).
+  Aber Fehler werden nur mit `print()` geloggt statt `logging.warning()`.
+  Goals im RAM bleiben konsistent, aber Disk-Version kann veraltet sein.
+  Severity: LOW (Schreibvorgang selbst ist bereits atomar gesichert).
 
 ### S4: Checkpoint speichert keine Message-History
 - **Status**: `open`
+- **Erstellt**: 2026-04-03
 - **Datei**: `engine/checkpoint.py:30-58`
 - **Problem**: Kein Kontext ueber vorherige Tool-Calls bei Resume.
+  Bei Resume hat Phi keinen Konversations-Kontext — Checkpoint dient aktuell
+  nur als Fortschritts-Marker, nicht als echtes Resume-Feature.
 
 ### S5: AdaptiveRhythm liest 3x die gleiche goals.json
 - **Status**: `open`
