@@ -34,6 +34,7 @@ from .goal_stack import GoalStack
 from .web_access import WebAccess
 from .extensions import PipManager, GitManager, TaskQueue, SelfRating, FileWatcher
 from .intelligence import SemanticMemory, SkillTracker, StrategyEvolution, EfficiencyTracker
+from .ior import IORTracker
 from .dream import DreamEngine
 from .competence import CompetenceMatrix, SelfAudit
 from .code_review import DualReviewSystem
