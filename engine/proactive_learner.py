@@ -114,7 +114,7 @@ class ProactiveLearner:
 
         # 1. Skill-Library: Bewaehrtes Vorgehen
         skill = skill_library.get_best_skill(goal_type)
-        if skill and skill.get("success_count", 0) >= 2:
+        if skill and skill.get("success_count", 0) >= 1:
             has_internal_knowledge = True
             # Skill-Prompt wird separat in Perception gebaut — hier nur Status
 

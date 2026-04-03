@@ -1253,6 +1253,9 @@ SEQUENZ-PLANUNG: Nutze write_sequence_plan am Anfang — plane dein Ziel, Exit-K
         skill_prompt = self.skill_library.build_skill_prompt(goal_type)
         if skill_prompt:
             parts.append(skill_prompt)
+            logger.info("BASELINE: skill_hit=1 goal_type=%s", goal_type)
+        else:
+            logger.info("BASELINE: skill_hit=0 goal_type=%s", goal_type)
 
         # Proaktives Lernen: Intern-first, Internet-Fallback
         learn_context = self.proactive_learner.build_context(
@@ -1357,6 +1360,7 @@ SEQUENZ-PLANUNG: Nutze write_sequence_plan am Anfang — plane dein Ziel, Exit-K
         # Failure-Memory + Skill-Komposition: Vor jeder Sequenz checken
         # (focus wurde oben schon geholt — wiederverwenden)
         failure_check = self.failure_memory.check(focus)
+        logger.info("BASELINE: fm_match=%d", 1 if failure_check else 0)
 
         # Skill-Komposition: Relevante existierende Tools anzeigen
         composition = self.composer.suggest_composition(focus)
