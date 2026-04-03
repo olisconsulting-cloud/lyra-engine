@@ -1,5 +1,8 @@
 # Analyse: Phis Lern-Systeme — Ist-Zustand
 
+> Snapshot: 2026-04-03 (vor Phase 1). Historischer Ist-Zustand.
+> Dieses Dokument wird nicht mehr aktualisiert — es dient als "Vorher"-Bild.
+
 ## Die 5 Systeme im Detail
 
 ### 1. SkillLibrary (`engine/skill_library.py`)

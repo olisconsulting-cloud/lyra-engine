@@ -1,104 +1,62 @@
 # Unified Memory — Phis Lernmaschine
 
+> Lies ZUERST diese Datei. Dann BACKLOG.md. Dann arbeite.
+
 ## Mission
-Die 5 isolierten Lern-Systeme zu EINEM kohärenten Gedächtnis vereinen.
-Nicht "5 Datenbanken die nebeneinander existieren" — sondern ein System
-das aus Erfolgen UND Fehlern lernt, Muster generalisiert und Wissen transferiert.
+Phis 5 isolierte Lern-Systeme zu EINEM kohaerenten Gedaechtnis vereinen.
+Der AGI-Kern: WIE Phi aus Erfahrung lernt und Wissen auf neue Situationen uebertraegt.
 
-Das ist der AGI-Kern: Nicht die Loop, nicht die Tools, nicht die LLMs —
-sondern WIE Phi aus Erfahrung lernt und dieses Wissen auf neue Situationen anwendet.
+## Was ist das hier?
+Dieses Projekt baut die Bruecken zwischen SkillLibrary, FailureMemory,
+SemanticMemory, MetaRuleEngine und MetaCognition. Integration ueber bestehende
+Systeme — kein Neubau, keine Breaking Changes.
 
-## Problem (Status Quo)
+## Workflow
+
+Working Directory: `c:\Users\olisc\Claude\Lyra` (Repo-Root).
+
 ```
-SkillLibrary ──── speichert Tool-Reihenfolgen aus Erfolgen
-FailureMemory ─── speichert was schiefging
-SemanticMemory ── speichert Erkenntnisse (TF-IDF)
-MetaRuleEngine ── erzwingt harte Guards aus Mustern
-MetaCognition ─── speichert Bottlenecks + Strategy-Changes
-Dream ─────────── konsolidiert Beliefs/Strategies, NICHT Skills
-```
-
-Diese 5 Systeme reden NICHT miteinander:
-- Skills lernen nur aus Erfolgen, nie aus Fehlern
-- Kein Transfer zwischen ähnlichen Skills
-- Dream konsolidiert die Skill-Library nicht
-- Skill-Retrieval ist eindimensional (nur goal_type)
-- Abstract Steps codieren WAS (Tool-Reihenfolge), nicht WARUM (Strategie)
-
-## Ziel-Architektur
-```
-UnifiedMemory (ein Interface, ein Retrieval)
-  ├── Positiv-Wissen: "Das hat funktioniert" (aus SkillLibrary)
-  ├── Negativ-Wissen: "Das ist gescheitert" (aus FailureMemory)
-  ├── Semantisch: "Das weiss ich" (aus SemanticMemory)
-  ├── Prozess: "So arbeite ich am besten" (aus MetaCognition)
-  └── Guards: "Das darf nie passieren" (aus MetaRuleEngine)
-
-Konsolidierung (Dream):
-  - Ähnliche Skills mergen → generalisierte Muster
-  - Failure-Lektionen in Skills einbetten
-  - Veraltete Skills prunen
-
-Retrieval (eine Anfrage → bestes Wissen):
-  - Semantische Suche über ALLE Quellen
-  - Skill + Anti-Pattern + Kontext in einem Prompt-Block
+1.  Lies BACKLOG.md                    — Was ist als Naechstes dran?
+2.  Lies BASELINES.md                  — Wo stehen die Metriken?
+3.  Lies den betroffenen Engine-Code   — IMMER erst verstehen, dann aendern
+4.  Aendere EINE Sache                 — Minimal, testbar
+5.  Teste: python review_phi.py        — Laeuft es noch?
+6.  Committe                           — Kleiner Commit, klare Message
+7.  Update BACKLOG.md                  — Erledigtes Item entfernen
+8.  Beobachte Phi (20-30 Sequenzen)    — Misst der Fix was er soll?
+9.  Ergebnisse in observations/ loggen — Vorher/Nachher dokumentieren
+10. Session-Log in sessions/ schreiben — Was gemacht, was offen
 ```
 
-## Architektur-Prinzipien
+## Prinzipien
 1. **Integration > Neubau** — Bestehende Systeme verbinden, nicht ersetzen
-2. **Inkrementell** — Jede Phase liefert messbaren Wert für Phi
+2. **Inkrementell** — Jede Phase liefert messbaren Wert fuer Phi
 3. **Code > Prompts** — Verhalten im Code erzwingen, nicht per Prompt bitten
-4. **Messen vor Optimieren** — Erst Baseline, dann Änderung, dann Vergleich
-5. **Einfachste Lösung zuerst** — Kein Over-Engineering
-
-## Phasen
-
-### Phase 1: Baseline + Quick Wins
-- [ ] Messen: Wie oft bekommt Phi aktuell einen Skill-Prompt? (Logging)
-- [ ] Messen: Wie oft matcht FailureMemory.check() auf aktuelle Goals?
-- [ ] Fix: success_count >= 2 → >= 1 im ProactiveLearner
-- [ ] Fix: Bei Skill-Extraktion FailureMemory-Lektionen mit einbetten
-- [ ] Fix: Skill-Retrieval um semantische Suche erweitern (TF-IDF aus SemanticMemory nutzen)
-
-### Phase 2: Dream-Integration
-- [ ] Dream liest skill_library/index.json
-- [ ] Dream mergt ähnliche Skills (Jaccard auf abstract_steps)
-- [ ] Dream prunet Skills mit avg_score < 5
-- [ ] Dream generiert "why"-Feld pro Skill (LLM-Zusammenfassung)
-
-### Phase 3: Unified Retrieval
-- [ ] Ein build_context() das Skills + Failures + SemanticMemory kombiniert
-- [ ] Anti-Pattern-Injection: "NICHT so: ..." bei bekannten Fallen
-- [ ] Cross-Domain-Transfer: Ähnliche Skills aus anderen goal_types finden
-
-### Phase 4: Transfer-Learning
-- [ ] Meta-Patterns aus Skill-Clustern ableiten
-- [ ] Skill-Komposition: Zwei Skills zu einem neuen kombinieren
-- [ ] Generalisierte Strategien die über goal_types hinweg gelten
-
-## Quell-Dateien (im Lyra-Repo)
-- `engine/skill_library.py` — SkillLibrary Klasse
-- `engine/intelligence.py` — SemanticMemory + classify_goal_type
-- `engine/quantum.py` — FailureMemory, CriticAgent, SkillComposer
-- `engine/meta_rules.py` — MetaRuleEngine
-- `engine/evolution.py` — MetaCognition, AdaptiveRhythm
-- `engine/dream.py` — DreamEngine (Konsolidierung)
-- `engine/consciousness.py` — Hauptloop (nutzt alle Systeme)
-- `engine/proactive_learner.py` — ProactiveLearner (Retrieval-Orchestrator)
-- `data/skill_library/index.json` — 12 gespeicherte Skills
-- `data/consciousness/failures.json` — Failure-Memory
-- `data/consciousness/skills.json` — Skill-Tracker (Zähler)
-- `data/consciousness/metacognition.json` — Selbstreflexionen
-
-## Metriken (Wie messen wir Fortschritt?)
-- **Skill-Hit-Rate**: % der Sequenzen wo ein passender Skill gefunden wird
-- **Skill-Relevanz**: Phi's Rating in Sequenzen MIT vs OHNE Skill-Prompt
-- **Wiederholungsfehler**: Gleicher Fehler-Typ tritt erneut auf trotz FailureMemory
-- **Transfer-Score**: Skill aus Domain A wird erfolgreich in Domain B genutzt
-- **Dream-Effektivität**: Skills vor/nach Dream-Konsolidierung
+4. **Messen vor Optimieren** — Erst Baseline, dann Aenderung, dann Vergleich
+5. **Einfachste Loesung zuerst** — Kein Over-Engineering
 
 ## Kritische Regeln
 - KEINE Breaking Changes an bestehenden Interfaces
-- Jede Änderung muss mit `python review_phi.py` bestehen
-- Erst Phase 1 abschließen und beobachten bevor Phase 2 starten
+- Jede Aenderung muss `python review_phi.py` bestehen
+- Erst Phase abschliessen und beobachten bevor naechste Phase starten
 - Beobachten vor Weiterbauen: 20-30 Sequenzen nach jeder Phase
+- Agent-Findings immer gegen Code verifizieren (~30% False Positives)
+
+## Dokumente
+
+| Datei | Inhalt |
+|-------|--------|
+| BACKLOG.md | Priorisierte Arbeitsliste — was ist dran? |
+| BASELINES.md | Quantitative Messungen — wo stehen wir? |
+| DECISIONS.md | Architektur-Entscheidungen (ADR-Format) |
+| ANALYSE.md | Ist-Zustand der 5 Systeme (Snapshot vor Phase 1) |
+| ARCHITEKTUR.md | Ziel-Architektur, 3 neue Module, Integrationspunkte |
+| sessions/ | Session-Logs (was wurde gemacht?) |
+| observations/ | Phi-Beobachtungen (wirkt die Aenderung?) |
+
+## Aktueller Status
+
+- **Phase**: 1 — Baseline + Quick Wins
+- **Blocker**: Keine
+- **Letzte Session**: 2026-04-03 (Projektordner aufgesetzt, Analyse abgeschlossen)
+- **Naechste Aktion**: Baselines messen (UM-B1, UM-B2 in BACKLOG.md)
