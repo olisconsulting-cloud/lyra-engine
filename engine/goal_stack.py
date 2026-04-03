@@ -60,7 +60,8 @@ class GoalStack:
         return None
 
     def create_goal(self, title: str, description: str = "",
-                    sub_goals: Optional[list[str]] = None) -> str:
+                    sub_goals: Optional[list[str]] = None,
+                    priority: str = "medium") -> str:
         """
         Erstellt ein neues Ziel mit optionalen Sub-Goals.
         Prueft vorher ob ein aehnliches Ziel bereits existiert.
@@ -69,6 +70,7 @@ class GoalStack:
             title: Ziel-Titel
             description: Detaillierte Beschreibung
             sub_goals: Liste von Sub-Goal Titeln
+            priority: Prioritaet (low, medium, high)
 
         Returns:
             Bestaetigungs-Nachricht
@@ -109,6 +111,7 @@ class GoalStack:
             "id": str(uuid.uuid4())[:8],
             "title": title,
             "description": description,
+            "priority": priority if priority in ("low", "medium", "high") else "medium",
             "created": datetime.now(timezone.utc).isoformat(),
             "status": "active",
             "sub_goals": [],

@@ -2,14 +2,16 @@
 Multi-LLM Router — Waehlt das optimale Modell je nach Aufgabe.
 
 Aufstellung:
-- Kimi K2.5 (NVIDIA): Haupt-Arbeit (80%) — Tool-Use, Code, Telegram
-- Claude Opus 4.6: Code-Review, Tiefenanalyse, Audit (unabhaengiger Reviewer)
+- Kimi K2.5 (NVIDIA): Haupt-Arbeit (80%) — Tool-Use, Code, Telegram ($0)
+- Claude Sonnet 4.6: Code-Review — praezises Diff-Verstaendnis, nativer Tool-Use
+- Claude Opus 4.6: Audit, Result-Validation — Tiefenanalyse (hier lohnt sich Opus)
+- GPT-4.1-mini (OpenAI): Dream, Goal-Planning — 89% guenstiger als Sonnet, JSON-Garantie
 - DeepSeek V3.2: Fallback (~35x guenstiger als Claude Sonnet)
 
 TASK_MODEL_MAP ist die EINZIGE Stelle fuer Modell-Zuordnung.
 Alle Module importieren von hier — keine hardcodierten Modell-IDs.
 
-Kosten: ~$5-10/Tag statt $50-100 mit Opus-only
+Kosten: ~$5-8/Tag statt $50-100 mit Opus-only
 """
 
 import json
@@ -56,6 +58,20 @@ MODELS = {
         "output_cost": 0.42,
         "use_for": "Dream, Tool-Foundry, Fallback",
     },
+    "gemini_flash": {
+        "provider": "google",
+        "model_id": "gemini-2.0-flash",
+        "input_cost": 0.10,
+        "output_cost": 0.40,
+        "use_for": "Zweiter Fallback wenn DeepSeek versagt",
+    },
+    "gpt4_1_mini": {
+        "provider": "openai",
+        "model_id": "gpt-4.1-mini",
+        "input_cost": 0.40,
+        "output_cost": 1.60,
+        "use_for": "Dream, Goal-Planning — guenstig mit JSON-Garantie",
+    },
 }
 
 # Welches Modell fuer welche Aufgabe — EINZIGE Stelle fuer Modell-Zuordnung
@@ -65,9 +81,9 @@ TASK_MODEL_MAP = {
     "audit_primary": "claude_opus",        # Opus 4.6 — Tiefenanalyse (hier lohnt sich Opus)
     "audit_secondary": "kimi_k25",         # Kimi — Gegenpruefung ($0)
     "telegram_reply": "kimi_k25",          # Kimi — Sofort-Antwort ($0)
-    "dream": "claude_sonnet",              # Sonnet 4.6 — Memory-Konsolidierung (vorher Kimi — Sonnet analysiert Muster besser)
+    "dream": "gpt4_1_mini",                # GPT-4.1-mini — Memory-Konsolidierung (89% guenstiger als Sonnet, JSON-Garantie)
     "tool_generation": "kimi_k25",         # Kimi — Coding ist Kimis Staerke ($0)
-    "goal_planning": "claude_sonnet",      # Sonnet 4.6 — Goal-Zerlegung (vorher Opus — Sonnet reicht, 80% guenstiger)
+    "goal_planning": "gpt4_1_mini",        # GPT-4.1-mini — Goal-Zerlegung (89% guenstiger als Sonnet, Structured Outputs)
     "result_validation": "claude_opus",    # Opus 4.6 — Ergebnis-Pruefung (kritisch, hier keine Abstriche)
     "graceful_finish": "kimi_k25",          # Kimi K2.5 — Sequenz-Zusammenfassungen bei Auto-Finish ($0, vorher Sonnet)
     "fallback": "deepseek_v3",             # DeepSeek V3 — Fallback wenn Kimi versagt
@@ -88,6 +104,7 @@ class LLMRouter:
         self.google_key = os.getenv("GOOGLE_AI_API_KEY", "").strip()
         self.deepseek_key = os.getenv("DEEPSEEK_API_KEY", "").strip()
         self.nvidia_key = os.getenv("NVIDIA_API_KEY", "").strip()
+        self.openai_key = os.getenv("OPENAI_API_KEY", "").strip()
         self.http = httpx.Client(timeout=30.0)  # 30s statt 120s — Kimi antwortet in 3-10s
         self._http_owned = True  # Marker fuer Cleanup
 

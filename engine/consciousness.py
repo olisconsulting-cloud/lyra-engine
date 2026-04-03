@@ -1907,7 +1907,8 @@ SEQUENZ-PLANUNG: Nutze write_sequence_plan am Anfang — plane dein Ziel, Exit-K
                     continue
                 try:
                     return self._call_provider(fb_key, system, messages, tools, max_tokens)
-                except Exception:
+                except Exception as cb_err:
+                    logger.warning("Circuit-Breaker Fallback %s fehlgeschlagen: %s", fb_key, cb_err)
                     continue
             raise ValueError(f"Alle Fallbacks fehlgeschlagen (Circuit Breaker: {provider})")
 
@@ -1929,7 +1930,7 @@ SEQUENZ-PLANUNG: Nutze write_sequence_plan am Anfang — plane dein Ziel, Exit-K
             if failures >= 2:
                 self._provider_cooldown[provider] = self.sequences_total + 10
                 logger.warning(
-                    "Circuit Breaker AKTIV: %s gesperrt fuer 10 Sequenzen → DeepSeek",
+                    "Circuit Breaker AKTIV: %s gesperrt fuer 10 Sequenzen → Fallback-Kette",
                     provider,
                 )
 
@@ -1940,7 +1941,6 @@ SEQUENZ-PLANUNG: Nutze write_sequence_plan am Anfang — plane dein Ziel, Exit-K
             ]
 
             for fb_key, fb_name in fallback_chain:
-                from .llm_router import MODELS
                 fb_provider = MODELS.get(fb_key, {}).get("provider", "")
                 if fb_provider == provider:
                     continue  # Nicht auf sich selbst fallen
