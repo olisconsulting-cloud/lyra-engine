@@ -49,6 +49,7 @@ from .tool_registry import ToolRegistry
 from .quality_checks import check_markdown_quality
 from .message_compression import compress_old_messages, estimate_tokens
 from .reporting import build_narrative_report
+from . import llm_ops
 from .handlers import ToolContext, register_all_handlers
 from .perception_pipeline import PerceptionPipeline
 from .unified_memory import (
@@ -56,7 +57,7 @@ from .unified_memory import (
     failure_adapter, skill_adapter, strategy_adapter,
 )
 from .sequence_runner import SequenceRunner
-from .sequence_finisher import SequenceFinisher
+# SequenceFinisher entfernt — Logik bleibt in _handle_finish_sequence
 from . import config
 from .config import safe_json_write, safe_json_read
 
@@ -670,24 +671,7 @@ class ConsciousnessEngine:
         # Sequence-Runner — composable Sequenz-Phasen (bereit fuer Feature-Flag)
         self.sequence_runner = SequenceRunner(event_bus=self.event_bus)
 
-        # Sequence-Finisher — saubere End-of-Sequence Verarbeitung (bereit fuer Feature-Flag)
-        self.sequence_finisher = SequenceFinisher(
-            event_bus=self.event_bus,
-            strategies=self.strategies,
-            metacognition=self.metacognition,
-            self_rating=self.self_rating,
-            memory=self.memory,
-            planner=self.seq_intel,
-            skill_library=self.skill_library,
-            meta_rules=self.seq_intel,
-            checkpointer=self.seq_intel,
-            git=self.git,
-            communication=self.communication,
-            goal_stack=self.goal_stack,
-            semantic_memory=self.semantic_memory,
-            failure_memory=self.failure_memory,
-            efficiency=self.efficiency,
-        )
+        # SequenceFinisher entfernt — _handle_finish_sequence bleibt in consciousness.py
 
         # Kosten-Tracking
         self.session_input_tokens = 0
@@ -1435,9 +1419,9 @@ SEQUENZ-PLANUNG: Nutze write_sequence_plan am Anfang — plane dein Ziel, Exit-K
             sequences_total=self.sequences_total,
             _installed_packages=self._installed_packages,
             # Callbacks fuer Logik die in consciousness.py bleibt
-            opus_goal_planning=self._opus_goal_planning,
-            opus_result_validation=self._opus_result_validation,
-            cross_model_review=self._cross_model_review,
+            opus_goal_planning=lambda t, d: llm_ops.opus_goal_planning(t, d, self._call_llm),
+            opus_result_validation=lambda n, c, v: llm_ops.opus_result_validation(n, c, v, self._call_llm),
+            cross_model_review=lambda n, f: llm_ops.cross_model_review(n, f, self._call_llm),
             check_markdown_quality=check_markdown_quality,
             save_all=self._save_all,
             handle_finish_sequence=self._handle_finish_sequence,
@@ -1847,76 +1831,7 @@ SEQUENZ-PLANUNG: Nutze write_sequence_plan am Anfang — plane dein Ziel, Exit-K
 
         return "Sequenz abgeschlossen. State gespeichert."
 
-    def _build_narrative_report(self, tool_input: dict, summary: str,
-                                bottleneck: str, next_time: str) -> str:
-        """Baut einen narrativen Telegram-Bericht mit Selbstreflexion."""
-        seq_num = self.sequences_total + 1
-        rating = tool_input.get("performance_rating", 0)
-        rating_reason = tool_input.get("rating_reason", "")
-        errors = self.seq_intel.metrics.errors
-
-        # Fortschritt ermitteln
-        progress_text = ""
-        done, total = 0, 0
-        active = self.goal_stack.goals.get("active", [])
-        if active:
-            sgs = active[0].get("sub_goals", [])
-            done = sum(1 for sg in sgs if sg["status"] == "done")
-            total = len(sgs)
-            if total:
-                progress_text = f" ({done}/{total} Teilziele erledigt)"
-
-        # Naechster Schritt
-        next_step = ""
-        focus = self.goal_stack.get_current_focus()
-        if "Naechster Schritt:" in focus:
-            next_step = focus.split("Naechster Schritt:")[1].strip().split("[")[0].strip()[:100]
-
-        # --- Narrativen Text bauen ---
-        parts = []
-
-        # Eroeffnung: Was wurde gemacht?
-        if summary:
-            parts.append(f"Sequenz {seq_num}: {summary[:300]}")
-        else:
-            parts.append(f"Sequenz {seq_num} abgeschlossen.")
-
-        # Selbstbewertung — ehrlich und konkret
-        if rating and rating <= 3:
-            parts.append(f"\nDas lief nicht gut (Selbstbewertung: {rating}/10).")
-            if rating_reason:
-                parts.append(f"Grund: {rating_reason[:150]}")
-        elif rating and rating >= 8:
-            parts.append(f"\nDas war produktiv (Selbstbewertung: {rating}/10).")
-            if rating_reason:
-                parts.append(rating_reason[:150])
-
-        # Fehler-Erkennung
-        if errors > 0:
-            parts.append(f"\n{errors} Fehler aufgetreten — das muss ich mir anschauen.")
-
-        # Probleme und Learnings — nur wenn vorhanden
-        if bottleneck and bottleneck != "Kein explizites finish_sequence aufgerufen":
-            parts.append(f"\nWas mich gebremst hat: {bottleneck[:150]}")
-        if next_time and next_time != "finish_sequence mit Rating nutzen":
-            parts.append(f"Naechstes Mal: {next_time[:150]}")
-
-        # Fortschritt und Ausblick
-        if progress_text:
-            parts.append(f"\nFortschritt{progress_text}.")
-        if next_step:
-            parts.append(f"Als naechstes: {next_step}")
-
-        # Loop-Erkennung: Gleicher Fortschritt wie vorher?
-        last_progress = getattr(self, "_last_reported_progress", None)
-        current_progress = (done, total) if total > 0 else None
-        if (last_progress and current_progress is not None
-                and last_progress == current_progress):
-            parts.append("\nHinweis: Kein Fortschritt seit letzter Sequenz — ich pruefe ob ich feststecke.")
-        if current_progress is not None:
-            self._last_reported_progress = current_progress
-
-        return "\n".join(parts)
+    # Narrative Report lebt jetzt in engine/reporting.py
 
     @staticmethod
     def _extract_last_llm_thought(messages: list) -> str:
@@ -2149,76 +2064,7 @@ Antworte als JSON:
             "key_decision": "Auto-beendet durch Limit",
         }
 
-    def _cross_model_review(self, project_name: str, code_files: list) -> dict:
-        """
-        Cross-Model-Review: Ein anderes Modell prueft den Projekt-Code.
-
-        Hauptarbeit laeuft auf Gemini → Review auf Claude (oder umgekehrt).
-        Verschiedene Modelle finden verschiedene Probleme.
-
-        Returns:
-            {"approved": bool, "reason": str, "issues": list} oder None bei Fehler
-        """
-        # Code sammeln
-        code_context = f"PROJEKT: {project_name}\n\n"
-        for filepath in code_files[:5]:  # Max 5 Dateien
-            try:
-                content = filepath.read_text(encoding="utf-8")[:2000]
-                code_context += f"--- {filepath.name} ---\n{content}\n\n"
-            except (OSError, UnicodeDecodeError):
-                continue
-
-        # PLAN.md fuer Kontext
-        plan_path = config.DATA_PATH / "projects" / project_name / "PLAN.md"
-        if plan_path.exists():
-            plan = plan_path.read_text(encoding="utf-8")[:1000]
-            code_context += f"--- PLAN.md ---\n{plan}\n"
-
-        prompt = (
-            "Du bist ein Code-Reviewer. Pruefe ob dieses Projekt die Anforderungen "
-            "aus PLAN.md erfuellt und ob der Code qualitativ hochwertig ist.\n\n"
-            "Pruefe auf:\n"
-            "1. Erfuellt der Code die beschriebenen Ziele?\n"
-            "2. Gibt es Bugs oder logische Fehler?\n"
-            "3. Ist die Architektur sauber?\n"
-            "4. Fehlt etwas Wichtiges?\n\n"
-            "Antworte als JSON:\n"
-            '{"approved": true/false, "reason": "Kurze Begruendung", '
-            '"issues": ["Problem 1", ...] oder []}\n\n'
-            "Sei streng aber fair."
-        )
-
-        try:
-            # Review auf Claude Sonnet (anderes Modell als Hauptarbeit)
-            response = self._call_llm(
-                "fallback", prompt,
-                [{"role": "user", "content": code_context}],
-                max_tokens=1000,
-            )
-
-            text = ""
-            for block in response["content"]:
-                if hasattr(block, "text"):
-                    text += block.text
-
-            # JSON parsen
-            import re
-            cleaned = text.strip()
-            if cleaned.startswith("```"):
-                first_nl = cleaned.find("\n")
-                if first_nl > 0:
-                    cleaned = cleaned[first_nl + 1:]
-                if cleaned.rstrip().endswith("```"):
-                    cleaned = cleaned.rstrip()[:-3].rstrip()
-            try:
-                return json.loads(cleaned)
-            except json.JSONDecodeError:
-                match = re.search(r"\{.*\}", cleaned, re.DOTALL)
-                if match:
-                    return json.loads(match.group(0))
-                return None
-        except Exception:
-            return None  # Review-Fehler blockt nicht den Abschluss
+    # Cross-Model-Review lebt jetzt in engine/llm_ops.py
 
     def interact(self, message: str) -> str:
         """Direkte Interaktion — Oliver spricht, Lyra antwortet und handelt."""
@@ -2477,110 +2323,7 @@ Antworte als JSON:
             print("  State gespeichert. Bis zum naechsten Mal.\n")
 
     # Sliding Window lebt jetzt in engine/message_compression.py
-
-    def _opus_result_validation(self, project_name: str,
-                                criteria: list[str],
-                                verified: list[str]) -> Optional[dict]:
-        """
-        Nutzt Opus 4.6 zur Validierung ob Projekt-Ergebnisse inhaltlich sinnvoll sind.
-        Prueft Akzeptanzkriterien gegen tatsaechlich erstellte Dateien.
-
-        Returns:
-            {"approved": bool, "reason": str} oder None bei Fehler
-        """
-        try:
-            project_path = config.DATA_PATH / "projects" / project_name
-            # Dateien im Projekt sammeln (max 5, ohne Tests)
-            files_content = []
-            for f in sorted(project_path.iterdir()):
-                if f.is_file() and f.name != "tests.py" and f.suffix in (".py", ".md", ".json"):
-                    content = f.read_text(encoding="utf-8")[:2000]
-                    files_content.append(f"--- {f.name} ---\n{content}")
-                if len(files_content) >= 5:
-                    break
-
-            if not files_content:
-                return None
-
-            response = self._call_llm(
-                "result_validation",
-                system=(
-                    "Du bist ein Qualitaets-Pruefer. Bewerte ob die Projekt-Dateien "
-                    "die Akzeptanzkriterien WIRKLICH erfuellen. Pruefe auf: "
-                    "(1) Vollstaendigkeit, (2) inhaltliche Korrektheit, "
-                    "(3) abgebrochene/unvollstaendige Saetze, (4) Halluzinationen. "
-                    "Antworte NUR mit JSON: {\"approved\": true/false, \"reason\": \"...\"}"
-                ),
-                messages=[{
-                    "role": "user",
-                    "content": (
-                        f"Projekt: {project_name}\n"
-                        f"Kriterien: {criteria}\n"
-                        f"Verifiziert als: {verified}\n\n"
-                        f"Dateien:\n{''.join(files_content)}"
-                    ),
-                }],
-                max_tokens=500,
-            )
-            text = ""
-            for block in response["content"]:
-                if hasattr(block, "text"):
-                    text += block.text
-            if not text:
-                return {"approved": False, "reason": "Opus hat keine Antwort geliefert"}
-            # JSON-Objekt extrahieren — suche alle {}-Bloecke
-            import re
-            for match in re.finditer(r'\{[^{}]*\}', text):
-                try:
-                    parsed = json.loads(match.group())
-                    if "approved" in parsed:
-                        return parsed
-                except json.JSONDecodeError:
-                    continue
-            return {"approved": False, "reason": "Kein gueltiges JSON in Opus-Antwort"}
-        except Exception as e:
-            print(f"  [Opus Validierung Fehler: {e}]")
-        return None
-
-    def _opus_goal_planning(self, title: str, description: str) -> Optional[list[str]]:
-        """
-        Nutzt Opus 4.6 fuer hochwertige Goal-Zerlegung.
-        Wird nur aufgerufen wenn Sub-Goals fehlen oder zu wenige sind.
-        Ein einziger Opus-Call hier spart dutzende schlechte Kimi-Sequenzen.
-
-        Returns:
-            Liste von Sub-Goal-Titeln oder None bei Fehler
-        """
-        try:
-            response = self._call_llm(
-                "goal_planning",
-                system=(
-                    "Du bist ein Strategie-Berater. Zerlege das gegebene Ziel in "
-                    "3-6 konkrete, sequentielle Sub-Goals. Jedes Sub-Goal muss: "
-                    "(1) ein messbares Ergebnis haben, (2) in 1-3 Sequenzen erreichbar sein, "
-                    "(3) auf dem vorherigen aufbauen. "
-                    "Antworte NUR mit einer JSON-Liste von Strings. Keine Erklaerung."
-                ),
-                messages=[{
-                    "role": "user",
-                    "content": f"Ziel: {title}\nBeschreibung: {description or 'Keine'}",
-                }],
-                max_tokens=1000,
-            )
-            # JSON-Liste aus Antwort parsen
-            text = ""
-            for block in response["content"]:
-                if hasattr(block, "text"):
-                    text += block.text
-            import re
-            match = re.search(r'\[.*\]', text, re.DOTALL)
-            if match:
-                sub_goals = json.loads(match.group())
-                if isinstance(sub_goals, list) and all(isinstance(s, str) for s in sub_goals):
-                    return sub_goals[:6]
-        except Exception as e:
-            print(f"  [Opus Goal-Planning Fehler: {e}]")
-        return None
+    # LLM-Ops (Opus Validation, Goal Planning, Cross-Review) in engine/llm_ops.py
 
     def _describe_action(self, tool_name: str, tool_input: dict) -> str:
         """Uebersetzt Tool-Calls in menschenlesbare Beschreibungen."""
