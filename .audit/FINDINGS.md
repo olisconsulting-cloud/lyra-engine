@@ -57,7 +57,7 @@
 - **Done**: Aufruf matcht Signatur in `intelligence.py:709`.
 
 ### H4: SequenceRunner._plan() — 3 falsche Methodensignaturen
-- **Status**: `open`
+- **Status**: `fixed` (2026-04-03)
 - **Erstellt**: 2026-04-03
 - **Datei**: `engine/sequence_runner.py:151-153`
 - **Problem**:
@@ -80,14 +80,16 @@
 - **Done**: Beide _load()-Methoden haben try/except + korrupte JSON gibt leere Liste zurueck.
 
 ### H6: Kein Retry/Fallback im Step-Loop bei API-Fehler
-- **Status**: `open`
+- **Status**: `fixed`
 - **Erstellt**: 2026-04-03
-- **Datei**: `engine/consciousness.py:~2992-3003` (API-Error-Handler im Step-Loop)
-- **Problem**: Bei API-Fehler wird die Sequenz sofort abgebrochen (`break`).
-  Kein Retry, kein Fallback auf alternatives Modell.
-  `TASK_MODEL_MAP["fallback"]` existiert bereits, wird aber nie automatisch genutzt.
-- **Fix**: Max 2 Retries, dann Fallback-Modell, dann erst Sequenz abbrechen.
-- **Done**: Sequenz ueberlebt transienten API-Fehler + nutzt Fallback-Modell automatisch.
+- **Gefixt**: 2026-04-03
+- **Datei**: `engine/consciousness.py:2576-2599`
+- **Problem**: Bei API-Fehler wurde die Sequenz sofort abgebrochen (`break`).
+- **Fix**: Step-Level Retry (3 Versuche mit Backoff: 1s, 2s).
+  Nachrichten-Sync-Fehler nicht retrybar (sofort break).
+  Fallback-Fehler wird jetzt auf Console geloggt.
+- **Ergebnis**: Pro Step 3 Versuche × Provider-Retry (3x) + Fallback (DeepSeek)
+  = 18 Chancen bevor ein Step die Sequenz abbricht.
 
 ---
 
@@ -141,14 +143,12 @@
 - **Problem**: consciousness.py: `wasted = step_count - output_count`.
   sequence_finisher.py: `wasted = min(errors * 2, steps)`. Komplett andere Logik.
 
-### A4: Dead Code
-- **Status**: `open`
+### A4: Vermeintlicher Dead Code — wird von review_phi.py genutzt
+- **Status**: `wontfix` (2026-04-03 — review_phi.py importiert select_tools + _get_compact_tools)
 - **Datei**: `engine/consciousness.py`
-- **Stellen**:
-  - `select_tools()` (Zeile ~550-558) — ersetzt durch ToolRegistry
-  - `_build_compact_tools()` (Zeile ~525-539) — ersetzt durch ToolRegistry
-  - `_get_compact_tools()` (Zeile ~542-547) — ersetzt durch ToolRegistry
-  - `_COMPACT_TOOLS_CACHE` (Zeile ~522) — nie genutzt
+- **Erkenntnis**: select_tools(), _build_compact_tools(), _get_compact_tools() werden
+  von review_phi.py fuer Token-Zaehlungen und Tool-Integritaetschecks verwendet.
+  KEIN Dead Code — nur im Engine-Runtime nicht mehr genutzt (ToolRegistry hat uebernommen).
 
 ---
 
@@ -199,14 +199,14 @@
   ausgeschoepft sind. Severity: LOW.
 
 ### T6: Graceful-Finish auf Sonnet statt guenstigerem Modell
-- **Status**: `open`
+- **Status**: `fixed` (2026-04-03)
 - **Datei**: `engine/consciousness.py:1957-2058`
 - **Detail**: Jede auto-beendete Sequenz macht einen Claude Sonnet Call (~$0.01).
   Mechanischer Fallback erzeugt fast gleiche Qualitaet.
 - **Quick-Win**: In TASK_MODEL_MAP `graceful_finish` auf `kimi_k25` routen.
 
 ### T7: Static-Prompt Regeln als Prosa statt Stichpunkte
-- **Status**: `open`
+- **Status**: `fixed` (2026-04-03)
 - **Datei**: `engine/consciousness.py:954-974`
 - **Ersparnis**: ~200 Tok * N Steps/Seq
 - **Detail**: Regeln (Duplikat, Qualitaet, Loop-Guard, Evidence-Based) als
@@ -251,7 +251,7 @@
   nur als Fortschritts-Marker, nicht als echtes Resume-Feature.
 
 ### S5: AdaptiveRhythm liest 3x die gleiche goals.json
-- **Status**: `open`
+- **Status**: `fixed` (2026-04-03)
 - **Datei**: `engine/evolution.py:175-209`
 - **Problem**: `_has_pending_tasks()`, `_has_active_goals()`, `_has_audit_goals()`
   oeffnen jeweils eigene Dateien, obwohl alles in goals.json steht.
