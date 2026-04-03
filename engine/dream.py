@@ -33,6 +33,30 @@ class DreamEngine:
         self.dream_log_path = self.consciousness_path / "dream_log.json"
         self.call_llm = call_llm
 
+    @staticmethod
+    def _is_belief_duplicate(new_belief: str, existing_beliefs: list,
+                             threshold: float = 0.5) -> bool:
+        """Prueft ob ein Belief als Duplikat eines bestehenden gilt.
+
+        Nutzt Wort-Overlap (Jaccard-Similarity) statt exaktem String-Match.
+        Threshold 0.5 = 50% Wort-Ueberlappung = wahrscheinlich dasselbe.
+        """
+        new_text = new_belief if isinstance(new_belief, str) else str(new_belief)
+        new_words = set(new_text.lower().split())
+        if len(new_words) < 3:
+            return False  # Zu kurz fuer sinnvollen Vergleich
+
+        for existing in existing_beliefs:
+            ex_text = existing if isinstance(existing, str) else str(existing)
+            ex_words = set(ex_text.lower().split())
+            if len(ex_words) < 3:
+                continue
+            overlap = len(new_words & ex_words)
+            union = len(new_words | ex_words)
+            if union > 0 and overlap / union >= threshold:
+                return True
+        return False
+
     def should_dream(self, sequences_since_last: int) -> bool:
         """Prueft ob eine Konsolidierung faellig ist."""
         return sequences_since_last >= 10
@@ -205,7 +229,13 @@ Antworte als JSON:
                     for key in _KNOWN_KEYS:
                         if key not in beliefs:
                             beliefs[key] = []
-                    beliefs["formed_from_experience"] = validated
+                    # Deduplikation: Nur Beliefs aufnehmen die nicht schon existieren
+                    existing = beliefs.get("formed_from_experience", [])
+                    deduplicated = []
+                    for b in validated:
+                        if not self._is_belief_duplicate(b, deduplicated + existing):
+                            deduplicated.append(b)
+                    beliefs["formed_from_experience"] = deduplicated
                     with open(beliefs_path, "w", encoding="utf-8") as f:
                         json.dump(beliefs, f, indent=2, ensure_ascii=False)
                     applied.append(f"Beliefs: {len(validated)} konsolidiert")
@@ -308,7 +338,7 @@ Antworte als JSON:
                 beliefs = self._safe_load_json(beliefs_path) or {}
                 formed = beliefs.get("formed_from_experience", [])
                 for pattern in eff_patterns[:3]:
-                    if pattern and pattern not in formed:
+                    if pattern and not self._is_belief_duplicate(pattern, formed):
                         formed.append(pattern)
                 beliefs["formed_from_experience"] = formed[-30:]
                 with open(beliefs_path, "w", encoding="utf-8") as f:

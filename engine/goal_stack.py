@@ -8,12 +8,14 @@ Echte Zielstruktur die ueber Zyklen hinweg arbeitet:
 - Abhaengigkeiten zwischen Goals werden beachtet
 """
 
+import json
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
 from .config import safe_json_read, safe_json_write, normalize_name_words
+from .phi import PHI, phi_balance
 
 
 class GoalStack:
@@ -26,10 +28,92 @@ class GoalStack:
         tracker = self.goals.get("_focus_tracker", {})
         self._last_focus: str = tracker.get("focus", "")
         self._consecutive_count: int = tracker.get("count", 0)
+        # Telos: Zweck-Hierarchie laden (optional, abwaertskompatibel)
+        self._telos = self._load_telos()
 
     def _load(self) -> dict:
         default = {"active": [], "completed": [], "abandoned": []}
         return safe_json_read(self.goals_path, default=default)
+
+    def _load_telos(self) -> dict:
+        """Laedt telos.json — gibt leeres Dict zurueck wenn nicht vorhanden."""
+        telos_path = self.goals_path.parent / "telos.json"
+        if not telos_path.exists():
+            return {}
+        try:
+            with open(telos_path, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except (json.JSONDecodeError, OSError):
+            return {}
+
+    def _get_recent_goal_domains(self, n: int = 10) -> list[str]:
+        """Gibt die Domaenen der letzten N abgeschlossenen Goals zurueck."""
+        completed = self.goals.get("completed", [])[-n:]
+        domains = []
+        for goal in completed:
+            title = goal.get("title", "").lower()
+            domain = self._classify_domain(title)
+            domains.append(domain)
+        return domains
+
+    @staticmethod
+    def _classify_domain(text: str) -> str:
+        """Einfache Domaenen-Klassifikation fuer Telos-Scoring."""
+        tl = text.lower()
+        if any(k in tl for k in ("api", "http", "endpoint", "request", "wrapper")):
+            return "api_integration"
+        if any(k in tl for k in ("test", "benchmark", "verifiz", "pruef")):
+            return "testing"
+        if any(k in tl for k in ("daten", "data", "csv", "analyse", "statistik")):
+            return "data_analysis"
+        if any(k in tl for k in ("architektur", "refactor", "modul", "design")):
+            return "architecture"
+        if any(k in tl for k in ("business", "markt", "preis", "roi", "kunde")):
+            return "business_thinking"
+        if any(k in tl for k in ("dashboard", "frontend", "html", "ui")):
+            return "frontend_design"
+        if any(k in tl for k in ("recherch", "research", "web")):
+            return "web_research"
+        if any(k in tl for k in ("selbst", "self", "evolution", "improv")):
+            return "self_improvement"
+        if any(k in tl for k in ("tool", "werkzeug")):
+            return "tool_building"
+        return "sonstiges"
+
+    def _telos_score(self, goal: dict) -> float:
+        """Berechnet Telos-Score: Diversitaets-Bonus + Ring-Prioritaet.
+
+        Hoher Score = Goal ist wertvoller fuer Phis Wachstum.
+        Ohne telos.json: gibt 0.0 zurueck (Fallback auf Index-Reihenfolge).
+        """
+        if not self._telos:
+            return 0.0
+
+        title = goal.get("title", "")
+        domain = self._classify_domain(title)
+
+        # 1. Diversitaets-Bonus: PHI^(-Wiederholungen)
+        # Neue Domaene = 1.0, 1x wiederholt = 0.618, 2x = 0.382...
+        recent = self._get_recent_goal_domains(10)
+        repetitions = recent.count(domain)
+        diversity = PHI ** (-repetitions)  # 1.0 → 0.618 → 0.382 → 0.236
+
+        # 2. Ring-Prioritaet: Niedrigster unfertiger Ring bevorzugt
+        ring_bonus = 0.0
+        ringe = self._telos.get("ringe", [])
+        for ring in ringe:
+            completion = ring.get("completion", 1.0)
+            if completion < 0.6:  # Ring braucht Arbeit
+                # Ist dieses Goal in einer Domaene dieses Rings?
+                ring_domains = [d["name"] for d in ring.get("domaenen", [])]
+                if domain in ring_domains:
+                    # Niedrigere Ringe = hoehere Prioritaet
+                    ring_nr = ring.get("nummer", 5)
+                    ring_bonus = PHI ** (-(ring_nr - 1))  # Ring 3=0.382, Ring 4=0.236
+                    break
+
+        # Gewichtete Kombination: 60% Diversitaet, 40% Ring
+        return diversity * 0.6 + ring_bonus * 0.4
 
     def _save(self):
         try:
@@ -365,33 +449,62 @@ class GoalStack:
     # === Uebersicht ===
 
     def get_current_focus(self) -> str:
-        """Was sollte Lyra JETZT tun? Naechstes offenes Sub-Goal."""
+        """Was sollte Lyra JETZT tun? Wertvollstes offenes Sub-Goal.
+
+        Mit Telos: Waehlt das Goal mit hoechstem Telos-Score
+        (Diversitaets-Bonus + Ring-Prioritaet). Ohne Telos: Index-Reihenfolge.
+        """
         active = self.goals.get("active", [])
         if not active:
             return "Keine aktiven Ziele. Setze ein neues Ziel!"
 
+        # Telos-Scoring: Goals nach Wert sortieren statt Index-Reihenfolge
+        if self._telos:
+            scored = []
+            for i, goal in enumerate(active):
+                has_pending = any(
+                    sg["status"] in ("pending", "in_progress")
+                    for sg in goal.get("sub_goals", [])
+                )
+                if has_pending or not goal.get("sub_goals"):
+                    score = self._telos_score(goal)
+                    scored.append((score, i, goal))
+            if scored:
+                # Phi-Balance: Meist das Beste, aber gelegentlich Neues
+                scores = [s[0] for s in scored]
+                chosen_idx = phi_balance(scores)
+                _, _, best_goal = scored[chosen_idx]
+                return self._format_focus(best_goal)
+
+        # Fallback: Index-Reihenfolge (altes Verhalten)
         for i, goal in enumerate(active):
-            # Gescheiterte Sub-Goals sichtbar machen
-            failed_sgs = [s for s in goal.get("sub_goals", []) if s["status"] == "failed"]
-            failed_info = ""
-            if failed_sgs:
-                reasons = [f"  GESCHEITERT: {s['title']} — {s.get('failure_reason', '?')}"
-                           for s in failed_sgs]
-                failed_info = "\n" + "\n".join(reasons)
-
-            for sg in goal.get("sub_goals", []):
-                if sg["status"] in ("pending", "in_progress"):
-                    return (
-                        f"FOKUS: {goal['title']}\n"
-                        f"  Naechster Schritt: {sg['title']} [{sg['status']}]"
-                        + failed_info
-                    )
-
-            # Ziel ohne Sub-Goals
-            if not goal.get("sub_goals"):
-                return f"FOKUS: {goal['title']} (keine Sub-Goals definiert)"
+            result = self._format_focus(goal)
+            if result:
+                return result
 
         return "Alle Sub-Goals erledigt — schliesse Ziele ab oder setze neue."
+
+    def _format_focus(self, goal: dict) -> str:
+        """Formatiert ein Goal als Focus-String."""
+        failed_sgs = [s for s in goal.get("sub_goals", []) if s["status"] == "failed"]
+        failed_info = ""
+        if failed_sgs:
+            reasons = [f"  GESCHEITERT: {s['title']} — {s.get('failure_reason', '?')}"
+                       for s in failed_sgs]
+            failed_info = "\n" + "\n".join(reasons)
+
+        for sg in goal.get("sub_goals", []):
+            if sg["status"] in ("pending", "in_progress"):
+                return (
+                    f"FOKUS: {goal['title']}\n"
+                    f"  Naechster Schritt: {sg['title']} [{sg['status']}]"
+                    + failed_info
+                )
+
+        if not goal.get("sub_goals"):
+            return f"FOKUS: {goal['title']} (keine Sub-Goals definiert)"
+
+        return ""
 
     def get_summary(self) -> str:
         """Komplette Ziel-Uebersicht."""
