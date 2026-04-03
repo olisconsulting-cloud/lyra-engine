@@ -822,7 +822,7 @@ REGELN:
                 "timestamp": datetime.now(timezone.utc).isoformat(),
                 "summary": summary[:500],
             })
-            data["entries"] = data["entries"][-20:]
+            data["entries"] = data["entries"][-50:]
 
             safe_json_write(mem_path, data)
         except Exception as e:
@@ -1768,11 +1768,11 @@ REGELN:
 
         # Loop-Erkennung: Gleicher Fortschritt wie vorher?
         last_progress = getattr(self, "_last_reported_progress", None)
-        current_progress = (done if active and sgs else None, total if active and sgs else None)
-        if (last_progress and current_progress[0] is not None
+        current_progress = (done, total) if total > 0 else None
+        if (last_progress and current_progress is not None
                 and last_progress == current_progress):
             parts.append("\nHinweis: Kein Fortschritt seit letzter Sequenz — ich pruefe ob ich feststecke.")
-        if current_progress[0] is not None:
+        if current_progress is not None:
             self._last_reported_progress = current_progress
 
         return "\n".join(parts)
