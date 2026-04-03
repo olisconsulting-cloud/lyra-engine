@@ -379,17 +379,11 @@ Antworte als JSON:
 
         return ", ".join(applied) if applied else "Keine Aenderungen"
 
-    # Meta-Keywords: Goals die Phi-internes Verhalten beschreiben statt echten Output
-    META_KEYWORDS = frozenset((
-        "finish_sequence", "konsisten", "fruehzeitig", "steps aufrufen",
-        "tracking-system", "alert-mechanis", "uebungssequenz", "skill erweit",
-        "self-diagnose", "speichermanagement", "reflexion", "routine",
-    ))
-
-    def _is_meta_goal(self, title: str) -> bool:
+    @staticmethod
+    def _is_meta_goal(title: str) -> bool:
         """Erkennt ob ein Goal Meta-Reflexion statt echte Arbeit ist."""
-        tl = title.lower()
-        return sum(1 for kw in self.META_KEYWORDS if kw in tl) >= 1
+        from .config import is_meta_goal
+        return is_meta_goal(title)
 
     def _apply_recommendations(self, result: dict, goal_stack=None) -> str:
         """Wandelt Dream-Empfehlungen in Goals um (max 2 pro Dream).
@@ -459,7 +453,7 @@ Antworte als JSON:
 
     @staticmethod
     def _is_goal_duplicate(title: str, existing_goals: list,
-                           threshold: float = 0.4) -> bool:
+                           threshold: float = 0.6) -> bool:
         """Prueft ob ein Goal-Titel semantisch zu einem bestehenden passt."""
         new_words = set(title.lower().split())
         if len(new_words) < 3:

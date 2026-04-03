@@ -37,8 +37,8 @@ def handle_update_memory(ctx: ToolContext, tool_input: dict) -> str:
         if "nicht gefunden" in result:
             prefix = entry_id.split("_")[0] if "_" in entry_id else entry_id[:5]
             similar = [
-                e["id"] for e in ctx.semantic_memory.index.get("entries", [])
-                if prefix in e["id"]
+                e.get("id", "") for e in ctx.semantic_memory.index.get("entries", [])
+                if prefix in e.get("id", "")
             ][:5]
             if similar:
                 result += f"\nAehnliche IDs: {similar}"

@@ -318,15 +318,10 @@ class IntegrationTester:
         }
 
 
-    # Keywords fuer Meta-Goal-Erkennung (gleiche Liste wie in dream.py/goal_stack.py)
-    _META_KEYWORDS = (
-        "finish_sequence", "konsisten", "fruehzeitig", "steps aufrufen",
-        "tracking-system", "alert-mechanis", "uebungssequenz", "skill erweit",
-        "self-diagnose", "speichermanagement", "reflexion", "routine",
-    )
-
     def _check_meta_goal_ratio(self) -> dict:
         """Prueft: Sind zu viele aktive Goals Meta-Reflexion statt echte Arbeit?"""
+        from .config import is_meta_goal
+
         goals_file = self.data_path / "consciousness" / "goals.json"
         if not goals_file.exists():
             return {"name": "Meta-Goal-Ratio", "passed": True, "detail": "Keine Goals"}
@@ -335,18 +330,16 @@ class IntegrationTester:
             with open(goals_file, "r", encoding="utf-8") as f:
                 goals = json.load(f)
 
-            active = goals.get("active", [])
+            active = goals.get("active") or []
             if not active:
                 return {"name": "Meta-Goal-Ratio", "passed": True, "detail": "Keine aktiven Goals"}
 
-            meta_count = 0
-            for g in active:
-                title = g.get("title", "").lower()
-                if any(kw in title for kw in self._META_KEYWORDS):
-                    meta_count += 1
+            meta_count = sum(
+                1 for g in active if is_meta_goal(g.get("title", ""))
+            )
 
             ratio = meta_count / len(active)
-            if ratio > 0.5:
+            if ratio >= 0.5:
                 return {
                     "name": "Meta-Goal-Ratio",
                     "passed": False,

@@ -27,6 +27,21 @@ def normalize_name_words(name: str) -> set[str]:
     return {w for w in re.split(r"[\s\-_:.()\/]+", name.lower()) if len(w) >= 2} - STOP_WORDS
 
 
+# Keywords die auf Meta-Reflexion statt echte Arbeit hindeuten.
+# Zentral definiert — wird von dream.py, goal_stack.py, self_diagnosis.py importiert.
+META_GOAL_KEYWORDS = frozenset((
+    "finish_sequence", "konsisten", "fruehzeitig", "steps aufrufen",
+    "tracking-system", "alert-mechanis", "uebungssequenz", "skill erweit",
+    "self-diagnose", "speichermanagement", "reflexion", "routine",
+))
+
+
+def is_meta_goal(title: str) -> bool:
+    """Erkennt ob ein Goal-Titel Meta-Reflexion statt echte Arbeit beschreibt."""
+    tl = title.lower()
+    return any(kw in tl for kw in META_GOAL_KEYWORDS)
+
+
 # Root = Verzeichnis das run.py enthaelt
 ROOT_PATH = Path(__file__).parent.parent
 

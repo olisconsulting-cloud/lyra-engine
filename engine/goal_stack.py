@@ -14,7 +14,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-from .config import safe_json_read, safe_json_write, normalize_name_words
+from .config import safe_json_read, safe_json_write, normalize_name_words, is_meta_goal
 from .phi import PHI, phi_balance
 
 
@@ -60,6 +60,11 @@ class GoalStack:
     def _classify_domain(text: str) -> str:
         """Einfache Domaenen-Klassifikation fuer Telos-Scoring."""
         tl = text.lower()
+        # AGI-Infrastruktur: Engine-Code der Phi's Kern verbessert
+        if any(k in tl for k in ("enforcement", "meta-rule", "perception",
+                                  "pipeline", "dream", "evaluation", "metrik",
+                                  "messung", "fortschritt", "flywheel")):
+            return "architecture"
         if any(k in tl for k in ("api", "http", "endpoint", "request", "wrapper")):
             return "api_integration"
         if any(k in tl for k in ("test", "benchmark", "verifiz", "pruef")):
@@ -80,17 +85,10 @@ class GoalStack:
             return "tool_building"
         return "sonstiges"
 
-    # Keywords die auf Meta-Reflexion statt echte Arbeit hindeuten
-    _META_KEYWORDS = frozenset((
-        "finish_sequence", "konsisten", "fruehzeitig", "steps aufrufen",
-        "tracking-system", "alert-mechanis", "uebungssequenz", "skill erweit",
-        "self-diagnose", "speichermanagement", "reflexion", "routine",
-    ))
-
-    def _is_meta_goal(self, title: str) -> bool:
+    @staticmethod
+    def _is_meta_goal(title: str) -> bool:
         """Erkennt ob ein Goal Meta-Reflexion statt echte Arbeit ist."""
-        tl = title.lower()
-        return sum(1 for kw in self._META_KEYWORDS if kw in tl) >= 1
+        return is_meta_goal(title)
 
     def _telos_score(self, goal: dict) -> float:
         """Berechnet Telos-Score: Diversitaets-Bonus + Ring-Prioritaet.

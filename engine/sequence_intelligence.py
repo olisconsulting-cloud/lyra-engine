@@ -494,6 +494,11 @@ class SequenceIntelligence:
         """Loescht Checkpoint (neuer Fokus)."""
         self._checkpointer.clear()
 
+    @property
+    def meta_rules(self) -> "MetaRuleEngine":
+        """Oeffentlicher Zugang zu MetaRuleEngine fuer ToolMetaPatterns."""
+        return self._meta_rules
+
     def get_meta_injections(self) -> str:
         """Meta-Regeln fuer System-Prompt."""
         return self._meta_rules.get_prompt_injections()
