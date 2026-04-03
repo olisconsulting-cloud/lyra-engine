@@ -342,11 +342,26 @@ class LLMRouter:
             if oai_tools:
                 body["tools"] = oai_tools
 
-        # Retry mit Backoff (429 Rate-Limit + Timeout)
+        # Ein Versuch reicht — Circuit Breaker uebernimmt bei Failure
 
-        last_error = None
         resp = None
-        for attempt in range(2):
+        try:
+            resp = self.http_primary.post(
+                "https://integrate.api.nvidia.com/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {self.nvidia_key}",
+                    "Content-Type": "application/json",
+                },
+                json=body,
+            )
+        except (httpx.TimeoutException, httpx.ConnectError) as e:
+            logger.warning("NVIDIA Timeout: %s", e)
+            raise ValueError("NVIDIA API Timeout") from e
+
+        if resp.status_code == 429:
+            logger.warning("NVIDIA Rate-Limit 429")
+            # Ein Retry bei 429 (Rate-Limit ist oft kurzlebig)
+            time.sleep(2)
             try:
                 resp = self.http_primary.post(
                     "https://integrate.api.nvidia.com/v1/chat/completions",
@@ -357,22 +372,9 @@ class LLMRouter:
                     json=body,
                 )
             except (httpx.TimeoutException, httpx.ConnectError) as e:
-                last_error = e
-                logger.warning("NVIDIA Timeout (Versuch %d/2): %s", attempt + 1, e)
-                if attempt < 1:
-                    time.sleep(1)
-                    continue
-                raise ValueError(f"NVIDIA API Timeout nach 2 Versuchen") from e
-
+                raise ValueError("NVIDIA API Timeout nach 429-Retry") from e
             if resp.status_code == 429:
-                logger.warning("NVIDIA Rate-Limit 429 (Versuch %d/2)", attempt + 1)
-                if attempt < 1:
-                    time.sleep(1)
-                    continue
-            break
-
-        if resp is None:
-            raise ValueError("NVIDIA API: Kein Response erhalten")
+                raise ValueError("NVIDIA API Rate-Limit 429 nach Retry")
         if resp.status_code != 200:
             raise ValueError(f"NVIDIA API Fehler {resp.status_code}: {resp.text[:200]}")
 

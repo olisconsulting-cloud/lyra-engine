@@ -2026,8 +2026,9 @@ SEQUENZ-PLANUNG: Nutze write_sequence_plan am Anfang — plane dein Ziel, Exit-K
                 "LLM-Fehler %s (Versuch %d): %s", provider, failures, primary_error
             )
 
-            # Circuit Breaker: Ab 2 Failures → Cooldown fuer 5 Sequenzen
-            if failures >= 2:
+            # Circuit Breaker: Sofort nach 1 Failure → Cooldown fuer 5 Sequenzen
+            # (NVIDIA hat intern schon 2 Retries, ein _call_llm-Failure = Provider tot)
+            if failures >= 1:
                 self._provider_cooldown[provider] = self.sequences_total + 5
                 logger.warning(
                     "Circuit Breaker AKTIV: %s gesperrt fuer 5 Sequenzen → Fallback-Kette",
