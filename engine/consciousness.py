@@ -1574,8 +1574,10 @@ SEQUENZ-PLANUNG: Nutze write_sequence_plan am Anfang — plane dein Ziel, Exit-K
                 if path.endswith(".md") and len(content) > 200:
                     issues = self._check_markdown_quality(content)
                     if issues:
-                        # Datei trotzdem schreiben, aber Warnung zurueckgeben
                         result = self.actions.write_file(path, content, force=force)
+                        # Quality-Warnung nur anhaengen wenn Datei tatsaechlich geschrieben wurde
+                        if result.startswith("FEHLER") or result.startswith("WARNUNG"):
+                            return result
                         return f"{result}\nQUALITAETS-WARNUNG: {'; '.join(issues)}"
                 return self.actions.write_file(path, content, force=force)
 

@@ -558,6 +558,7 @@ if __name__ == "__main__":
             return
         progress_path = self.projects_path / project_name / "PROGRESS.md"
         if not progress_path.exists():
+            logger.debug("PROGRESS.md fehlt in %s — kein Progress-Update", project_name)
             return
 
         try:
@@ -565,11 +566,16 @@ if __name__ == "__main__":
             line = f"- [{now}] {entry}\n"
 
             content = progress_path.read_text(encoding="utf-8")
-            marker = f"### {section}\n"
-            if marker in content:
-                idx = content.index(marker) + len(marker)
+            # Whitespace-tolerant: "### Test-Ergebnisse  \n" soll auch matchen
+            marker_idx = -1
+            marker_search = f"### {section}"
+            for i, content_line in enumerate(content.split("\n")):
+                if content_line.rstrip() == marker_search:
+                    marker_idx = content.index(content_line) + len(content_line) + 1  # +1 fuer \n
+                    break
+            if marker_idx >= 0:
                 # Platzhalter-Text entfernen wenn vorhanden
-                rest = content[idx:]
+                rest = content[marker_idx:]
                 for placeholder in (
                     "(Wird automatisch aktualisiert wenn Tests laufen)\n",
                     "(Hier dokumentieren was unklar ist)\n",
@@ -577,7 +583,7 @@ if __name__ == "__main__":
                 ):
                     if rest.startswith(placeholder):
                         rest = rest[len(placeholder):]
-                content = content[:idx] + line + rest
+                content = content[:marker_idx] + line + rest
             else:
                 content += f"\n{line}"
 
