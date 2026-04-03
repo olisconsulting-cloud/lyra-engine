@@ -87,12 +87,25 @@ python review_phi.py         # Regressions-Gate (14 Checks)
 - Offene Backlog-Items: `.audit/BACKLOG.md`
 
 ## Offene AGI-Luecken
+> Tiefenanalyse: `.planning/META.md` (Flywheel-Luecken L1-L4)
+
 - **Evaluations-Framework**: Kein systematischer Weg, Fortschritt zu messen
 - **Alignment-Layer**: Anti-Loop ist Symptom, kein Werte-Gate VOR Goal-Ausfuehrung
 - **ARC-Benchmark**: Chollet-Test fuer Transferlernen — DER AGI-Massstab
 - **Consensus-Voting**: Bei kritischen Entscheidungen Multi-LLM-Vote
 
+## Aktive Projekte
+
+> Bei jeder Session pruefen: Gibt es offene Aufgaben in diesen Projekten?
+> Entry-Point lesen, BACKLOG.md pruefen, weitermachen wo aufgehoert wurde.
+
+- **Unified Memory** — `evolution/unified-memory/CLAUDE.md`
+  Phis 5 Lern-Systeme vereinen. Phase 1 aktiv (Baselines + Quick Wins).
+  Naechste Aktion: baseline_metrics.json auswerten, dann UM-Q2 + UM-Q3.
+
 ## Referenzen
+
+- `.planning/META.md` — Meta-Prozess-Manifest (Warum + Wie messen)
 - `.audit/BACKLOG.md` — Priorisierte Arbeitsliste
 - `.audit/FINDINGS.md` — Bug/Issue-Tracking mit Status
 - `.audit/DECISIONS.md` — Architecture Decision Records
