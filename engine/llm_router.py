@@ -49,14 +49,14 @@ MODELS = {
         "model_id": "claude-sonnet-4-6",
         "input_cost": 3.00,
         "output_cost": 15.00,
-        "use_for": "Schnelle Zusammenfassungen, Graceful-Finish, leichte Analyse",
+        "use_for": "Code-Review — praezises Diff-Verstaendnis, nativer Tool-Use",
     },
     "deepseek_v3": {
         "provider": "deepseek",
         "model_id": "deepseek-chat",
         "input_cost": 0.28,
         "output_cost": 0.42,
-        "use_for": "Dream, Tool-Foundry, Fallback",
+        "use_for": "Tool-Foundry, Fallback",
     },
     "gemini_flash": {
         "provider": "google",
@@ -94,9 +94,11 @@ class LLMRouter:
     """
     Routet Anfragen an das optimale Modell.
 
-    Anthropic: Tool-Use ueber native API
-    Google: Tool-Use ueber REST API
-    DeepSeek: OpenAI-kompatible REST API
+    Anthropic: Tool-Use ueber native API (Sonnet, Opus)
+    OpenAI: REST API (GPT-4.1-mini)
+    NVIDIA: OpenAI-kompatible REST API (Kimi K2.5)
+    Google: Tool-Use ueber REST API (Gemini Flash)
+    DeepSeek: OpenAI-kompatible REST API (Fallback)
     """
 
     def __init__(self):
@@ -337,6 +339,45 @@ class LLMRouter:
             raise ValueError("NVIDIA API: Kein Response erhalten")
         if resp.status_code != 200:
             raise ValueError(f"NVIDIA API Fehler {resp.status_code}: {resp.text[:200]}")
+
+        data = resp.json()
+        return self._openai_to_anthropic_response(data, model_key)
+
+    # === OpenAI (GPT-4.1 / GPT-4.1-mini) ===
+
+    def call_openai(
+        self, model_key: str, system: str, messages: list,
+        tools: Optional[list] = None, max_tokens: int = 16000,
+    ) -> dict:
+        """Ruft OpenAI API auf — GPT-4.1-mini fuer Dream/Goal-Planning."""
+        if not self.openai_key:
+            raise ValueError("OPENAI_API_KEY nicht konfiguriert")
+
+        model_id = MODELS[model_key]["model_id"]
+        oai_messages = self._anthropic_to_openai_messages(system, messages)
+
+        body = {
+            "model": model_id,
+            "messages": oai_messages,
+            "max_tokens": max_tokens,
+        }
+
+        if tools:
+            oai_tools = self._anthropic_to_openai_tools(tools)
+            if oai_tools:
+                body["tools"] = oai_tools
+
+        resp = self.http.post(
+            "https://api.openai.com/v1/chat/completions",
+            headers={
+                "Authorization": f"Bearer {self.openai_key}",
+                "Content-Type": "application/json",
+            },
+            json=body,
+        )
+
+        if resp.status_code != 200:
+            raise ValueError(f"OpenAI API Fehler {resp.status_code}: {resp.text[:200]}")
 
         data = resp.json()
         return self._openai_to_anthropic_response(data, model_key)

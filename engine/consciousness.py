@@ -601,7 +601,7 @@ class ConsciousnessEngine:
         self.skills = SkillTracker(config.DATA_PATH)
         self.strategies = StrategyEvolution(config.DATA_PATH)
         self.efficiency = EfficiencyTracker(config.DATA_PATH)
-        self.dream = DreamEngine(config.DATA_PATH)
+        self.dream = DreamEngine(config.DATA_PATH, call_llm=self._call_llm)
         self.self_audit = SelfAudit(config.ROOT_PATH)
         self.code_review = DualReviewSystem(config.ROOT_PATH)
         self.rhythm = AdaptiveRhythm(config.DATA_PATH)
@@ -1970,6 +1970,8 @@ SEQUENZ-PLANUNG: Nutze write_sequence_plan am Anfang — plane dein Ziel, Exit-K
             return self.llm.call_deepseek(model_key, system, messages, tools, max_tokens)
         elif provider == "nvidia":
             return self.llm.call_nvidia(model_key, system, messages, tools, max_tokens)
+        elif provider == "openai":
+            return self.llm.call_openai(model_key, system, messages, tools, max_tokens)
         else:
             return self.llm.call_gemini(model_key, system, messages, tools, max_tokens)
 

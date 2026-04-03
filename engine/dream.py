@@ -14,13 +14,12 @@ Basiert auf dem oeffentlichen Claude Code Dream System-Prompt.
 
 import json
 import logging
-import os
+import re
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Callable
 
-import httpx
-
-from .llm_router import MODELS, TASK_MODEL_MAP
+from .llm_ops import _extract_response_text
 
 logger = logging.getLogger(__name__)
 
@@ -28,23 +27,11 @@ logger = logging.getLogger(__name__)
 class DreamEngine:
     """Konsolidiert Lyras Gedaechtnis im Hintergrund."""
 
-    def __init__(self, base_path: Path):
+    def __init__(self, base_path: Path, call_llm: Callable = None):
         self.base_path = base_path
         self.consciousness_path = base_path / "consciousness"
         self.dream_log_path = self.consciousness_path / "dream_log.json"
-        model_key = TASK_MODEL_MAP["dream"]
-        model_config = MODELS[model_key]
-        self.provider = model_config["provider"]
-        self.model = model_config["model_id"]
-        if self.provider == "nvidia":
-            self.api_key = os.getenv("NVIDIA_API_KEY", "").strip()
-            self.api_url = "https://integrate.api.nvidia.com/v1/chat/completions"
-        elif self.provider == "deepseek":
-            self.api_key = os.getenv("DEEPSEEK_API_KEY", "").strip()
-            self.api_url = "https://api.deepseek.com/chat/completions"
-        else:
-            self.api_key = os.getenv("ANTHROPIC_API_KEY", "").strip()
-            self.api_url = "anthropic"  # Marker fuer Anthropic-Client
+        self.call_llm = call_llm
 
     def should_dream(self, sequences_since_last: int) -> bool:
         """Prueft ob eine Konsolidierung faellig ist."""
@@ -87,42 +74,36 @@ Antworte als JSON:
 }"""
 
         try:
-            if self.api_url == "anthropic":
-                from anthropic import Anthropic
-                client = Anthropic()
-                response = client.messages.create(
-                    model=self.model, max_tokens=4000,
-                    system=system_prompt,
-                    messages=[{"role": "user", "content": context}],
-                )
-                result_text = response.content[0].text
-            else:
-                with httpx.Client(timeout=60.0) as client:
-                    resp = client.post(
-                        self.api_url,
-                        headers={"Authorization": f"Bearer {self.api_key}",
-                                 "Content-Type": "application/json"},
-                        json={"model": self.model, "max_tokens": 4000,
-                              "messages": [
-                                  {"role": "system", "content": system_prompt},
-                                  {"role": "user", "content": context},
-                              ]},
-                    )
-                if resp.status_code != 200:
-                    return f"Dream-Fehler: API {resp.status_code}"
-                result_text = resp.json()["choices"][0]["message"]["content"]
+            if not self.call_llm:
+                return "Dream-Fehler: call_llm nicht konfiguriert"
 
-            # JSON parsen
-            import re
-            # Versuche direktes Parsing oder extrahiere aus Code-Block
+            response = self.call_llm(
+                "dream", system_prompt,
+                [{"role": "user", "content": context}],
+                max_tokens=4000,
+            )
+            result_text = _extract_response_text(response)
+
+            if not result_text:
+                return "Dream-Fehler: Leere Antwort vom LLM"
+
+            # JSON parsen (mit Markdown-Fence-Bereinigung und Regex-Fallback)
+            cleaned = result_text.strip()
+            if cleaned.startswith("```"):
+                first_nl = cleaned.find("\n")
+                if first_nl > 0:
+                    cleaned = cleaned[first_nl + 1:]
+                if cleaned.rstrip().endswith("```"):
+                    cleaned = cleaned.rstrip()[:-3].rstrip()
+
             try:
-                result = json.loads(result_text)
+                result = json.loads(cleaned)
             except json.JSONDecodeError:
-                match = re.search(r"\{.*\}", result_text, re.DOTALL)
+                match = re.search(r"\{.*\}", cleaned, re.DOTALL)
                 if match:
                     result = json.loads(match.group(0))
                 else:
-                    return f"Dream fehlgeschlagen: Konnte Antwort nicht parsen"
+                    return "Dream fehlgeschlagen: Konnte Antwort nicht parsen"
 
             # === Ergebnisse anwenden ===
             applied = self._apply_results(result)
