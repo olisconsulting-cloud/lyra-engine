@@ -275,12 +275,15 @@ class ToolFoundry:
             Antwort-Text oder FEHLER-String bei Problemen.
         """
         if self.api_url == "anthropic":
-            from anthropic import Anthropic
-            response = Anthropic().messages.create(
-                model=FOUNDRY_MODEL, max_tokens=max_tokens,
-                messages=[{"role": "user", "content": prompt}],
-            )
-            return response.content[0].text.strip()
+            try:
+                from anthropic import Anthropic
+                response = Anthropic().messages.create(
+                    model=FOUNDRY_MODEL, max_tokens=max_tokens,
+                    messages=[{"role": "user", "content": prompt}],
+                )
+                return response.content[0].text.strip()
+            except Exception as e:
+                return f"FEHLER: Anthropic {e}"
         else:
             import httpx
             with httpx.Client(timeout=60.0) as client:
@@ -481,7 +484,7 @@ class SelfBenchmark:
             try:
                 with open(self.benchmark_path, "r", encoding="utf-8") as f:
                     return json.load(f)
-            except (json.JSONDecodeError, ValueError):
+            except (json.JSONDecodeError, ValueError, OSError):
                 return []
         return []
 
@@ -844,7 +847,7 @@ class MetaCognition:
             try:
                 with open(self.meta_path, "r", encoding="utf-8") as f:
                     return json.load(f)
-            except (json.JSONDecodeError, ValueError):
+            except (json.JSONDecodeError, ValueError, OSError):
                 return []
         return []
 

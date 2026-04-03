@@ -1896,12 +1896,20 @@ SEQUENZ-PLANUNG: Nutze write_sequence_plan am Anfang — plane dein Ziel, Exit-K
         model_key = self.llm.get_model_for_task(task)
         provider = MODELS.get(model_key, {}).get("provider", "google")
 
-        # Circuit Breaker: Provider im Cooldown? → direkt Fallback
+        # Circuit Breaker: Provider im Cooldown? → Fallback-Kette
         cooldown_until = self._provider_cooldown.get(provider, 0)
         if cooldown_until >= self.sequences_total:
             remaining = cooldown_until - self.sequences_total
-            logger.info("Circuit Breaker: %s im Cooldown (%d Seq uebrig) → DeepSeek", provider, remaining)
-            return self._call_provider("deepseek_v3", system, messages, tools, max_tokens)
+            logger.info("Circuit Breaker: %s im Cooldown (%d Seq uebrig) → Fallback", provider, remaining)
+            for fb_key in ("deepseek_v3", "gemini_flash"):
+                fb_prov = MODELS.get(fb_key, {}).get("provider", "")
+                if fb_prov == provider:
+                    continue
+                try:
+                    return self._call_provider(fb_key, system, messages, tools, max_tokens)
+                except Exception:
+                    continue
+            raise ValueError(f"Alle Fallbacks fehlgeschlagen (Circuit Breaker: {provider})")
 
         # Primaerer Call (nur API-Fehler abfangen — Programmierfehler sollen laut scheitern)
         try:
@@ -1925,21 +1933,30 @@ SEQUENZ-PLANUNG: Nutze write_sequence_plan am Anfang — plane dein Ziel, Exit-K
                     provider,
                 )
 
-            # Fallback auf DeepSeek (nur wenn primaerer Provider nicht schon DeepSeek ist)
-            if provider != "deepseek":
-                try:
-                    logger.info("Fallback: %s → DeepSeek V3", provider)
-                    print(f"  [Fallback: {provider} → DeepSeek V3]")
-                    return self._call_provider(
-                        "deepseek_v3", system, messages, tools, max_tokens
-                    )
-                except Exception as fallback_error:
-                    logger.error("Fallback DeepSeek auch fehlgeschlagen: %s", fallback_error)
-                    print(f"  [Fallback DeepSeek fehlgeschlagen: {fallback_error}]")
-                    raise fallback_error from primary_error
+            # Fallback-Kette: DeepSeek → Gemini Flash
+            fallback_chain = [
+                ("deepseek_v3", "DeepSeek V3"),
+                ("gemini_flash", "Gemini Flash"),
+            ]
 
-            # Wenn schon DeepSeek war, Original-Error weiterreichen
-            raise
+            for fb_key, fb_name in fallback_chain:
+                from .llm_router import MODELS
+                fb_provider = MODELS.get(fb_key, {}).get("provider", "")
+                if fb_provider == provider:
+                    continue  # Nicht auf sich selbst fallen
+                try:
+                    logger.info("Fallback: %s → %s", provider, fb_name)
+                    print(f"  [Fallback: {provider} → {fb_name}]")
+                    return self._call_provider(
+                        fb_key, system, messages, tools, max_tokens
+                    )
+                except Exception as fb_error:
+                    logger.warning("Fallback %s fehlgeschlagen: %s", fb_name, fb_error)
+                    print(f"  [Fallback {fb_name} fehlgeschlagen: {fb_error}]")
+                    continue  # Naechsten Fallback versuchen
+
+            # Alle Fallbacks gescheitert
+            raise primary_error
 
     def _call_provider(self, model_key: str, system: str, messages: list,
                        tools: Optional[list], max_tokens: int) -> dict:
@@ -1956,7 +1973,7 @@ SEQUENZ-PLANUNG: Nutze write_sequence_plan am Anfang — plane dein Ziel, Exit-K
         else:
             return self.llm.call_gemini(model_key, system, messages, tools, max_tokens)
 
-    def _sonnet_graceful_finish(self, messages: list, step_count: int) -> dict:
+    def _graceful_finish(self, messages: list, step_count: int) -> dict:
         """
         Sonnet 4.6 schreibt eine intelligente Sequenz-Summary bei Auto-Finish.
 
@@ -2043,7 +2060,7 @@ Antworte als JSON:
                 return result
 
         except Exception as e:
-            logger.warning("Sonnet Graceful-Finish fehlgeschlagen: %s — Fallback auf mechanisch", e)
+            logger.warning("Graceful-Finish fehlgeschlagen: %s — Fallback auf mechanisch", e)
 
         # Fallback: Mechanische Summary wenn Sonnet-Call scheitert
         auto_rating = min(7, max(2, self.seq_intel.metrics.files_written * 2 + self.seq_intel.metrics.tools_built * 3))
@@ -2401,6 +2418,22 @@ Antworte als JSON:
 
     def _run_sequence(self):
         """Fuehrt eine komplette Arbeitssequenz aus."""
+        # Hard-Stop: Bei 5+ unproduktiven Sequenzen kurze Pause erzwingen
+        spin_streak = self.silent_failure_detector._get_unproductive_streak()
+        if spin_streak >= 5:
+            wait_secs = min(spin_streak * 5, 30)  # 25s..30s, nicht laenger
+            logger.warning(
+                "SPIN-LOOP HARD-STOP: %d unproduktive Sequenzen → %ds Pause",
+                spin_streak, wait_secs,
+            )
+            print(
+                f"  ⛔ HARD-STOP: {spin_streak} unproduktive Sequenzen. "
+                f"Pause {wait_secs}s."
+            )
+            # Kurze Intervalle damit Telegram-Empfang nicht blockiert wird
+            for _ in range(wait_secs):
+                time.sleep(1)
+
         # Event: Sequenz startet
         self.event_bus.emit_simple(
             Events.SEQUENCE_STARTED, source="run_sequence",
@@ -2524,8 +2557,8 @@ Antworte als JSON:
 
             # Graceful Finish bei Token >= 95%
             if sp.should_graceful_finish:
-                print(f"  [Token-Limit 95% — Sonnet Graceful Finish]")
-                finish_data = self._sonnet_graceful_finish(messages, step_count)
+                print(f"  [Token-Limit 95% — Graceful Finish]")
+                finish_data = self._graceful_finish(messages, step_count)
                 self._handle_finish_sequence(finish_data)
                 finished = True
                 break
@@ -2546,7 +2579,7 @@ Antworte als JSON:
                 if estimated > MAX_INPUT_TOKENS_PER_SEQUENCE * 0.95:
                     print(f"  [Pre-Count: ~{estimated:,} Tokens — Graceful Finish]")
                     try:
-                        finish_data = self._sonnet_graceful_finish(messages, step_count)
+                        finish_data = self._graceful_finish(messages, step_count)
                         self._handle_finish_sequence(finish_data)
                     except Exception as e:
                         logger.warning("Pre-Count Graceful-Finish fehlgeschlagen: %s", e)
@@ -2753,8 +2786,8 @@ Antworte als JSON:
                 break
 
         if not finished and step_count >= step_budget:
-            print(f"\n  Max Steps ({step_budget}) erreicht — Sonnet Graceful Finish.")
-            finish_data = self._sonnet_graceful_finish(messages, step_count)
+            print(f"\n  Max Steps ({step_budget}) erreicht — Graceful Finish.")
+            finish_data = self._graceful_finish(messages, step_count)
             self._handle_finish_sequence(finish_data)
             m = self.seq_intel.metrics
             status = "FAILED" if m.errors > 3 and m.files_written == 0 else "PAUSED"
