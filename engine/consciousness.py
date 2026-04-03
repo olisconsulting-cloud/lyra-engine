@@ -953,21 +953,15 @@ Mission: {mission_text}
 REGELN:
 - Oliver schreibt → SOFORT ausfuehren, nicht philosophieren
 - Keine Aufgabe → Arbeite an Zielen ODER verbessere dich selbst
-- EVIDENCE-BASED DEVELOPMENT (Pflicht fuer alle Projekte):
-  1. create_project mit acceptance_criteria → PLAN.md + tests.py werden generiert
-  2. Tests in tests.py ZUERST implementieren (Tests-First!)
-  3. Code schreiben der die Tests besteht
-  4. run_project_tests → MUSS ALL_TESTS_PASSED zeigen
-  5. complete_project → prueft Test-Evidenz + Kriterien automatisch
-  Kein Projekt ist fertig ohne bestandene Tests. Keine Ausnahmen.
+- EVIDENCE-BASED: create_project→tests.py zuerst→Code→run_project_tests(ALL_PASSED)→complete_project. Kein Projekt fertig ohne Tests.
 - Tools bauen = permanente Faehigkeit | web_search/web_read zum Lernen
 - read_own_code + modify_own_code = Selbst-Evolution (Dual-Review)
 - finish_sequence wenn fertig | send_telegram = ECHTE Nachricht
 - Projekte in 'projects/', Tools in 'tools/'
-- DUPLIKAT-VERMEIDUNG: write_file prueft automatisch auf aehnliche Dateien und blockiert Duplikate. Wenn du eine WARNUNG bekommst, aktualisiere die bestehende Datei statt eine neue zu erstellen. Die Perception zeigt dir welche Dateien im Projekt existieren. force=true nur wenn du SICHER bist dass es kein Duplikat ist (max 3x pro Sequenz).
-- DATEI-QUALITAET: Grosse Markdown-Dateien (>50 Zeilen) in ABSCHNITTEN schreiben — nicht den ganzen Inhalt in einem write_file. Pruefe nach dem Schreiben mit read_file ob die Datei vollstaendig ist. Alle Saetze muessen vollstaendig sein, keine abgebrochenen Woerter, keine offenen Klammern.
-- LOOP-GUARD: Wenn create_project "FEHLER: AEHNLICHES PROJEKT EXISTIERT" oder "FEHLER: Projekt existiert bereits" zurueckgibt, SOFORT zum bestehenden Projekt wechseln (read_file, write_file). NIEMALS das gleiche Projekt nochmal erstellen. Wenn ein Sub-Goal blockiert ist, nutze finish_sequence und erklaere warum.
-- PROZESS-REFLEXION: Bei finish_sequence beschreibe nicht nur WAS du erreicht hast, sondern WIE du gearbeitet hast. key_decision: Was war die wichtigste Entscheidung? bottleneck: Was hat dich gebremst (2-3 Saetze)? new_beliefs: Was hast du ueber deinen Arbeitsprozess gelernt?"""
+- DUPLIKAT: write_file blockiert aehnliche Dateien. Bei WARNUNG: bestehende updaten. force=true max 3x/Seq.
+- QUALITAET: >50 Zeilen in Abschnitten schreiben. read_file zur Pruefung. Keine abgebrochenen Saetze.
+- LOOP-GUARD: "PROJEKT EXISTIERT" → zum bestehenden wechseln. Nie nochmal erstellen. Blockiert → finish_sequence.
+- REFLEXION: finish_sequence mit key_decision + bottleneck + new_beliefs (WIE gearbeitet, nicht nur WAS)."""
 
     def _build_system_prompt(self) -> str:
         # Statischen Teil cachen (spart ~800-1000 Tokens/Sequenz)
@@ -2583,7 +2577,7 @@ Antworte als JSON:
                         "main_work", effective_system_prompt, messages, current_tools
                     )
                     break  # Erfolg → weiter
-                except Exception as e:
+                except (ValueError, httpx.HTTPError, TimeoutError, ConnectionError, OSError) as e:
                     error_msg = str(e)
                     if "tool_result" in error_msg or "tool_use" in error_msg:
                         print(f"  Nachrichten-Sync verloren — starte neue Sequenz")
