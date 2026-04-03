@@ -2568,6 +2568,20 @@ Antworte als JSON:
                 finished = True
                 break
 
+            # Error-Budget: Ab Step 8 pruefen ob Fehlerrate zu hoch ist.
+            # >= 5 Errors UND > 25% Fehlerrate → Sequenz graceful beenden.
+            # Verhindert dass Phi 40 Steps mit kaputten APIs durchrennt.
+            seq_errors = self.seq_intel.metrics.errors
+            if step >= 8 and seq_errors >= 5 and seq_errors / (step + 1) > 0.25:
+                self.narrator.error_budget(step, seq_errors)
+                try:
+                    finish_data = self._graceful_finish(messages, step_count)
+                    self._handle_finish_sequence(finish_data)
+                except Exception as e:
+                    logger.warning("Error-Budget Graceful-Finish fehlgeschlagen: %s", e)
+                finished = True
+                break
+
             # Step-Prompt zusammenbauen: cached (statisch) + step-spezifisch (dynamisch)
             effective_system_prompt = cached_system_prompt + "".join(sp.prompt_parts)
 

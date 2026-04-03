@@ -153,6 +153,11 @@ class Narrator:
         print(f"\n  {YELLOW}Budget erschoepft ({budget} Steps) — {status}.{RESET}")
         print(f"  {DIM}{errors} Fehler, {files} Dateien{RESET}")
 
+    def error_budget(self, step: int, errors: int):
+        """Error-Budget erschoepft — zu viele Fehler pro Step."""
+        rate = errors / (step + 1) * 100
+        print(f"\n  {YELLOW}Error-Budget: {errors} Fehler in {step + 1} Steps ({rate:.0f}%) — schliesse ab.{RESET}")
+
     def emergency(self, msg: str):
         """Emergency-Finish bei API-Ausfall o.ae."""
         print(f"  {RED}⚠ {msg} — Emergency-Save{RESET}")

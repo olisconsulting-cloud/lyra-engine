@@ -154,22 +154,72 @@ class SemanticMemory:
 
     @staticmethod
     def classify_goal_type(focus: str) -> str:
-        """Leitet den Goal-Typ aus dem Fokus-String ab."""
-        focus_lower = focus.lower()
-        if any(w in focus_lower for w in ("recherche", "markt", "analyse", "research")):
-            return "recherche"
-        if any(w in focus_lower for w in ("tool", "bauen", "build", "create_tool", "generate")):
-            return "tool_building"
-        if any(w in focus_lower for w in ("bug", "fix", "fehler", "repair", "broken")):
-            return "bug_fix"
-        if any(w in focus_lower for w in ("audit", "analyse", "review", "check", "prüf")):
-            return "analyse"
-        if any(w in focus_lower for w in ("selbst", "self", "optimier", "improv", "evolution")):
-            return "self_improvement"
-        if any(w in focus_lower for w in ("doku", "readme", "docs", "beschreib")):
-            return "documentation"
-        if any(w in focus_lower for w in ("test", "benchmark", "verif")):
+        """Leitet den Goal-Typ aus dem Fokus-String ab.
+
+        Substring-Matching mit Anti-Pattern-Guards gegen Fehlmatches
+        (z.B. 'fehler' in 'Fehlerbehandlung' != bug_fix).
+        Reihenfolge = Prioritaet: spezifischere Typen zuerst.
+        """
+        fl = focus.lower()
+
+        # --- Spezifisch zuerst ---
+
+        # Testing: test/testen/benchmark, aber nicht 'protest' o.ae.
+        if any(k in fl for k in ("test", "testen", "benchmark", "verifiz")):
             return "testing"
+
+        # Bug-Fix: bug/fix/crash, ABER 'fehler' nur wenn NICHT 'fehlerbehandlung'
+        if any(k in fl for k in ("bugfix", "hotfix", "crash", "kaputt")):
+            return "bug_fix"
+        if any(k in fl for k in ("bug ", " fix", "fehler beheben", "reparier")):
+            return "bug_fix"
+        if "fehler" in fl and "fehlerbehandlung" not in fl and "fehlermeldung" not in fl:
+            return "bug_fix"
+
+        # Recherche / Research
+        if any(k in fl for k in ("recherch", "research", "marktforsch", "marktanaly")):
+            return "recherche"
+
+        # Tool-Building: nur wenn 'tool' im Kontext von Bauen steht
+        if any(k in fl for k in ("create_tool", "tool_build", "werkzeug")):
+            return "tool_building"
+        if "tool" in fl and any(k in fl for k in ("bau", "erstell", "build", "generat")):
+            return "tool_building"
+
+        # API-Integration
+        if any(k in fl for k in ("api-", "api ", "endpoint", "http", "request")):
+            return "api_integration"
+        if "api" in fl and any(k in fl for k in ("integr", "client", "wrapper", "explorer")):
+            return "api_integration"
+
+        # Analyse / Audit
+        if any(k in fl for k in ("audit", "review", "inspect", "analys", "pruef")):
+            return "analyse"
+        if any(k in fl for k in ("durchspiel", "preismodell", "strategi", "vergleich")):
+            return "analyse"
+
+        # Self-Improvement
+        if any(k in fl for k in ("selbst", "self-", "evolution")):
+            return "self_improvement"
+        if any(k in fl for k in ("optimier", "improv", "verbesser")):
+            return "self_improvement"
+
+        # Report / HTML / Dashboard
+        if any(k in fl for k in ("html", "report", "bericht", "dashboard")):
+            return "report_building"
+
+        # Dokumentation
+        if any(k in fl for k in ("doku", "readme", "docs", "beschreib", "dokumenta")):
+            return "documentation"
+
+        # Projekt-Arbeit (breiteste Kategorie vor sonstiges)
+        if any(k in fl for k in ("projekt", "project", "implementier", "entwickl")):
+            return "project_work"
+        if any(k in fl for k in ("erstell", "aufbau", "erweit", "integr")):
+            return "project_work"
+        if any(k in fl for k in ("plan", "startplan", "vorbereitung")):
+            return "project_work"
+
         return "sonstiges"
 
     def store(self, content: str, metadata: Optional[dict] = None) -> str:
