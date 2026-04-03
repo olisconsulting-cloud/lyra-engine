@@ -71,6 +71,8 @@ Du bekommst den aktuellen Stand aller Memory-Dateien. Deine Aufgabe:
 3. STRATEGIEN: Welche Regeln sind noch relevant? Welche koennen geloescht werden?
 4. SKILLS: Stimmen die Levels? Gibt es Meta-Skills die fehlen?
 5. ZUSAMMENFASSUNG: Was hat Lyra in letzter Zeit gelernt? Ein Absatz.
+6. PROZESS-ANALYSE: Analysiere die Metacognition-Eintraege. Welche Engpaesse wiederholen sich? Welche Sequenzen hatten hohe Effizienz (viel Output pro Step) und was war anders? Welche Arbeitsgewohnheiten sind gut, welche schlecht?
+7. META-SKILLS: Wie arbeitet Lyra? Beschreibe den Arbeitsstil — plant sie gut? Fuehrt sie effizient aus? Springt sie zwischen Aufgaben? Nutzt sie finish_sequence rechtzeitig?
 
 Antworte als JSON:
 {
@@ -79,7 +81,9 @@ Antworte als JSON:
   "strategy_updates": [{"rule": "...", "action": "keep|delete|update", "reason": "..."}],
   "skill_notes": "Freitext-Analyse der Skills",
   "memory_summary": "Was Lyra in letzter Zeit gelernt hat — 2-3 Saetze",
-  "recommendations": ["Konkrete Vorschlaege fuer Verbesserungen"]
+  "recommendations": ["Konkrete Vorschlaege fuer Verbesserungen"],
+  "process_insights": "Was Lyra ueber ihren ARBEITSSTIL gelernt hat — nicht Aufgaben, sondern WIE sie arbeitet",
+  "efficiency_patterns": ["Konkrete Beobachtungen ueber Produktivitaet und Effizienz"]
 }"""
 
         try:

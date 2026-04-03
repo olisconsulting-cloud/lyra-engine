@@ -843,28 +843,90 @@ class MetaCognition:
         with open(self.meta_path, "w", encoding="utf-8") as f:
             json.dump(self.entries[-30:], f, indent=2, ensure_ascii=False)
 
-    def record(self, bottleneck: str, strategy_change: str, sequence: int):
-        """Speichert eine Mini-Reflexion."""
+    def record(self, bottleneck: str, strategy_change: str, sequence: int,
+               wasted_steps: int = 0, productive_steps: int = 0,
+               key_decision: str = ""):
+        """Speichert eine erweiterte Reflexion mit Prozess-Metriken."""
         if not bottleneck and not strategy_change:
             return
 
-        self.entries.append({
+        entry = {
             "sequence": sequence,
             "timestamp": datetime.now(timezone.utc).isoformat(),
-            "bottleneck": bottleneck[:200],
-            "strategy_change": strategy_change[:200],
-        })
+            "bottleneck": bottleneck[:500],
+            "strategy_change": strategy_change[:500],
+        }
+        if wasted_steps or productive_steps:
+            entry["wasted_steps"] = wasted_steps
+            entry["productive_steps"] = productive_steps
+        if key_decision:
+            entry["key_decision"] = key_decision[:300]
+        self.entries.append(entry)
         self._save()
 
+    def analyze_patterns(self) -> list[str]:
+        """Erkennt wiederkehrende Muster in den letzten Reflexionen."""
+        if len(self.entries) < 5:
+            return []
+
+        alerts = []
+        recent = self.entries[-10:]
+
+        # 1. Wiederkehrende Engpaesse (Wort-Overlap > 50%)
+        bottlenecks = [e.get("bottleneck", "").lower() for e in recent if e.get("bottleneck")]
+        seen_cluster = set()
+        for i, b in enumerate(bottlenecks):
+            b_words = set(b.split())
+            if not b_words or id(b) in seen_cluster:
+                continue
+            similar = sum(
+                1 for other in bottlenecks
+                if other != b and len(b_words & set(other.split())) / max(len(b_words), 1) > 0.5
+            )
+            if similar >= 2:
+                alerts.append(f"Engpass {similar + 1}x aehnlich: {bottlenecks[i][:100]}")
+                break
+
+        # 2. Max-Steps ohne finish_sequence
+        max_steps_count = sum(
+            1 for e in recent
+            if "Max Steps" in e.get("bottleneck", "") or "Auto-beendet" in e.get("key_decision", "")
+        )
+        if max_steps_count >= 3:
+            alerts.append(f"{max_steps_count}/10 Sequenzen ohne finish_sequence beendet")
+
+        # 3. Effizienz-Trend (wenn Daten vorhanden)
+        efficiencies = [
+            e["productive_steps"] / max(e["productive_steps"] + e["wasted_steps"], 1)
+            for e in recent
+            if "productive_steps" in e and "wasted_steps" in e
+        ]
+        if len(efficiencies) >= 3:
+            avg = sum(efficiencies) / len(efficiencies)
+            if avg < 0.3:
+                alerts.append(f"Effizienz nur {avg:.0%} — ueber 70% der Steps unproduktiv")
+
+        return alerts[:3]
+
     def get_recent_insights(self, n: int = 3) -> str:
-        """Letzte Erkenntnisse fuer den System-Prompt."""
+        """Letzte Erkenntnisse + Muster-Analyse fuer den System-Prompt."""
         if not self.entries:
             return ""
         recent = self.entries[-n:]
         lines = ["SELBST-ERKENNTNISSE (vermeide diese Engpaesse):"]
         for e in recent:
             if e.get("bottleneck"):
-                lines.append(f"  Engpass: {e['bottleneck']}")
+                lines.append(f"  Engpass: {e['bottleneck'][:150]}")
             if e.get("strategy_change"):
-                lines.append(f"  Strategie: {e['strategy_change']}")
+                lines.append(f"  Strategie: {e['strategy_change'][:150]}")
+            if e.get("key_decision"):
+                lines.append(f"  Entscheidung: {e['key_decision'][:100]}")
+
+        # Muster-Analyse anfuegen
+        alerts = self.analyze_patterns()
+        if alerts:
+            lines.append("MUSTER-ANALYSE:")
+            for a in alerts:
+                lines.append(f"  ! {a[:150]}")
+
         return "\n".join(lines)

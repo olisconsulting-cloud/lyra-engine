@@ -20,7 +20,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from . import config
-from .config import safe_json_write, safe_json_read
+from .config import safe_json_write, safe_json_read, normalize_name_words
 from .security import SecurityGateway
 
 logger = logging.getLogger(__name__)
@@ -130,7 +130,9 @@ class ActionEngine:
 
         try:
             content = target.read_text(encoding="utf-8")
-            return content[:5000]  # Max 5000 Zeichen
+            if len(content) > 5000:
+                return content[:5000] + f"\n\n[... GEKUERZT: {len(content)} Zeichen total, nur erste 5000 angezeigt]"
+            return content
         except Exception as e:
             return f"FEHLER beim Lesen: {e}"
 
@@ -247,10 +249,7 @@ class ActionEngine:
 
     def _normalize_project_name(self, name: str) -> set[str]:
         """Extrahiert normalisierte Woerter aus einem Projektnamen."""
-        stop = {"und", "oder", "fuer", "mit", "der", "die", "das", "ein", "eine",
-                "zu", "von", "in", "auf", "an", "bei", "nach", "aus", "um",
-                "ueber", "unter", "durch", "gegen", "ohne", "seit"}
-        return {w for w in re.split(r"[\s\-_:.()]+", name.lower()) if len(w) >= 2} - stop
+        return normalize_name_words(name)
 
     def _find_similar_project(self, name: str) -> Optional[str]:
         """Findet ein aehnliches Projekt nach Wort-Overlap und sortiertem Namen."""
@@ -328,7 +327,10 @@ class ActionEngine:
                 f"Pfad: projects/{similar}/"
             )
 
-        project_path.mkdir(parents=True)
+        try:
+            project_path.mkdir(parents=True)
+        except OSError as e:
+            return f"FEHLER: Projekt-Verzeichnis konnte nicht erstellt werden: {e}"
         now = datetime.now().strftime("%Y-%m-%d %H:%M")
 
         # README

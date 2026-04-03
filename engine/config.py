@@ -9,9 +9,23 @@ Eine neue Instanz braucht nur ein leeres data/ Verzeichnis.
 """
 
 import json
+import re
 import tempfile
 import threading
 from pathlib import Path
+
+# Stoppwoerter fuer Namens-Normalisierung (Projekte, Goals, Spin-Keys)
+STOP_WORDS = frozenset({
+    "und", "oder", "fuer", "mit", "der", "die", "das", "ein", "eine",
+    "zu", "von", "in", "auf", "an", "bei", "nach", "aus", "um",
+    "ueber", "unter", "durch", "gegen", "ohne", "seit",
+})
+
+
+def normalize_name_words(name: str) -> set[str]:
+    """Extrahiert normalisierte Inhaltswoerter aus einem Namen (Projekt, Goal, etc.)."""
+    return {w for w in re.split(r"[\s\-_:.()\/]+", name.lower()) if len(w) >= 2} - STOP_WORDS
+
 
 # Root = Verzeichnis das run.py enthaelt
 ROOT_PATH = Path(__file__).parent.parent

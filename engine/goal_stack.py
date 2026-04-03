@@ -8,13 +8,12 @@ Echte Zielstruktur die ueber Zyklen hinweg arbeitet:
 - Abhaengigkeiten zwischen Goals werden beachtet
 """
 
-import re
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-from .config import safe_json_read, safe_json_write
+from .config import safe_json_read, safe_json_write, normalize_name_words
 
 
 class GoalStack:
@@ -29,7 +28,10 @@ class GoalStack:
         return safe_json_read(self.goals_path, default=default)
 
     def _save(self):
-        safe_json_write(self.goals_path, self.goals)
+        try:
+            safe_json_write(self.goals_path, self.goals)
+        except (OSError, TypeError, ValueError) as e:
+            print(f"  [WARNUNG] Goals nicht gespeichert: {e}")
 
     # === Ziel erstellen ===
 
@@ -40,20 +42,13 @@ class GoalStack:
         Returns:
             (index, goal) Tuple oder None
         """
-        # Stoppwoerter die keine Semantik tragen
-        stop = {"und", "oder", "fuer", "mit", "der", "die", "das", "ein", "eine",
-                "zu", "von", "in", "auf", "an", "bei", "nach", "aus", "um",
-                "ueber", "unter", "durch", "gegen", "ohne", "seit"}
-        # Bindestriche und Doppelpunkte auch als Trenner behandeln
-        tokens = re.split(r"[\s\-:.()/]+", title.lower())
-        new_words = {w for w in tokens if len(w) >= 2} - stop
+        new_words = normalize_name_words(title)
 
         if not new_words:
             return None
 
         for i, goal in enumerate(self.goals.get("active", [])):
-            ex_tokens = re.split(r"[\s\-:.()/]+", goal["title"].lower())
-            existing_words = {w for w in ex_tokens if len(w) >= 2} - stop
+            existing_words = normalize_name_words(goal["title"])
             if not existing_words:
                 continue
             # Jaccard-Aehnlichkeit: wie viel Overlap haben die Woerter?
@@ -184,12 +179,14 @@ class GoalStack:
             "result": result[:200],
         })
 
+        # Zuerst speichern — Sub-Goal Status muss persistent sein
+        self._save()
+
         # Pruefen ob alle Sub-Goals done → Hauptziel abschliessen
         all_done = all(sg["status"] == "done" for sg in sgs)
         if all_done and sgs:
             return self.complete_goal(goal_index)
 
-        self._save()
         return f"Sub-Goal erledigt: {sgs[subgoal_index]['title']}"
 
     # === Hauptziel abschliessen ===

@@ -47,24 +47,13 @@ MAX_STEPS_PER_SEQUENCE = 40          # Von Oliver auf 40 erhoeht (vorher 15)
 MAX_INPUT_TOKENS_PER_SEQUENCE = 400_000  # Von Oliver auf 400k erhoeht (vorher 250k)
 MAX_TOKENS = 16000                    # Max Output-Tokens pro LLM-Call
 
-# Stoppwoerter fuer Spin-Key-Normalisierung (identisch mit actions.py/goal_stack.py)
-_STOP_WORDS = frozenset({
-    "und", "oder", "fuer", "mit", "der", "die", "das", "ein", "eine",
-    "zu", "von", "in", "auf", "an", "bei", "nach", "aus", "um",
-    "ueber", "unter", "durch", "gegen", "ohne", "seit",
-})
-
-
 def _normalize_spin_key(tool_name: str, raw_name: str) -> str:
     """Erzeugt einen normalisierten Spin-Key aus sortierten Inhaltswörtern.
 
     'ki-server-90-tage-startplan' und 'ki-server-startplan-90-tage'
     erzeugen denselben Key: 'create_project:90|ki|server|startplan|tage'
     """
-    words = sorted(
-        w for w in re.split(r"[\s\-_:.()]+", raw_name.lower())
-        if len(w) >= 2 and w not in _STOP_WORDS
-    )
+    words = sorted(config.normalize_name_words(raw_name))
     return f"{tool_name}:{('|'.join(words)) if words else raw_name[:50]}"
 
 
@@ -413,18 +402,22 @@ TOOLS = [
                 "new_beliefs": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "Neue Erkenntnisse",
+                    "description": "Was hast du UEBER DEINEN ARBEITSPROZESS gelernt? Mindestens 1 Erkenntnis.",
                 },
                 "bottleneck": {
                     "type": "string",
-                    "description": "Was hat dich in dieser Sequenz gebremst? (1 Satz)",
+                    "description": "Was hat dich gebremst? Beschreibe den Engpass konkret (2-3 Saetze).",
                 },
                 "next_time_differently": {
                     "type": "string",
-                    "description": "Was machst du naechstes Mal anders? (1 Satz)",
+                    "description": "Was machst du naechstes Mal anders? Konkrete Strategie (2-3 Saetze).",
+                },
+                "key_decision": {
+                    "type": "string",
+                    "description": "Die wichtigste Entscheidung dieser Sequenz — was hast du entschieden und warum?",
                 },
             },
-            "required": ["summary", "performance_rating", "bottleneck", "next_time_differently"],
+            "required": ["summary", "performance_rating", "bottleneck", "next_time_differently", "key_decision"],
         },
     },
 ]
@@ -788,7 +781,8 @@ REGELN:
 - Projekte in 'projects/', Tools in 'tools/'
 - SEQUENZ-PLANUNG: Du hast max {MAX_STEPS_PER_SEQUENCE} Steps. Plane am Anfang was du schaffen willst. Wenn du ein sinnvolles Ergebnis hast, nutze finish_sequence — auch nach 5 Steps. Schreibe in die Summary WAS du herausgefunden hast (Erkenntnisse, Zahlen, Fakten). Qualitaet > Quantitaet.
 - DATEI-QUALITAET: Grosse Markdown-Dateien (>50 Zeilen) in ABSCHNITTEN schreiben — nicht den ganzen Inhalt in einem write_file. Pruefe nach dem Schreiben mit read_file ob die Datei vollstaendig ist. Alle Saetze muessen vollstaendig sein, keine abgebrochenen Woerter, keine offenen Klammern.
-- LOOP-GUARD: Wenn create_project "FEHLER: AEHNLICHES PROJEKT EXISTIERT" oder "FEHLER: Projekt existiert bereits" zurueckgibt, SOFORT zum bestehenden Projekt wechseln (read_file, write_file). NIEMALS das gleiche Projekt nochmal erstellen. Wenn ein Sub-Goal blockiert ist, nutze finish_sequence und erklaere warum."""
+- LOOP-GUARD: Wenn create_project "FEHLER: AEHNLICHES PROJEKT EXISTIERT" oder "FEHLER: Projekt existiert bereits" zurueckgibt, SOFORT zum bestehenden Projekt wechseln (read_file, write_file). NIEMALS das gleiche Projekt nochmal erstellen. Wenn ein Sub-Goal blockiert ist, nutze finish_sequence und erklaere warum.
+- PROZESS-REFLEXION: Bei finish_sequence beschreibe nicht nur WAS du erreicht hast, sondern WIE du gearbeitet hast. key_decision: Was war die wichtigste Entscheidung? bottleneck: Was hat dich gebremst (2-3 Saetze)? new_beliefs: Was hast du ueber deinen Arbeitsprozess gelernt?"""
 
     # === Sequenz-Memory ===
 
@@ -854,7 +848,9 @@ REGELN:
             focus = self.goal_stack.get_current_focus()
             active = self.goal_stack.goals.get("active", [])
 
-            lines = ["# Working Memory\n"]
+            now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+            lines = [f"# Working Memory\n"]
+            lines.append(f"*Automatisch aktualisiert: Seq {self.sequences_total + 1}, {now_str}*\n")
 
             # Was gerade laeuft
             if "FOKUS:" in focus:
@@ -941,7 +937,22 @@ REGELN:
         now = datetime.now(timezone.utc)
         parts.append(f"Zeit: {now.strftime('%Y-%m-%d %H:%M')} UTC")
 
-        # (Sequenz-Memory entfaellt — Working Memory uebernimmt diese Rolle)
+        # Sequenz-Memory: Letzte 3 Summaries als zusaetzlichen Kontext laden
+        seq_context = self._load_sequence_memory()
+        if seq_context:
+            parts.append(seq_context)
+
+        # Live-Notes: Letzte Aktionen der vorherigen Sequenz (falls Token-Budget)
+        live_notes_path = self.consciousness_path / "live_notes.md"
+        if live_notes_path.exists():
+            try:
+                notes = live_notes_path.read_text(encoding="utf-8").strip()
+                if notes:
+                    parts.append(f"LETZTE AKTIONEN (Live-Mitschrift):\n{notes[-500:]}")
+                # Nach dem Laden loeschen — neue Sequenz startet frisch
+                live_notes_path.unlink()
+            except OSError:
+                pass
 
         # Nachrichten von Oliver
         messages = self.communication.check_inbox()
@@ -1017,6 +1028,13 @@ REGELN:
                             parts.append(f"  - [{score:.2f}] {content}")
             except (OSError, KeyError, TypeError) as e:
                 parts.append(f"  (Memory-Suche fehlgeschlagen: {e})")
+
+        # Efficiency-Alerts (von letzter Trend-Analyse)
+        eff_alerts = getattr(self, "_efficiency_alerts", [])
+        if eff_alerts:
+            parts.append("\nEFFIZIENZ-WARNUNGEN:")
+            for a in eff_alerts[:3]:
+                parts.append(f"  ! {a}")
 
         return "\n".join(parts)
 
@@ -1648,14 +1666,33 @@ REGELN:
                     formed.append(belief)
         self.beliefs["formed_from_experience"] = formed[-30:]
 
-        # Erfahrung speichern
+        # Prozess-Metriken automatisch berechnen
+        output_count = self._seq_files_written + self._seq_tools_built
+        total_steps = max(self._seq_step_count, 1)
+        efficiency_ratio = round(output_count / total_steps, 3)
+
+        # Valenz aus Performance-Rating ableiten (nicht mehr hardcoded 0.7)
+        # Rating 1-10 → Valenz -0.5 bis 1.0 (schlechte Sequenzen = negativ)
+        rating = tool_input.get("performance_rating", 5)
+        valence = round((rating - 3) / 7.0, 2)  # 1→-0.29, 5→0.29, 10→1.0
+        if self._seq_errors > 2:
+            valence = min(valence, 0.0)  # Viele Fehler → nie positiv
+
+        # Erfahrung speichern (mit Prozess-Metriken)
         try:
             self.memory.store_experience({
                 "type": "sequenz_abschluss",
                 "content": summary,
-                "valence": 0.7,
+                "valence": valence,
                 "emotions": {},
                 "tags": [f"sequenz_{self.sequences_total}"],
+                "process_metrics": {
+                    "steps": self._seq_step_count,
+                    "errors": self._seq_errors,
+                    "output": output_count,
+                    "efficiency_ratio": efficiency_ratio,
+                    "key_decision": tool_input.get("key_decision", ""),
+                },
             })
         except Exception as e:
             print(f"  [WARNUNG] Experience nicht gespeichert: {e}")
@@ -1669,11 +1706,53 @@ REGELN:
                 self.sequences_total,
             )
 
-        # Mini-Metacognition: 2 Saetze Reflexion
+        # Metacognition: Erweiterte Reflexion mit Prozess-Daten
         bottleneck = tool_input.get("bottleneck", "")
         next_time = tool_input.get("next_time_differently", "")
+        key_decision = tool_input.get("key_decision", "")
         if bottleneck or next_time:
-            self.metacognition.record(bottleneck, next_time, self.sequences_total)
+            self.metacognition.record(
+                bottleneck, next_time, self.sequences_total,
+                wasted_steps=max(0, self._seq_step_count - output_count),
+                productive_steps=output_count,
+                key_decision=key_decision,
+            )
+
+        # MetaCognition-Muster → Process-Regeln
+        try:
+            meta_alerts = self.metacognition.analyze_patterns()
+            for alert in meta_alerts:
+                if "ohne finish_sequence" in alert:
+                    self.strategies.record_process_pattern(
+                        "no_finish_sequence",
+                        "Nutze finish_sequence proaktiv nach 15-20 Steps wenn Teilergebnis steht",
+                        occurrences=3,
+                    )
+                elif "aehnlich" in alert.lower() or "engpass" in alert.lower():
+                    self.strategies.record_process_pattern(
+                        "recurring_bottleneck",
+                        alert[:200],
+                        occurrences=2,
+                    )
+        except Exception:
+            pass  # Nicht-kritisch — darf Sequenz nicht crashen
+
+        # Reflexion speichern (bisher nie aufgerufen — Memory-Schicht war tot)
+        if bottleneck or next_time or tool_input.get("rating_reason"):
+            try:
+                self.memory.store_reflection({
+                    "content": (
+                        f"Seq {self.sequences_total}: "
+                        f"{tool_input.get('rating_reason', '')[:200]} "
+                        f"Problem: {bottleneck[:100]} "
+                        f"Lernung: {next_time[:100]}"
+                    ).strip(),
+                    "insights": [b for b in tool_input.get("new_beliefs", []) if b],
+                    "cycle": self.sequences_total,
+                    "triggered_by": "finish_sequence",
+                })
+            except Exception as e:
+                logger.warning(f" Reflection nicht gespeichert: {e}")
 
         # Journal
         self.communication.write_journal(summary, self.sequences_total)
@@ -1776,6 +1855,49 @@ REGELN:
             self._last_reported_progress = current_progress
 
         return "\n".join(parts)
+
+    @staticmethod
+    def _extract_last_llm_thought(messages: list) -> str:
+        """Extrahiert den letzten sinnvollen Text-Gedanken aus den Messages."""
+        for msg in reversed(messages):
+            if msg.get("role") != "assistant":
+                continue
+            content = msg.get("content", [])
+            if isinstance(content, str):
+                text = content.strip()
+            else:
+                # Liste von Content-Blocks (Anthropic-Format)
+                texts = []
+                for block in content:
+                    if isinstance(block, dict) and block.get("type") == "text":
+                        texts.append(block.get("text", ""))
+                    elif hasattr(block, "text"):
+                        texts.append(block.text)
+                text = " ".join(texts).strip()
+            if text and len(text) > 10:
+                # Erste sinnvolle Zeile, max 200 Zeichen
+                first_line = text.split("\n")[0].strip()
+                return first_line[:200] if first_line else text[:200]
+        return ""
+
+    def _update_live_notes(self, tool_name: str, action_desc: str):
+        """Schreibt Zwischenstand waehrend einer Sequenz — geht nicht verloren bei Token-Budget."""
+        notes_path = self.consciousness_path / "live_notes.md"
+        try:
+            now = datetime.now(timezone.utc).strftime("%H:%M")
+            line = f"- [{now}] {action_desc[:120]}\n"
+            # Datei anhaengen (oder erstellen)
+            with open(notes_path, "a", encoding="utf-8") as f:
+                f.write(line)
+            # Max 20 Zeilen behalten (Rolling Window)
+            content = notes_path.read_text(encoding="utf-8")
+            lines = content.strip().split("\n")
+            if len(lines) > 20:
+                notes_path.write_text(
+                    "\n".join(lines[-20:]) + "\n", encoding="utf-8"
+                )
+        except OSError:
+            pass  # Nicht kritisch — best effort
 
     # === Interaktion (fuer interact.py) ===
 
@@ -2142,13 +2264,13 @@ REGELN:
         "web_search", "web_read", "use_tool",
     })
 
-    def _compress_old_messages(self, messages: list, keep_recent: int = 6):
+    def _compress_old_messages(self, messages: list, keep_recent: int = 5):
         """
         Komprimiert alte Tool-Results um Token zu sparen.
 
-        Strategie (Whitelist statt Blacklist — sicheres Default):
-        - _SAFE_TO_COMPRESS Tools: Immer komprimieren wenn alt
-        - _READ_TOOLS: Auf 500 Zeichen kuerzen wenn aelter als keep_recent
+        Adaptive Strategie: Je aelter ein Eintrag, desto staerker komprimiert.
+        - _SAFE_TO_COMPRESS Tools (Schreib-Aktionen): Immer auf Einzeiler
+        - _READ_TOOLS (Lese-Aktionen): Adaptiv — neuere behalten mehr Kontext
         - Unbekannte Tools: NICHT komprimieren (sicheres Default)
         """
         if len(messages) <= keep_recent * 2 + 1:
@@ -2165,12 +2287,17 @@ REGELN:
             if not isinstance(content, list):
                 continue
 
+            # Adaptive Limit: Aeltere Messages werden staerker gekuerzt
+            # Position 1 (aelteste) → 300 Zeichen, Position nahe keep_recent → 800
+            age_ratio = i / max(compress_until, 1)  # 0.0 (aelteste) bis 1.0
+            read_limit = int(300 + 500 * age_ratio)  # 300-800 Zeichen
+
             for block in content:
                 if not isinstance(block, dict) or block.get("type") != "tool_result":
                     continue
 
                 original = block.get("content", "")
-                if len(original) <= 100:
+                if len(original) <= 150:
                     continue  # Schon komprimiert oder kurz
 
                 tool_name = self._find_tool_name_for_id(
@@ -2179,9 +2306,8 @@ REGELN:
 
                 if tool_name in self._SAFE_TO_COMPRESS:
                     # Schreib-Tools: Auf Einzeiler komprimieren
-                    # ABER: Quality-Warnungen beibehalten damit Kimi sie sieht
+                    # ABER: Quality-Warnungen beibehalten
                     if "QUALITAETS-WARNUNG" in original:
-                        # Warnung erhalten — nur Rest kuerzen
                         warning_start = original.index("QUALITAETS-WARNUNG")
                         block["content"] = f"[OK mit Warnung] {original[warning_start:][:200]}"
                     else:
@@ -2189,14 +2315,13 @@ REGELN:
                         block["content"] = f"[OK] {first_line}"
 
                 elif tool_name in self._READ_TOOLS:
-                    # Lese-Tools: Auf 500 Zeichen kuerzen (nicht loeschen)
-                    if len(original) > 500:
-                        block["content"] = original[:500] + "\n[...gekuerzt]"
+                    # Lese-Tools: Adaptiv kuerzen (aelter = kuertzer)
+                    if len(original) > read_limit:
+                        block["content"] = original[:read_limit] + f"\n[...gekuerzt auf {read_limit} von {len(original)} Zeichen]"
 
                 elif len(original) > 1500:
-                    # Fallback: Sehr grosse unbekannte Blocks trotzdem kuerzen
-                    # (z.B. orphaned tool_results ohne zuordenbaren Tool-Namen)
-                    block["content"] = original[:500] + "\n[...gekuerzt]"
+                    # Fallback: Nur sehr grosse unbekannte Blocks kuerzen
+                    block["content"] = original[:800] + "\n[...gekuerzt]"
 
     @staticmethod
     def _find_tool_name_for_id(messages: list, user_idx: int, tool_use_id: str) -> str:
@@ -2417,6 +2542,7 @@ REGELN:
         self._seq_files_written = 0
         self._seq_tools_built = 0
         self._seq_written_paths = []  # Pfade der geschriebenen Dateien
+        self._seq_step_count = 0       # Gesamte Tool-Aufrufe (fuer Effizienz-Berechnung)
         self._modify_count_this_seq = 0  # Max 3 modify_own_code pro Sequenz
 
         # Spin-Detection: Wiederholte gescheiterte Aktionen tracken (intra-Sequenz)
@@ -2503,7 +2629,9 @@ REGELN:
             # Token-Budget als Sicherheitsnetz
             if self.sequence_input_tokens >= MAX_INPUT_TOKENS_PER_SEQUENCE:
                 print(f"  [Token-Limit erreicht]")
-                # Inhaltliche Summary statt generischer Meldung
+                # Letzten LLM-Gedanken retten fuer Kontext-Kontinuitaet
+                last_thought = self._extract_last_llm_thought(messages)
+                # Inhaltliche Summary mit LLM-Kontext
                 budget_parts = [f"{step_count} Steps (Token-Budget)."]
                 if self._seq_files_written > 0:
                     paths_short = [Path(p).name for p in self._seq_written_paths[:5]]
@@ -2513,16 +2641,22 @@ REGELN:
                 focus = self.goal_stack.get_current_focus()
                 if "FOKUS:" in focus:
                     budget_parts.append(f"Fokus: {focus.split('FOKUS:')[1].strip()[:100]}")
+                if last_thought:
+                    budget_parts.append(f"Zuletzt: {last_thought}")
+                auto_rating = min(7, max(2, self._seq_files_written * 2 + self._seq_tools_built * 3))
                 self._handle_finish_sequence({
                     "summary": " | ".join(budget_parts),
-                    "performance_rating": 5,
+                    "performance_rating": auto_rating,
+                    "bottleneck": "Token-Budget erreicht bevor finish_sequence aufgerufen wurde",
+                    "next_time_differently": "Frueher finish_sequence nutzen, Zwischenergebnisse sichern",
+                    "key_decision": "Auto-beendet: Token-Budget erschoepft",
                 })
                 finished = True
                 break
 
-            # Sliding Window: Alte Tool-Results komprimieren ab Step 8
-            if step >= 5:
-                self._compress_old_messages(messages, keep_recent=6)
+            # Sliding Window: Alte Tool-Results komprimieren ab Step 4
+            if step >= 4:
+                self._compress_old_messages(messages, keep_recent=5)
 
             try:
                 response = self._call_llm(
@@ -2563,6 +2697,7 @@ REGELN:
                 for block in response["content"]:
                     if getattr(block, "type", None) == "tool_use":
                         step_count += 1
+                        self._seq_step_count += 1
 
                         # Menschenlesbare Aktions-Beschreibungen
                         action_desc = self._describe_action(block.name, block.input)
@@ -2583,6 +2718,13 @@ REGELN:
                             # Wichtige Aktionen immer anzeigen
                             print(f"  ✓ {action_desc}")
                         # Alles andere (list_directory, read_file, etc.) still
+
+                        # Live-Notes: Wichtige Ergebnisse sofort festhalten
+                        if not is_error and block.name in (
+                            "write_file", "create_project", "create_tool",
+                            "modify_own_code", "complete_project",
+                        ):
+                            self._update_live_notes(block.name, action_desc)
 
                         # Spin-Detection: Wiederholte gescheiterte Aktionen erkennen
                         if is_error and block.name in ("create_project", "create_goal"):
@@ -2643,16 +2785,20 @@ REGELN:
             elif response["stop_reason"] == "end_turn":
                 text_parts = [b.text for b in response["content"] if hasattr(b, "text")]
                 summary = " ".join(text_parts)[:500] if text_parts else "Sequenz ohne explizites Ende"
+                auto_rating = min(7, max(2, self._seq_files_written * 2 + self._seq_tools_built * 3))
                 self._handle_finish_sequence({
                     "summary": summary,
-                    "performance_rating": 5,  # Neutral — kein explizites Rating
-                    "bottleneck": "Kein explizites finish_sequence aufgerufen",
-                    "next_time_differently": "finish_sequence mit Rating nutzen",
+                    "performance_rating": auto_rating,
+                    "bottleneck": "Kein explizites finish_sequence aufgerufen — LLM hat end_turn ohne Tool-Call beendet",
+                    "next_time_differently": "finish_sequence explizit aufrufen mit Reflexion statt einfach aufzuhoeren",
+                    "key_decision": "Auto-beendet: end_turn ohne finish_sequence",
                 })
                 break
 
         if not finished and step_count >= MAX_STEPS_PER_SEQUENCE:
             print(f"\n  Max Steps ({MAX_STEPS_PER_SEQUENCE}) erreicht — Sequenz beendet.")
+            # Letzten LLM-Gedanken retten
+            last_thought = self._extract_last_llm_thought(messages)
             # Narrative Summary statt generischer Pipe-getrennte Stichpunkte
             focus = self.goal_stack.get_current_focus()
             focus_topic = ""
@@ -2680,11 +2826,17 @@ REGELN:
                     "Keine Dateien geschrieben und keine Fehler — "
                     "moeglicherweise drehe ich mich im Kreis."
                 )
+            if last_thought:
+                narrative_parts.append(f"Letzter Gedanke: {last_thought}")
+            auto_rating = min(7, max(2, self._seq_files_written * 2 + self._seq_tools_built * 3))
+            if self._seq_errors > 2:
+                auto_rating = min(auto_rating, 3)
             self._handle_finish_sequence({
                 "summary": " ".join(narrative_parts),
-                "performance_rating": 3 if self._seq_errors > 2 else 5,
-                "bottleneck": "Max Steps erreicht ohne eigenes finish_sequence",
-                "next_time_differently": "Frueher finish_sequence aufrufen wenn ein Ergebnis steht",
+                "performance_rating": auto_rating,
+                "bottleneck": "Max Steps erreicht ohne eigenes finish_sequence — alle 40 Steps verbraucht",
+                "next_time_differently": "Frueher finish_sequence aufrufen wenn ein sinnvolles Ergebnis steht, nicht alle Steps verbrauchen",
+                "key_decision": "Auto-beendet: Max Steps erreicht",
             })
 
         # Effizienz tracken
@@ -2700,6 +2852,14 @@ REGELN:
             "cost": round(seq_cost, 4),
             "duration_seconds": round(seq_duration, 1),
         })
+
+        # Efficiency-Trend-Analyse alle 5 Sequenzen
+        if self.sequences_total % 5 == 0:
+            eff_alerts = self.efficiency.analyze_trends()
+            if eff_alerts:
+                self._efficiency_alerts = eff_alerts  # Fuer naechste Perception
+                for alert in eff_alerts:
+                    print(f"  ⚠ EFFIZIENZ: {alert}")
 
         # Kompakte Zusammenfassung
         duration_min = seq_duration / 60

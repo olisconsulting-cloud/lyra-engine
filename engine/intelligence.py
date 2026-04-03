@@ -663,13 +663,38 @@ class StrategyEvolution:
             if r.get("successes_since", 0) < 20 or r.get("type") == "positive"
         ]
 
+    def record_process_pattern(self, pattern_type: str, description: str,
+                               occurrences: int = 1):
+        """Erstellt Regeln aus Prozess-Beobachtungen (nicht nur Fehler)."""
+        # Deduplizierung: Existiert dieser Pattern-Typ schon?
+        for rule in self.rules:
+            if rule.get("type") == "process" and rule.get("pattern") == pattern_type:
+                rule["occurrences"] = rule.get("occurrences", 0) + occurrences
+                self._save_rules()
+                return
+        # Neue Regel nur bei >= 2 Vorkommen
+        if occurrences >= 2:
+            self.rules.append({
+                "type": "process",
+                "tool": "meta",
+                "pattern": pattern_type,
+                "strategy": description[:300],
+                "occurrences": occurrences,
+                "created": datetime.now(timezone.utc).isoformat(),
+            })
+            self._save_rules()
+
     def get_active_rules(self) -> str:
-        """Aktive Regeln fuer den System-Prompt — Fehler-Vermeidung + Erfolgs-Muster."""
+        """Aktive Regeln fuer den System-Prompt — Fehler + Erfolge + Prozess."""
         if not self.rules:
             return ""
 
-        avoid_rules = [r for r in self.rules if r.get("type") != "positive"]
+        avoid_rules = [r for r in self.rules if r.get("type") not in ("positive", "process")]
         success_rules = [r for r in self.rules if r.get("type") == "positive"]
+        process_rules = sorted(
+            [r for r in self.rules if r.get("type") == "process"],
+            key=lambda r: r.get("occurrences", 0), reverse=True,
+        )
 
         lines = []
         if avoid_rules:
@@ -680,6 +705,10 @@ class StrategyEvolution:
             lines.append("ERFOLGS-MUSTER (bewaehrt):")
             for rule in success_rules[-5:]:
                 lines.append(f"  + {rule['tool']}: {rule['strategy']}")
+        if process_rules:
+            lines.append("PROZESS-REGELN (gelernt aus Arbeitsweise):")
+            for rule in process_rules[:3]:
+                lines.append(f"  > [{rule.get('occurrences', 0)}x] {rule['strategy']}")
 
         return "\n".join(lines)
 
@@ -773,3 +802,46 @@ class EfficiencyTracker:
             f"{trend} | {avg_calls:.0f} Calls/Seq, {error_rate:.0f}% Fehler, ${avg_cost:.3f}/Seq | "
             f"Output: {total_files}F {total_tools}T {total_goals}G | {productivity:.1f} Output/$"
         )
+
+    def analyze_trends(self) -> list[str]:
+        """Erkennt Effizienz-Trends ueber die letzten Sequenzen. Alle 5 Seq aufrufen."""
+        seqs = self.data.get("sequences", [])
+        if len(seqs) < 5:
+            return []
+
+        alerts = []
+        recent_5 = seqs[-5:]
+        previous_5 = seqs[-10:-5] if len(seqs) >= 10 else []
+
+        # 1. Token-Anstieg erkennen
+        recent_tokens = sum(s.get("tokens_used", 0) for s in recent_5) / 5
+        if previous_5:
+            prev_tokens = sum(s.get("tokens_used", 0) for s in previous_5) / 5
+            if prev_tokens > 0 and recent_tokens > prev_tokens * 1.2:
+                pct = ((recent_tokens / prev_tokens) - 1) * 100
+                alerts.append(f"Token-Verbrauch +{pct:.0f}% vs vorherige 5 Sequenzen")
+
+        # 2. Kosten ohne Output
+        recent_cost = sum(s.get("cost", 0) for s in recent_5)
+        recent_output = sum(
+            s.get("files_written", 0) + s.get("tools_built", 0) * 3
+            for s in recent_5
+        )
+        if recent_output == 0 and recent_cost > 0.5:
+            alerts.append(f"${recent_cost:.2f} ausgegeben ohne Output in letzten 5 Sequenzen")
+
+        # 3. Fehlerrate ueber 30%
+        recent_errors = sum(s.get("errors", 0) for s in recent_5)
+        recent_calls = sum(s.get("tool_calls", 0) for s in recent_5) or 1
+        if recent_errors / recent_calls > 0.3:
+            alerts.append(f"Fehlerrate {recent_errors / recent_calls * 100:.0f}% — ueber 30%")
+
+        # 4. Durchschnittliche Steps ohne Output
+        zero_output = sum(
+            1 for s in recent_5
+            if s.get("files_written", 0) == 0 and s.get("tools_built", 0) == 0
+        )
+        if zero_output >= 4:
+            alerts.append(f"{zero_output}/5 Sequenzen ohne jeglichen Output")
+
+        return alerts[:3]
