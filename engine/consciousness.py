@@ -42,6 +42,7 @@ from .sequence_planner import SequencePlanner
 from .checkpoint import CheckpointManager
 from .meta_rules import MetaRuleEngine
 from .skill_library import SkillLibrary
+from .proactive_learner import ProactiveLearner
 from . import config
 from .config import safe_json_write, safe_json_read
 
@@ -582,6 +583,7 @@ class ConsciousnessEngine:
         self.checkpointer = CheckpointManager(self.consciousness_path)
         self.meta_rules = MetaRuleEngine(self.consciousness_path)
         self.skill_library = SkillLibrary(config.DATA_PATH)
+        self.proactive_learner = ProactiveLearner(config.DATA_PATH)
 
         # Genehmigungspflicht — diese Tools brauchen Olivers OK
         # NUR pip_install braucht Genehmigung (laedt aus dem Internet)
@@ -1141,6 +1143,13 @@ SEQUENZ-PLANUNG: Du hast max {MAX_STEPS_PER_SEQUENCE} Steps. Plane am Anfang was
         if skill_prompt:
             parts.append(skill_prompt)
 
+        # Proaktives Lernen: Intern-first, Internet-Fallback
+        learn_context = self.proactive_learner.build_context(
+            focus, goal_type, self.skill_library, self.semantic_memory
+        )
+        if learn_context:
+            parts.append(learn_context)
+
         # Existierende Projekte zum Fokus anzeigen (Anti-Loop, max 10)
         if "FOKUS:" in focus and hasattr(self, "actions") and hasattr(self.actions, "projects_path"):
             try:
@@ -1387,7 +1396,24 @@ SEQUENZ-PLANUNG: Du hast max {MAX_STEPS_PER_SEQUENCE} Steps. Plane am Anfang was
                 return self.actions.run_code(tool_input["code"])
 
             elif name == "web_search":
-                return self.web.search(tool_input["query"])
+                query = tool_input["query"]
+                # Web-Cache pruefen bevor echte Suche
+                cached = self.proactive_learner.web_cache.get(query)
+                if cached:
+                    results = cached.get("results", [])
+                    formatted = "\n".join(
+                        f"  {i+1}. {r}" if isinstance(r, str) else
+                        f"  {i+1}. {r.get('title', '')}: {r.get('snippet', '')}"
+                        for i, r in enumerate(results[:5])
+                    )
+                    return f"[CACHE] Ergebnisse fuer '{query[:50]}':\n{formatted}"
+                result = self.web.search(query)
+                # Ergebnis cachen fuer naechste Sequenz
+                if result and "FEHLER" not in result:
+                    # Ergebnis als Liste von Strings speichern
+                    result_lines = [l.strip() for l in result.split("\n") if l.strip()][:5]
+                    self.proactive_learner.store_research_result(query, result_lines)
+                return result
 
             elif name == "web_read":
                 return self.web.read_page(tool_input["url"])
@@ -2185,6 +2211,109 @@ SEQUENZ-PLANUNG: Du hast max {MAX_STEPS_PER_SEQUENCE} Steps. Plane am Anfang was
         else:
             return self.llm.call_gemini(model_key, system, messages, tools, max_tokens)
 
+    def _sonnet_graceful_finish(self, messages: list, step_count: int) -> dict:
+        """
+        Sonnet 4.6 schreibt eine intelligente Sequenz-Summary bei Auto-Finish.
+
+        Statt mechanischer Metadata-Zusammensetzung bekommt Sonnet den Kontext
+        und schreibt eine reflektierte Summary mit Bottleneck-Analyse.
+        Separater Call — belastet Kimis Context Window nicht.
+        """
+        last_thought = self._extract_last_llm_thought(messages)
+        focus = self.goal_stack.get_current_focus()
+        focus_topic = ""
+        if "FOKUS:" in focus:
+            focus_topic = focus.split("FOKUS:")[1].strip()[:200]
+
+        # Kompakter Kontext fuer Sonnet (nicht die vollen Messages — nur das Wesentliche)
+        paths_short = [Path(p).name for p in self._seq_written_paths[:5]]
+        context = (
+            f"Sequenz {self.sequences_total + 1} wird auto-beendet.\n"
+            f"Steps: {step_count} | Fehler: {self._seq_errors} | "
+            f"Dateien: {self._seq_files_written} ({', '.join(paths_short) if paths_short else 'keine'})\n"
+            f"Tools gebaut: {self._seq_tools_built}\n"
+            f"Fokus: {focus_topic}\n"
+            f"Letzter Gedanke: {last_thought or '(keiner extrahiert)'}\n"
+        )
+
+        # Letzte 3 Tool-Ergebnisse als zusaetzlichen Kontext
+        recent_results = []
+        for msg in reversed(messages[-6:]):
+            if msg.get("role") == "user" and isinstance(msg.get("content"), list):
+                for block in msg["content"]:
+                    if isinstance(block, dict) and block.get("type") == "tool_result":
+                        result_preview = str(block.get("content", ""))[:200]
+                        recent_results.append(result_preview)
+                        if len(recent_results) >= 3:
+                            break
+            if len(recent_results) >= 3:
+                break
+        if recent_results:
+            context += "\nLetzte Ergebnisse:\n" + "\n".join(f"  - {r}" for r in recent_results)
+
+        system_prompt = """Du bist ein Zusammenfassungs-Agent fuer eine autonome KI namens Phi.
+Phi's Sequenz wird auto-beendet (Token- oder Step-Limit). Deine Aufgabe:
+
+1. Schreibe eine praegnante SUMMARY (2-3 Saetze): Was wurde erreicht? Was ist der Stand?
+2. BOTTLENECK: Was hat Phi gebremst oder warum wurde das Limit erreicht?
+3. NEXT_TIME: Was sollte Phi naechstes Mal anders machen?
+4. KEY_DECISION: Was war die wichtigste Entscheidung in dieser Sequenz?
+5. RATING: 1-10 (basierend auf Output vs Steps — viele Steps ohne Output = niedrig)
+6. NEW_BELIEFS: Was hat Phi gelernt? (Liste, kann leer sein)
+
+Antworte als JSON:
+{"summary": "...", "bottleneck": "...", "next_time_differently": "...", "key_decision": "...", "performance_rating": 5, "new_beliefs": []}"""
+
+        try:
+            response = self._call_llm(
+                "graceful_finish", system_prompt,
+                [{"role": "user", "content": context}],
+                max_tokens=800,
+            )
+            text = response["content"][0].text if response.get("content") else ""
+            if text:
+                # JSON parsen (mit Fallback)
+                import re as _re
+                cleaned = text.strip()
+                if cleaned.startswith("```"):
+                    first_nl = cleaned.find("\n")
+                    if first_nl > 0:
+                        cleaned = cleaned[first_nl + 1:]
+                    if cleaned.rstrip().endswith("```"):
+                        cleaned = cleaned.rstrip()[:-3].rstrip()
+                try:
+                    result = json.loads(cleaned)
+                except json.JSONDecodeError:
+                    match = _re.search(r"\{.*\}", cleaned, _re.DOTALL)
+                    if match:
+                        result = json.loads(match.group(0))
+                    else:
+                        raise ValueError("JSON nicht parsebar")
+
+                # Validierung
+                result["performance_rating"] = max(1, min(10, int(result.get("performance_rating", 5))))
+                result.setdefault("summary", f"{step_count} Steps, auto-beendet")
+                result.setdefault("bottleneck", "Auto-beendet")
+                result.setdefault("key_decision", "Auto-beendet durch Limit")
+                return result
+
+        except Exception as e:
+            logger.warning("Sonnet Graceful-Finish fehlgeschlagen: %s — Fallback auf mechanisch", e)
+
+        # Fallback: Mechanische Summary wenn Sonnet-Call scheitert
+        auto_rating = min(7, max(2, self._seq_files_written * 2 + self._seq_tools_built * 3))
+        if self._seq_errors > 2:
+            auto_rating = min(auto_rating, 3)
+        return {
+            "summary": f"{step_count} Steps an {focus_topic or 'unbekannt'}. "
+                       f"{self._seq_files_written} Dateien, {self._seq_errors} Fehler. "
+                       f"{last_thought or ''}",
+            "performance_rating": auto_rating,
+            "bottleneck": "Auto-beendet (Sonnet-Fallback)",
+            "next_time_differently": "Frueher finish_sequence nutzen",
+            "key_decision": "Auto-beendet durch Limit",
+        }
+
     def _cross_model_review(self, project_name: str, code_files: list) -> dict:
         """
         Cross-Model-Review: Ein anderes Modell prueft den Projekt-Code.
@@ -2820,17 +2949,32 @@ SEQUENZ-PLANUNG: Du hast max {MAX_STEPS_PER_SEQUENCE} Steps. Plane am Anfang was
         self._project_context_cache = result
         return result
 
-    def _get_base_tiers(self, mode: dict) -> set[int]:
-        """Bestimmt die Basis-Tiers aus Modus und Kontext (ohne Eskalation)."""
+    def _get_base_tiers(self, mode: dict, task_type: str = "standard") -> set[int]:
+        """
+        Bestimmt die Basis-Tiers aus Modus, Task-Typ und Kontext.
+
+        Intelligenter als vorher: Task-Typ beeinflusst welche Tools von Anfang an da sind.
+        Erspart Phi den Umweg ueber Text-Eskalation fuer offensichtliche Faelle.
+        """
         tiers = {1}  # Core immer aktiv
 
         # Projekt-Tools wenn Projekte existieren
         if self._has_project_context_cached():
             tiers.add(2)
 
-        # Evolution-Tools nur in evolution/sprint/cooldown
+        # Evolution-Tools in evolution/sprint/cooldown
         if mode.get("mode") in ("evolution", "sprint", "cooldown"):
             tiers.add(3)
+
+        # Task-Typ-basierte Vorab-Eskalation (spart 1-2 Steps Umweg)
+        if task_type == "recherche":
+            tiers.add(4)  # Web-Tools sofort fuer Recherche
+        elif task_type == "projekt":
+            tiers.add(2)  # Projekt-Tools garantiert
+            tiers.add(4)  # Git + Web oft noetig
+        elif task_type == "evolution":
+            tiers.add(3)  # Evolution-Tools garantiert
+            tiers.add(5)  # Meta-Tools (generate_tool, self_diagnose)
 
         return tiers
 
@@ -2929,28 +3073,31 @@ SEQUENZ-PLANUNG: Du hast max {MAX_STEPS_PER_SEQUENCE} Steps. Plane am Anfang was
                 for line in summary.split("\n"):
                     print(f"  {line}")
 
-        # Tool-Tiers: Dynamische Auswahl pro Step (spart ~42k Tokens/Sequenz)
-        # Basis-Tiers = aus Modus/Kontext, Eskalation = aus LLM-Text-Requests
-        base_tiers = self._get_base_tiers(mode)
-        escalated_tiers = set()  # Tiers die durch reaktive Eskalation hinzukamen
-        self._project_context_cache = None  # Cache pro Sequenz zuruecksetzen
-
-        # Adaptives Step-Budget (spart 30-40% Tokens bei einfachen Tasks)
-        step_budget = self._get_step_budget(mode, focus)
+        # Task-Typ bestimmen (einmal, wird fuer Step-Budget + Tool-Tiers genutzt)
         self._current_task_type = self._classify_task(mode, focus)
         self._token_warning_sent = False  # Reset pro Sequenz
 
+        # Adaptives Step-Budget (spart 30-40% Tokens bei einfachen Tasks)
+        step_budget = self._get_step_budget(mode, focus)
+
+        # Tool-Tiers: Dynamische Auswahl pro Step (spart ~42k Tokens/Sequenz)
+        # Basis-Tiers = aus Modus/Kontext/Task-Typ, Eskalation = aus LLM-Text
+        base_tiers = self._get_base_tiers(mode, task_type=self._current_task_type)
+        escalated_tiers = set()
+        self._project_context_cache = None  # Cache pro Sequenz zuruecksetzen
+
         for step in range(step_budget):
-            # Step 0: Alle Tools mit vollen Definitionen (Phi lernt das Angebot)
-            # Steps 1+: Basis + eskalierte Tiers, kompakte Definitionen
+            # Step 0: Basis-Tiers mit VOLLEN Descriptions (Phi lernt was verfuegbar ist)
+            #         Nicht alle 5 Tiers — nur die fuer diesen Task-Typ relevanten
+            # Steps 1+: Basis + eskalierte Tiers, KOMPAKTE Definitionen
             if step == 0:
-                active_tiers = {1, 2, 3, 4, 5}
+                active_tiers = base_tiers | {1, 2}  # Core + Projekt immer zeigen bei Step 0
             else:
                 active_tiers = base_tiers | escalated_tiers
             current_tools = select_tools(active_tiers, compact=(step > 0))
 
             # Step-basierte Warnung: 3 Steps vor Schluss → System-Prompt ergaenzen
-            steps_remaining = MAX_STEPS_PER_SEQUENCE - step
+            steps_remaining = step_budget - step
             if steps_remaining == 3:
                 cached_system_prompt += (
                     "\n\nACHTUNG: Noch 3 Steps uebrig. "
@@ -3043,17 +3190,39 @@ SEQUENZ-PLANUNG: Du hast max {MAX_STEPS_PER_SEQUENCE} Steps. Plane am Anfang was
                         print(f"  💭 {first_line[:120]}")
 
             # Reaktive Tool-Eskalation: Phi erwaehnt fehlende Tools → naechster Step bekommt sie
+            # Erweitert: Auch natuerliche Sprache erkennen + genutzte Tools tracken
+            _used_tiers_this_step = set()
             for block in response["content"]:
                 if hasattr(block, "text") and block.text:
                     t = block.text.lower()
-                    if "web_search" in t or "web_read" in t or "recherch" in t:
+                    if any(w in t for w in ("web_search", "web_read", "recherch", "internet", "online suche", "webseite")):
                         escalated_tiers.add(4)
-                    if "read_own_code" in t or "modify_own_code" in t or "selbstverbesserung" in t:
+                        _used_tiers_this_step.add(4)
+                    if any(w in t for w in ("read_own_code", "modify_own_code", "selbstverbesserung", "eigenen code", "self-modify")):
                         escalated_tiers.add(3)
-                    if "generate_tool" in t or "self_diagnose" in t or "combine_tools" in t:
+                        _used_tiers_this_step.add(3)
+                    if any(w in t for w in ("generate_tool", "self_diagnose", "combine_tools", "neues tool", "diagnose")):
                         escalated_tiers.add(5)
-                    if "create_project" in t or "projekt erstellen" in t:
+                        _used_tiers_this_step.add(5)
+                    if any(w in t for w in ("create_project", "projekt erstellen", "neues projekt")):
                         escalated_tiers.add(2)
+                        _used_tiers_this_step.add(2)
+                # Tool-Use tracken: Welche Tiers wurden tatsaechlich aufgerufen?
+                if getattr(block, "type", None) == "tool_use":
+                    used_tier = TOOL_TIERS.get(block.name, 1)
+                    _used_tiers_this_step.add(used_tier)
+
+            # De-Eskalation: Eskalierte Tiers die 3 Steps nicht genutzt wurden entfernen
+            if not hasattr(self, "_tier_unused_count"):
+                self._tier_unused_count = {}
+            for tier in list(escalated_tiers):
+                if tier not in _used_tiers_this_step and tier not in base_tiers:
+                    self._tier_unused_count[tier] = self._tier_unused_count.get(tier, 0) + 1
+                    if self._tier_unused_count[tier] >= 3:
+                        escalated_tiers.discard(tier)
+                        del self._tier_unused_count[tier]
+                else:
+                    self._tier_unused_count[tier] = 0
 
             # Serialisierung (kompatibel mit Anthropic + Gemini Objekten)
             messages.append({
@@ -3179,48 +3348,9 @@ SEQUENZ-PLANUNG: Du hast max {MAX_STEPS_PER_SEQUENCE} Steps. Plane am Anfang was
                 break
 
         if not finished and step_count >= step_budget:
-            print(f"\n  Max Steps ({step_budget}) erreicht — Sequenz beendet.")
-            # Letzten LLM-Gedanken retten
-            last_thought = self._extract_last_llm_thought(messages)
-            # Narrative Summary statt generischer Pipe-getrennte Stichpunkte
-            focus = self.goal_stack.get_current_focus()
-            focus_topic = ""
-            if "FOKUS:" in focus:
-                focus_topic = focus.split("FOKUS:")[1].strip()[:100]
-
-            narrative_parts = []
-            narrative_parts.append(
-                f"Habe {step_count} Steps am Stueck gearbeitet"
-                + (f" an: {focus_topic}" if focus_topic else "")
-                + "."
-            )
-            if self._seq_files_written > 0:
-                paths_short = [Path(p).name for p in self._seq_written_paths[:5]]
-                narrative_parts.append(f"Dabei {self._seq_files_written} Dateien geschrieben ({', '.join(paths_short)}).")
-            if self._seq_tools_built > 0:
-                narrative_parts.append(f"{self._seq_tools_built} neue Tools gebaut.")
-            if self._seq_errors > 0:
-                narrative_parts.append(
-                    f"Allerdings gab es {self._seq_errors} Fehler — "
-                    "das sollte ich in der naechsten Sequenz untersuchen."
-                )
-            if self._seq_errors == 0 and self._seq_files_written == 0 and self._seq_tools_built == 0:
-                narrative_parts.append(
-                    "Keine Dateien geschrieben und keine Fehler — "
-                    "moeglicherweise drehe ich mich im Kreis."
-                )
-            if last_thought:
-                narrative_parts.append(f"Letzter Gedanke: {last_thought}")
-            auto_rating = min(7, max(2, self._seq_files_written * 2 + self._seq_tools_built * 3))
-            if self._seq_errors > 2:
-                auto_rating = min(auto_rating, 3)
-            self._handle_finish_sequence({
-                "summary": " ".join(narrative_parts),
-                "performance_rating": auto_rating,
-                "bottleneck": f"Max Steps ({step_budget}) erreicht ohne eigenes finish_sequence",
-                "next_time_differently": "Frueher finish_sequence aufrufen wenn ein sinnvolles Ergebnis steht",
-                "key_decision": f"Auto-beendet: Step-Budget {step_budget} erschoepft",
-            })
+            print(f"\n  Max Steps ({step_budget}) erreicht — Sonnet Graceful Finish.")
+            finish_data = self._sonnet_graceful_finish(messages, step_count)
+            self._handle_finish_sequence(finish_data)
 
         # Step-History speichern (fuer lernendes Step-Budget)
         task_type = getattr(self, "_current_task_type", "standard")
