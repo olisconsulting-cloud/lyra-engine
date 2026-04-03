@@ -11,7 +11,7 @@
 ## CRITICAL — Crash bei Aufruf
 
 ### C1: self.client existiert nicht in ToolFoundry.combine_tools()
-- **Status**: `open`
+- **Status**: `fixed` (2026-04-03)
 - **Erstellt**: 2026-04-03
 - **Datei**: `engine/evolution.py:371`
 - **Problem**: `self.client.messages.create(...)` — aber `ToolFoundry.__init__()` setzt kein `self.client`. Die Methode `generate_tool()` (gleiche Klasse) erstellt den Client korrekt inline je nach Provider.
@@ -28,7 +28,7 @@
 > bevor die Module aktiviert werden koennen.
 
 ### H1: validate_against_outcome() — falsche Argument-Typen
-- **Status**: `open`
+- **Status**: `wontfix` (2026-04-03 — sequence_finisher.py geloescht, 7 Logik-Abweichungen)
 - **Erstellt**: 2026-04-03
 - **Datei**: `engine/sequence_finisher.py:167`
 - **Problem**: Aufruf `strategies.validate_against_outcome(new_beliefs, summary, rating)`.
@@ -39,7 +39,7 @@
 - **Done**: Aufruf matcht Signatur in `intelligence.py:772`.
 
 ### H2: write_journal() — fehlendes Pflichtargument cycle
-- **Status**: `open`
+- **Status**: `wontfix` (2026-04-03 — sequence_finisher.py geloescht)
 - **Erstellt**: 2026-04-03
 - **Datei**: `engine/sequence_finisher.py:259`
 - **Problem**: `comm.write_journal(f"Sequenz {sequences_total}: {summary[:200]}")`.
@@ -48,7 +48,7 @@
 - **Done**: Aufruf matcht Signatur in `communication.py:140`.
 
 ### H3: record_process_pattern() — fehlendes Pflichtargument description
-- **Status**: `open`
+- **Status**: `wontfix` (2026-04-03 — sequence_finisher.py geloescht)
 - **Erstellt**: 2026-04-03
 - **Datei**: `engine/sequence_finisher.py:241`
 - **Problem**: `strategies.record_process_pattern(pattern)`.
@@ -71,7 +71,7 @@
 - **Done**: Alle 3 Aufrufe matchen tatsaechliche Signaturen + review_phi.py passed.
 
 ### H5: _load() Methoden ohne try/except bei JSON-Parse (2 Stellen)
-- **Status**: `open`
+- **Status**: `fixed` (2026-04-03)
 - **Erstellt**: 2026-04-03
 - **Dateien**: `engine/evolution.py:477` (SelfBenchmark._load), `engine/evolution.py:837` (MetaCognition._load)
 - **Problem**: Nacktes `json.load()`. Korrupte JSON → Crash beim Konstruktor.
@@ -120,7 +120,7 @@
 - **Done**: `_run_sequence()` delegiert an SequenceRunner, Step-Loop extrahiert.
 
 ### A1d: SequenceFinisher gebaut aber nicht aktiviert
-- **Status**: `open`
+- **Status**: `wontfix` (2026-04-03 — Modul geloescht, 7 Logik-Abweichungen zur echten Impl.)
 - **Erstellt**: 2026-04-03
 - **Datei**: `engine/sequence_finisher.py` + `consciousness.py:~665-681`
 - **Detail**: Instanziiert mit 14 Subsystem-Referenzen, `finish()` nie aufgerufen.
@@ -129,7 +129,7 @@
 - **Done**: `_handle_finish_sequence()` delegiert an SequenceFinisher, Formeln einheitlich.
 
 ### A2: Doppelte Valenz-Berechnung — unterschiedliche Formeln
-- **Status**: `open`
+- **Status**: `wontfix` (2026-04-03 — sequence_finisher.py geloescht, nur noch eine Formel)
 - **Dateien**: `engine/consciousness.py` vs `engine/sequence_finisher.py:182`
 - **Problem**: consciousness.py nutzt `(rating - 3) / 7.0`.
   sequence_finisher.py nutzt `(rating - 1) / 7 - 0.29` fuer rating<=5,
@@ -137,7 +137,7 @@
 - **Risiko**: Wenn SequenceFinisher aktiviert wird, aendert sich die Valenz-Semantik.
 
 ### A3: Doppelte Wasted-Steps-Berechnung — unterschiedliche Logik
-- **Status**: `open`
+- **Status**: `wontfix` (2026-04-03 — sequence_finisher.py geloescht, nur noch eine Logik)
 - **Problem**: consciousness.py: `wasted = step_count - output_count`.
   sequence_finisher.py: `wasted = min(errors * 2, steps)`. Komplett andere Logik.
 

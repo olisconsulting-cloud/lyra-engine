@@ -53,8 +53,8 @@ Python: 3.14, kein venv noetig.
 | Metrik | Aktuell (2026-04-03) | Ziel |
 |--------|----------------------|------|
 | Token-Verschwendung/Seq | ~5.000-9.000 | <3.000 |
-| Verifizierte Bugs | 7 offen | 0 |
-| Inaktive Module | 4 von 4 | 0 von 4 |
+| Verifizierte Bugs | 2 offen (H4, H6) | 0 |
+| Inaktive Module | 3 von 3 | 0 von 3 |
 | Dead Code Zeilen | ~50 | 0 |
 
 Aktualisiere diese Tabelle am Ende jeder Session die einen Bug fixt oder ein Modul aktiviert.
@@ -92,7 +92,8 @@ Nicht schneller. Nicht groesser. Besser. Stabiler. Effizienter. Sicherer.
 
 ## Aktueller Status (nach jeder Session aktualisieren)
 
-- **Naechster Fix**: C1 (combine_tools crash) — siehe BACKLOG.md
-- **Offene Bugs**: 7 (1 CRITICAL, 6 HIGH)
-- **Inaktive Module**: 4 (PerceptionPipeline, UnifiedMemory, SequenceRunner, SequenceFinisher)
-- **Letzte Session**: 2026-04-03 (Initiales Audit + .audit/ Setup)
+- **Naechster Fix**: T2 (Failure-Check entfernen, Quick-Win) — siehe BACKLOG.md
+- **Offene Bugs**: 2 (H4 Signaturen, H6 Fallback) + Token/Stabilitaet
+- **Gefixt**: C1 (combine_tools), H5 (JSON _load). H1-H3/A1d/A2/A3 wontfix (Modul geloescht)
+- **Inaktive Module**: 3 (PerceptionPipeline, UnifiedMemory, SequenceRunner)
+- **Letzte Session**: 2026-04-03 (Audit + Bugfixes)

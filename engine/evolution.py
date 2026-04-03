@@ -267,6 +267,44 @@ class ToolFoundry:
             self.api_key = ""
             self.api_url = "anthropic"
 
+    def _call_foundry_llm(self, prompt: str, max_tokens: int = 3000) -> str:
+        """LLM-Call fuer Tool-Generierung — Provider-unabhaengig.
+
+        Returns:
+            Antwort-Text oder FEHLER-String bei Problemen.
+        """
+        if self.api_url == "anthropic":
+            from anthropic import Anthropic
+            response = Anthropic().messages.create(
+                model=FOUNDRY_MODEL, max_tokens=max_tokens,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            return response.content[0].text.strip()
+        else:
+            import httpx
+            with httpx.Client(timeout=60.0) as client:
+                resp = client.post(
+                    self.api_url,
+                    headers={"Authorization": f"Bearer {self.api_key}",
+                             "Content-Type": "application/json"},
+                    json={"model": FOUNDRY_MODEL, "max_tokens": max_tokens,
+                          "messages": [{"role": "user", "content": prompt}]},
+                )
+            if resp.status_code != 200:
+                return f"FEHLER: API {resp.status_code}"
+            return resp.json()["choices"][0]["message"]["content"].strip()
+
+    @staticmethod
+    def _strip_code_block(code: str) -> str:
+        """Entfernt Markdown-Code-Block-Wrapper falls vorhanden."""
+        if code.startswith("```"):
+            first_nl = code.find("\n")
+            if first_nl > 0:
+                code = code[first_nl + 1:]
+            if code.rstrip().endswith("```"):
+                code = code.rstrip()[:-3].rstrip()
+        return code
+
     def generate_tool(self, name: str, description: str, toolchain) -> str:
         """
         Generiert ein Tool via LLM-Call und registriert es.
@@ -296,45 +334,17 @@ Gib NUR den Python-Code zurueck. Kein Markdown, keine Erklaerung.
 Starte direkt mit import oder def."""
 
         try:
-            if self.api_url == "anthropic":
-                from anthropic import Anthropic
-                response = Anthropic().messages.create(
-                    model=FOUNDRY_MODEL, max_tokens=3000,
-                    messages=[{"role": "user", "content": prompt}],
-                )
-                code = response.content[0].text.strip()
-            else:
-                import httpx
-                with httpx.Client(timeout=60.0) as client:
-                    resp = client.post(
-                        self.api_url,
-                        headers={"Authorization": f"Bearer {self.api_key}",
-                                 "Content-Type": "application/json"},
-                        json={"model": FOUNDRY_MODEL, "max_tokens": 3000,
-                              "messages": [{"role": "user", "content": prompt}]},
-                    )
-                if resp.status_code != 200:
-                    return f"FEHLER bei Tool-Generierung: API {resp.status_code}"
-                code = resp.json()["choices"][0]["message"]["content"].strip()
+            code = self._call_foundry_llm(prompt)
+            if code.startswith("FEHLER"):
+                return f"FEHLER bei Tool-Generierung: {code}"
 
-            # Code-Block-Wrapper entfernen falls vorhanden
-            if code.startswith("```"):
-                first_nl = code.find("\n")
-                if first_nl > 0:
-                    code = code[first_nl + 1:]
-                if code.rstrip().endswith("```"):
-                    code = code.rstrip()[:-3].rstrip()
+            code = self._strip_code_block(code)
 
-            # Validierung: Muss run() haben
             if "def run(" not in code:
-                return f"FEHLER: Generierter Code hat keine run() Funktion"
+                return "FEHLER: Generierter Code hat keine run() Funktion"
 
-            # Ueber Toolchain registrieren (die testet und registriert)
             result = toolchain.create_tool(name, description, code)
-
-            # Loggen
             self._log_generation(name, description, result)
-
             return result
 
         except Exception as e:
@@ -368,19 +378,11 @@ Erstelle ein kombiniertes Tool namens '{new_name}' das:
 Gib NUR den Python-Code zurueck. Kein Markdown."""
 
         try:
-            response = self.client.messages.create(
-                model=FOUNDRY_MODEL,
-                max_tokens=4000,
-                messages=[{"role": "user", "content": prompt}],
-            )
+            code = self._call_foundry_llm(prompt, max_tokens=4000)
+            if code.startswith("FEHLER"):
+                return f"FEHLER bei Tool-Kombination: {code}"
 
-            code = response.content[0].text.strip()
-            if code.startswith("```"):
-                first_nl = code.find("\n")
-                if first_nl > 0:
-                    code = code[first_nl + 1:]
-                if code.rstrip().endswith("```"):
-                    code = code.rstrip()[:-3].rstrip()
+            code = self._strip_code_block(code)
 
             if "def run(" not in code:
                 return "FEHLER: Kombinierter Code hat keine run() Funktion"
@@ -475,8 +477,11 @@ class SelfBenchmark:
 
     def _load(self) -> list:
         if self.benchmark_path.exists():
-            with open(self.benchmark_path, "r", encoding="utf-8") as f:
-                return json.load(f)
+            try:
+                with open(self.benchmark_path, "r", encoding="utf-8") as f:
+                    return json.load(f)
+            except (json.JSONDecodeError, ValueError):
+                return []
         return []
 
     def _save(self):
@@ -835,8 +840,11 @@ class MetaCognition:
 
     def _load(self) -> list:
         if self.meta_path.exists():
-            with open(self.meta_path, "r", encoding="utf-8") as f:
-                return json.load(f)
+            try:
+                with open(self.meta_path, "r", encoding="utf-8") as f:
+                    return json.load(f)
+            except (json.JSONDecodeError, ValueError):
+                return []
         return []
 
     def _save(self):
