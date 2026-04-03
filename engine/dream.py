@@ -209,18 +209,52 @@ Antworte als JSON:
         """Wendet die Dream-Ergebnisse an."""
         applied = []
 
-        # Beliefs konsolidieren (Guard: nie leere Liste uebernehmen)
+        # Beliefs konsolidieren (Guard: nie leere Liste uebernehmen + Schema-Validierung)
         new_beliefs = result.get("consolidated_beliefs", [])
         if new_beliefs and len(new_beliefs) >= 3:
             beliefs_path = self.consciousness_path / "beliefs.json"
             try:
                 beliefs = self._safe_load_json(beliefs_path) or {}
-                beliefs["formed_from_experience"] = new_beliefs
-                with open(beliefs_path, "w", encoding="utf-8") as f:
-                    json.dump(beliefs, f, indent=2, ensure_ascii=False)
-                applied.append(f"Beliefs: {len(new_beliefs)} konsolidiert")
+                # Schema-Validierung: Nur Strings akzeptieren, max 30
+                validated = [b for b in new_beliefs if isinstance(b, str) and len(b) > 5][:30]
+                if len(validated) >= 3:
+                    # Bekannte Kategorie-Keys erhalten, nur formed_from_experience updaten
+                    _KNOWN_KEYS = {"about_self", "about_world", "about_oliver", "formed_from_experience"}
+                    for key in _KNOWN_KEYS:
+                        if key not in beliefs:
+                            beliefs[key] = []
+                    beliefs["formed_from_experience"] = validated
+                    with open(beliefs_path, "w", encoding="utf-8") as f:
+                        json.dump(beliefs, f, indent=2, ensure_ascii=False)
+                    applied.append(f"Beliefs: {len(validated)} konsolidiert")
+                else:
+                    applied.append(f"Beliefs: Validierung fehlgeschlagen ({len(validated)} von {len(new_beliefs)} gueltig)")
             except (OSError, json.JSONDecodeError) as e:
                 applied.append(f"Beliefs-Update fehlgeschlagen: {e}")
+
+        # Obsolete Beliefs entfernen (Dual-Loop — war bisher toter Code)
+        obsolete = result.get("obsolete_beliefs", [])
+        if obsolete:
+            beliefs_path = self.consciousness_path / "beliefs.json"
+            try:
+                beliefs = self._safe_load_json(beliefs_path) or {}
+                formed = beliefs.get("formed_from_experience", [])
+                before_count = len(formed)
+                # Entferne Beliefs die als obsolet markiert wurden
+                obsolete_lower = {o.lower().strip() for o in obsolete if isinstance(o, str)}
+                formed = [
+                    b for b in formed
+                    if (b if isinstance(b, str) else b.get("text", "")).lower().strip()
+                    not in obsolete_lower
+                ]
+                removed = before_count - len(formed)
+                if removed > 0:
+                    beliefs["formed_from_experience"] = formed
+                    with open(beliefs_path, "w", encoding="utf-8") as f:
+                        json.dump(beliefs, f, indent=2, ensure_ascii=False)
+                    applied.append(f"Obsolete Beliefs: {removed} entfernt")
+            except (OSError, json.JSONDecodeError):
+                pass
 
         # Strategien updaten
         strategy_updates = result.get("strategy_updates", [])
@@ -302,6 +336,41 @@ Antworte als JSON:
                 pass
 
         return ", ".join(applied) if applied else "Keine Aenderungen"
+
+    def _apply_recommendations(self, result: dict, goal_stack=None) -> str:
+        """Wandelt Dream-Empfehlungen in Goals um (max 2 pro Dream)."""
+        recommendations = result.get("recommendations", [])
+        if not recommendations or goal_stack is None:
+            return ""
+
+        try:
+            summary = goal_stack.get_summary()
+            # Nicht mehr als 5 aktive Goals
+            active_count = summary.count("[ ]") + summary.count("[→]") if summary else 0
+            if active_count >= 5:
+                return ""
+
+            created = 0
+            for rec in recommendations[:2]:
+                if not isinstance(rec, str) or len(rec) < 10:
+                    continue
+                # Duplikat-Check: Nicht erstellen wenn aehnlich existiert
+                if rec[:30].lower() in summary.lower():
+                    continue
+                goal_stack.create_goal(
+                    title=rec[:100],
+                    description=f"[Dream-Empfehlung] {rec[:300]}",
+                    priority="medium",
+                )
+                created += 1
+                if active_count + created >= 5:
+                    break
+
+            if created:
+                return f"{created} Dream-Empfehlungen als Goals erstellt"
+        except Exception as e:
+            logger.warning("Dream-Empfehlungen zu Goals fehlgeschlagen: %s", e)
+        return ""
 
     def _log_dream(self, result: dict, applied: str):
         """Loggt den Dream-Vorgang."""

@@ -146,14 +146,44 @@ class SemanticMemory:
 
     # === API ===
 
+    # Bekannte Goal-Typen fuer situativen Recall
+    GOAL_TYPES = {
+        "recherche", "tool_building", "bug_fix", "analyse",
+        "self_improvement", "documentation", "testing", "deployment",
+    }
+
+    @staticmethod
+    def classify_goal_type(focus: str) -> str:
+        """Leitet den Goal-Typ aus dem Fokus-String ab."""
+        focus_lower = focus.lower()
+        if any(w in focus_lower for w in ("recherche", "markt", "analyse", "research")):
+            return "recherche"
+        if any(w in focus_lower for w in ("tool", "bauen", "build", "create_tool", "generate")):
+            return "tool_building"
+        if any(w in focus_lower for w in ("bug", "fix", "fehler", "repair", "broken")):
+            return "bug_fix"
+        if any(w in focus_lower for w in ("audit", "analyse", "review", "check", "prüf")):
+            return "analyse"
+        if any(w in focus_lower for w in ("selbst", "self", "optimier", "improv", "evolution")):
+            return "self_improvement"
+        if any(w in focus_lower for w in ("doku", "readme", "docs", "beschreib")):
+            return "documentation"
+        if any(w in focus_lower for w in ("test", "benchmark", "verif")):
+            return "testing"
+        return "sonstiges"
+
     def store(self, content: str, metadata: Optional[dict] = None) -> str:
-        """Speichert eine Erinnerung mit semantischem Index und Importance-Score."""
+        """Speichert eine Erinnerung mit semantischem Index, Importance-Score und Goal-Typ."""
         tokens = self._tokenize(content)
         if not tokens:
             return "Nichts zu speichern."
 
         metadata = metadata or {}
         importance = self._compute_importance(content, metadata)
+
+        # Goal-Typ aus Kontext ableiten (falls nicht explizit gesetzt)
+        if "goal_type" not in metadata:
+            metadata["goal_type"] = self.classify_goal_type(content)
 
         entry_id = f"sem_{self.index.get('doc_count', 0)}_{datetime.now(timezone.utc).strftime('%H%M%S%f')[:10]}"
         entry = {
@@ -273,16 +303,21 @@ class SemanticMemory:
         self.index["entries"] = all_entries
         self._save_index()
 
-    def search(self, query: str, top_k: int = 5) -> list[dict]:
+    def search(self, query: str, top_k: int = 5,
+               goal_type: Optional[str] = None) -> list[dict]:
         """
-        Findet die relevantesten Erinnerungen — TF-IDF + Bigram-Matching.
+        Findet die relevantesten Erinnerungen — TF-IDF + Bigram + Goal-Typ.
 
-        Upgrade ueber einfaches TF-IDF: Nutzt auch Bigrams (Wortpaare)
-        fuer bessere semantische Treffer.
+        Compound-Score: 0.6 * cosine_similarity + 0.2 * goal_type_match + 0.2 * importance
+        Goal-Typ ist ein Boost, kein Filter — damit auch cross-domain Treffer moeglich.
         """
         query_tokens = self._tokenize(query)
         if not query_tokens:
             return []
+
+        # Goal-Typ aus Query ableiten wenn nicht explizit
+        if goal_type is None:
+            goal_type = self.classify_goal_type(query)
 
         # Bigrams hinzufuegen fuer besseres Matching
         query_bigrams = [f"{query_tokens[i]}_{query_tokens[i+1]}"
@@ -305,17 +340,21 @@ class SemanticMemory:
             entry_vec = self._tfidf_vector(entry_all)
             sim = self._cosine_similarity(query_vec, entry_vec)
             if sim > 0.005:
-                # Gewichteter Score: Similarity + Importance-Boost
                 importance = entry.get("importance", 0.3)
-                weighted = sim + (importance * 0.2)
+                # Goal-Typ-Boost: 0.2 wenn gleicher Typ, 0 sonst
+                entry_goal_type = entry.get("metadata", {}).get("goal_type", "")
+                type_boost = 0.2 if (goal_type and entry_goal_type == goal_type) else 0.0
+                # Compound-Score: Similarity + Importance + Goal-Typ
+                weighted = (sim * 0.6) + (importance * 0.2) + type_boost
                 scored.append((weighted, sim, entry))
 
         scored.sort(key=lambda x: x[0], reverse=True)
 
         results = []
         for weighted, sim, entry in scored[:top_k]:
-            # Access-Counter erhoehen (haeufig abgerufene Memories bleiben laenger)
+            # Access-Counter erhoehen + Importance boosten (haeufig abgerufene Memories werden wichtiger)
             entry["access_count"] = entry.get("access_count", 0) + 1
+            entry["importance"] = min(1.0, entry.get("importance", 0.3) + 0.02)
             results.append({
                 "content": entry["content"],
                 "similarity": round(sim, 4),
@@ -657,11 +696,15 @@ class StrategyEvolution:
         self._save_errors()
 
     def _prune_old_rules(self):
-        """Entfernt Regeln die seit 20+ Erfolgen nicht mehr relevant waren."""
+        """Entfernt Regeln die seit 20+ Erfolgen nicht mehr relevant waren. Hard-Cap bei 30."""
         self.rules = [
             r for r in self.rules
             if r.get("successes_since", 0) < 20 or r.get("type") == "positive"
         ]
+        # Hard-Cap: Max 30 Regeln, aelteste zuerst entfernen
+        if len(self.rules) > 30:
+            self.rules.sort(key=lambda r: r.get("created", ""), reverse=True)
+            self.rules = self.rules[:30]
 
     def record_process_pattern(self, pattern_type: str, description: str,
                                occurrences: int = 1):
@@ -710,6 +753,85 @@ class StrategyEvolution:
             for rule in process_rules[:3]:
                 lines.append(f"  > [{rule.get('occurrences', 0)}x] {rule['strategy']}")
 
+        return "\n".join(lines)
+
+    def validate_against_outcome(self, beliefs: list, outcome_positive: bool,
+                                  context: str = "") -> list:
+        """Dual-Loop: Prueft ob Beliefs mit dem Sequenz-Ergebnis konsistent sind.
+
+        Bei Widerspruch: Contradiction-Counter hoch. Bei 5+ → Belief wird challenged.
+        Bei Bestaetigung: Confidence steigt.
+
+        Args:
+            beliefs: Liste von Belief-Dicts (oder Strings fuer Rueckwaerts-Kompatibilitaet)
+            outcome_positive: War die Sequenz erfolgreich? (Rating >= 6)
+            context: Kontext der Sequenz (Goal-Fokus)
+
+        Returns:
+            Aktualisierte Belief-Liste mit Metadata.
+        """
+        updated = []
+        for belief in beliefs:
+            # Rueckwaerts-kompatibel: Strings in Dicts umwandeln
+            if isinstance(belief, str):
+                belief = {
+                    "text": belief,
+                    "confidence": 0.7,
+                    "contradictions": 0,
+                    "confirmations": 0,
+                    "status": "active",
+                }
+
+            text = belief.get("text", str(belief))
+            conf = belief.get("confidence", 0.7)
+            contras = belief.get("contradictions", 0)
+            confirms = belief.get("confirmations", 0)
+
+            # Einfache Heuristik: Wenn Belief "wichtig" klingt und Ergebnis negativ → Challenge
+            # Wenn positives Ergebnis → Konfirmation
+            if outcome_positive:
+                confirms += 1
+                # Confidence steigt langsam bei Bestaetigung
+                conf = min(1.0, conf + 0.02)
+            else:
+                # Bei negativem Outcome: Confidence senken (nicht sofort loeschen)
+                contras += 1
+                conf = max(0.1, conf - 0.05)
+
+            status = "active"
+            if contras >= 5 and contras > confirms:
+                status = "challenged"
+                conf = max(0.1, conf * 0.5)  # Halbierte Confidence
+
+            updated.append({
+                "text": text,
+                "confidence": round(conf, 2),
+                "contradictions": contras,
+                "confirmations": confirms,
+                "status": status,
+            })
+
+        return updated
+
+    @staticmethod
+    def format_beliefs_for_prompt(beliefs: list) -> str:
+        """Formatiert Beliefs fuer den System-Prompt mit Confidence-Markierung."""
+        if not beliefs:
+            return ""
+        lines = []
+        for b in beliefs[:10]:  # Max 10 im Prompt
+            if isinstance(b, str):
+                lines.append(f"  - {b[:80]}")
+                continue
+            text = b.get("text", "")[:80]
+            conf = b.get("confidence", 0.7)
+            status = b.get("status", "active")
+            if status == "challenged":
+                lines.append(f"  - ⚠ UMSTRITTEN [{conf:.0%}]: {text}")
+            elif conf >= 0.8:
+                lines.append(f"  - ✓ [{conf:.0%}] {text}")
+            else:
+                lines.append(f"  - [{conf:.0%}] {text}")
         return "\n".join(lines)
 
 

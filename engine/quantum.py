@@ -62,10 +62,22 @@ class FailureMemory:
         """Speichert einen strukturierten Fehler."""
         self.failures.append({
             "timestamp": datetime.now(timezone.utc).isoformat(),
+            "type": "failure",
             "goal": goal[:200],
             "approach": approach[:200],
             "error": error[:300],
             "lesson": lesson[:200],
+        })
+        self._save()
+
+    def record_success(self, tool: str, goal: str, approach: str):
+        """Speichert einen bewaehrten Ansatz (positives Reinforcement)."""
+        self.failures.append({
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "type": "success",
+            "goal": goal[:200],
+            "approach": approach[:200],
+            "tool": tool,
         })
         self._save()
 
@@ -123,22 +135,42 @@ class FailureMemory:
         return "\n".join(lines)
 
     def get_summary(self) -> str:
-        """Kurze Zusammenfassung fuer den System-Prompt."""
+        """Kurze Zusammenfassung fuer den System-Prompt (Fehler + Erfolge)."""
         if not self.failures:
             return ""
-        # Top-Lektionen (dedupliziert)
+
+        # Top-Lektionen aus Fehlern (dedupliziert)
         lessons = []
         seen = set()
         for f in reversed(self.failures):
+            if f.get("type") == "success":
+                continue
             lesson = f.get("lesson", "")
             if lesson and lesson not in seen:
                 lessons.append(lesson)
                 seen.add(lesson)
             if len(lessons) >= 3:
                 break
-        if not lessons:
-            return ""
-        return "TOP-LEKTIONEN AUS FEHLERN:\n" + "\n".join(f"  - {l}" for l in lessons)
+
+        # Top bewaehrte Ansaetze (dedupliziert)
+        successes = []
+        seen_s = set()
+        for f in reversed(self.failures):
+            if f.get("type") != "success":
+                continue
+            approach = f.get("approach", "")
+            if approach and approach not in seen_s:
+                successes.append(approach)
+                seen_s.add(approach)
+            if len(successes) >= 2:
+                break
+
+        parts = []
+        if lessons:
+            parts.append("TOP-LEKTIONEN AUS FEHLERN:\n" + "\n".join(f"  - {l}" for l in lessons))
+        if successes:
+            parts.append("BEWAEHRTE ANSAETZE:\n" + "\n".join(f"  + {s[:100]}" for s in successes))
+        return "\n".join(parts)
 
 
 # ============================================================
@@ -211,7 +243,7 @@ class CriticAgent:
             }
         """
         if not self.api_key:
-            return {"score": 5, "is_improvement": None, "side_effects": "Kein Critic verfuegbar — Bewertung nicht moeglich", "suggestion": ""}
+            return {"score": 0, "is_improvement": False, "side_effects": "Kein Critic verfuegbar — manuelles Review noetig", "suggestion": "API-Key setzen fuer automatische Bewertung"}
 
         prompt = f"""Bewerte diese Code-Aenderung auf einer Skala von 1-10.
 
@@ -235,7 +267,7 @@ Antworte als JSON:
         try:
             text = self._call_api(prompt, max_tokens=500)
             if not text:
-                return {"score": 5, "is_improvement": None, "side_effects": "API-Fehler — Bewertung nicht moeglich", "suggestion": ""}
+                return {"score": 0, "is_improvement": False, "side_effects": "API-Fehler — manuelles Review noetig", "suggestion": ""}
 
             # JSON parsen
             import re
@@ -250,10 +282,10 @@ Antworte als JSON:
                 match = re.search(r"\{.*\}", cleaned, re.DOTALL)
                 if match:
                     return json.loads(match.group(0))
-                return {"score": 5, "is_improvement": None, "side_effects": "Antwort nicht parsebar — Bewertung nicht moeglich", "suggestion": ""}
+                return {"score": 0, "is_improvement": False, "side_effects": "Antwort nicht parsebar — manuelles Review noetig", "suggestion": ""}
 
         except Exception as e:
-            return {"score": 5, "is_improvement": None, "side_effects": f"Critic-Fehler: {str(e)[:100]}", "suggestion": ""}
+            return {"score": 0, "is_improvement": False, "side_effects": f"Critic-Fehler: {str(e)[:100]} — manuelles Review noetig", "suggestion": ""}
 
 
 # ============================================================

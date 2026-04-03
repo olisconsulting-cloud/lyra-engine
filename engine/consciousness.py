@@ -41,13 +41,14 @@ from .quantum import FailureMemory, CriticAgent, PromptMutator, SkillComposer
 from .sequence_planner import SequencePlanner
 from .checkpoint import CheckpointManager
 from .meta_rules import MetaRuleEngine
+from .skill_library import SkillLibrary
 from . import config
 from .config import safe_json_write, safe_json_read
 
 logger = logging.getLogger(__name__)
 
 MAX_STEPS_PER_SEQUENCE = 40          # Von Oliver auf 40 erhoeht (vorher 15)
-MAX_INPUT_TOKENS_PER_SEQUENCE = 400_000  # Von Oliver auf 400k erhoeht (vorher 250k)
+MAX_INPUT_TOKENS_PER_SEQUENCE = 120_000  # Kimi K2.5 Context Window = 128k, Sicherheitsmarge
 MAX_TOKENS = 16000                    # Max Output-Tokens pro LLM-Call
 
 def _normalize_spin_key(tool_name: str, raw_name: str) -> str:
@@ -580,6 +581,7 @@ class ConsciousnessEngine:
         self.planner = SequencePlanner(self.consciousness_path)
         self.checkpointer = CheckpointManager(self.consciousness_path)
         self.meta_rules = MetaRuleEngine(self.consciousness_path)
+        self.skill_library = SkillLibrary(config.DATA_PATH)
 
         # Genehmigungspflicht — diese Tools brauchen Olivers OK
         # NUR pip_install braucht Genehmigung (laedt aus dem Internet)
@@ -768,12 +770,70 @@ class ConsciousnessEngine:
         ]:
             safe_json_write(path, data)
 
+    # === Adaptives Step-Budget (lernt aus Erfahrung) ===
+
+    _TASK_TYPE_KEYWORDS = {
+        "cooldown": (["cooldown"], 10),
+        "recherche": (["recherche", "research", "analyse", "analyze", "suche", "vergleich", "markt"], 15),
+        "learning": (["lernen", "learning", "ueben", "training", "skill"], 20),
+        "evolution": (["evolution", "selbst", "improve", "optimier", "refactor"], 20),
+        "projekt": (["projekt", "project", "implementier", "build", "erstell", "develop", "deploy"], 35),
+    }
+
+    def _classify_task(self, mode: dict, focus: str) -> str:
+        """Klassifiziert den Task-Typ anhand von Modus + Focus."""
+        mode_name = mode.get("mode", "execution")
+        if mode_name in ("cooldown", "learning", "evolution"):
+            return mode_name
+        focus_lower = focus.lower()
+        for task_type, (keywords, _) in self._TASK_TYPE_KEYWORDS.items():
+            if any(kw in focus_lower for kw in keywords):
+                return task_type
+        return "standard"
+
+    def _get_step_budget(self, mode: dict, focus: str) -> int:
+        """
+        Adaptives Step-Budget — lernt aus Erfahrung.
+
+        1. Task klassifizieren (Modus + Keywords)
+        2. Historischen Durchschnitt fuer diesen Task-Typ checken
+        3. Wenn Historie: Durchschnitt + 20% Puffer (aber min 8, max 35)
+        4. Wenn keine Historie: Default-Wert pro Typ
+        """
+        task_type = self._classify_task(mode, focus)
+
+        # Historische Steps aus Erfahrung lernen
+        history = self._get_task_type_history(task_type)
+        if history:
+            avg_steps = sum(history) / len(history)
+            learned_budget = int(avg_steps * 1.2)
+            return max(8, min(35, learned_budget))
+
+        # Defaults fuer unbekannte Task-Typen
+        defaults = {"cooldown": 10, "recherche": 15, "learning": 20,
+                     "evolution": 20, "projekt": 35, "standard": 25}
+        return defaults.get(task_type, 25)
+
+    def _get_task_type_history(self, task_type: str) -> list[int]:
+        """Holt historische Step-Counts fuer einen Task-Typ."""
+        data = safe_json_read(self.consciousness_path / "step_history.json", default={})
+        return data.get(task_type, [])[-10:]
+
+    def _record_step_history(self, task_type: str, steps_used: int):
+        """Speichert wie viele Steps ein Task-Typ tatsaechlich gebraucht hat."""
+        history_path = self.consciousness_path / "step_history.json"
+        data = safe_json_read(history_path, default={})
+        if task_type not in data:
+            data[task_type] = []
+        data[task_type].append(steps_used)
+        data[task_type] = data[task_type][-20:]
+        safe_json_write(history_path, data)
+
     # === System-Prompt ===
 
-    def _build_system_prompt(self) -> str:
+    def _build_static_prompt(self) -> str:
+        """Baut den statischen Teil des System-Prompts (einmal gecacht, aendert sich nie zur Laufzeit)."""
         name = self.genesis.get("name", "Lyra")
-
-        # Mission + Preferences laden (gecached nach erstem Load)
         if not hasattr(self, "_cached_mission"):
             self._cached_mission = self._load_mission()
         if not hasattr(self, "preferences"):
@@ -785,7 +845,6 @@ class ConsciousnessEngine:
         owner_name = owner.get("name", mission.get("owner_name", "Owner"))
         mission_text = mission.get("mission_text", "Arbeite autonom und verbessere dich")
 
-        # Kommunikations-Stil aus Tech-Level ableiten
         tech_level = owner.get("tech_level", "intermediate")
         comm_hint = {
             "beginner": "Erklaere alles einfach und Schritt fuer Schritt.",
@@ -793,9 +852,34 @@ class ConsciousnessEngine:
             "expert": "Nur das Wesentliche, keine Erklaerungen.",
         }.get(tech_level, "")
 
-        # Grenzen aus Preferences
         boundaries = prefs.get("boundaries", "")
         boundaries_line = f"\nGRENZEN: {boundaries}" if boundaries else ""
+
+        return f"""Du bist {name or '(waehle deinen Namen)'} — autonome KI, Partnerin von {owner_name}.
+Mission: {mission_text}
+{comm_hint}{boundaries_line}
+REGELN:
+- Oliver schreibt → SOFORT ausfuehren, nicht philosophieren
+- Keine Aufgabe → Arbeite an Zielen ODER verbessere dich selbst
+- EVIDENCE-BASED DEVELOPMENT (Pflicht fuer alle Projekte):
+  1. create_project mit acceptance_criteria → PLAN.md + tests.py werden generiert
+  2. Tests in tests.py ZUERST implementieren (Tests-First!)
+  3. Code schreiben der die Tests besteht
+  4. run_project_tests → MUSS ALL_TESTS_PASSED zeigen
+  5. complete_project → prueft Test-Evidenz + Kriterien automatisch
+  Kein Projekt ist fertig ohne bestandene Tests. Keine Ausnahmen.
+- Tools bauen = permanente Faehigkeit | web_search/web_read zum Lernen
+- read_own_code + modify_own_code = Selbst-Evolution (Dual-Review)
+- finish_sequence wenn fertig | send_telegram = ECHTE Nachricht
+- Projekte in 'projects/', Tools in 'tools/'
+- DATEI-QUALITAET: Grosse Markdown-Dateien (>50 Zeilen) in ABSCHNITTEN schreiben — nicht den ganzen Inhalt in einem write_file. Pruefe nach dem Schreiben mit read_file ob die Datei vollstaendig ist. Alle Saetze muessen vollstaendig sein, keine abgebrochenen Woerter, keine offenen Klammern.
+- LOOP-GUARD: Wenn create_project "FEHLER: AEHNLICHES PROJEKT EXISTIERT" oder "FEHLER: Projekt existiert bereits" zurueckgibt, SOFORT zum bestehenden Projekt wechseln (read_file, write_file). NIEMALS das gleiche Projekt nochmal erstellen. Wenn ein Sub-Goal blockiert ist, nutze finish_sequence und erklaere warum.
+- PROZESS-REFLEXION: Bei finish_sequence beschreibe nicht nur WAS du erreicht hast, sondern WIE du gearbeitet hast. key_decision: Was war die wichtigste Entscheidung? bottleneck: Was hat dich gebremst (2-3 Saetze)? new_beliefs: Was hast du ueber deinen Arbeitsprozess gelernt?"""
+
+    def _build_system_prompt(self) -> str:
+        # Statischen Teil cachen (spart ~800-1000 Tokens/Sequenz)
+        if not hasattr(self, "_static_prompt"):
+            self._static_prompt = self._build_static_prompt()
 
         # Context-Dateien Index (nur Dateinamen, nicht Inhalt)
         context_index = self._get_context_index()
@@ -804,7 +888,12 @@ class ConsciousnessEngine:
         beliefs_parts = []
         for cat, items in self.beliefs.items():
             if items:
-                beliefs_parts.append(f"  {cat}: {'; '.join(str(i)[:80] for i in items[:5])}")
+                # Dual-Loop: Beliefs mit Confidence formatieren
+                formatted = self.strategies.format_beliefs_for_prompt(items[:8])
+                if formatted:
+                    beliefs_parts.append(f"  {cat}:\n{formatted}")
+                else:
+                    beliefs_parts.append(f"  {cat}: {'; '.join(str(i)[:80] for i in items[:5])}")
         beliefs_str = "\n".join(beliefs_parts) if beliefs_parts else "  (keine)"
 
         goals_summary = self.goal_stack.get_summary()
@@ -827,15 +916,16 @@ class ConsciousnessEngine:
         failure_lessons = self.failure_memory.get_summary()
         compound_stats = self.composer.get_compound_stats()
 
+        # Optionale Sektionen mit Size-Cap (verhindert unbegrenztes Prompt-Wachstum)
         optional_sections = []
         if strategy_rules:
-            optional_sections.append(strategy_rules)
+            optional_sections.append(strategy_rules[:500])
         if meta_insights:
-            optional_sections.append(meta_insights)
+            optional_sections.append(meta_insights[:300])
         if silent_warnings:
-            optional_sections.append(silent_warnings)
+            optional_sections.append(silent_warnings[:200])
         if failure_lessons:
-            optional_sections.append(failure_lessons)
+            optional_sections.append(failure_lessons[:300])
         optional_block = "\n".join(optional_sections)
 
         now = datetime.now(timezone.utc)
@@ -846,11 +936,9 @@ class ConsciousnessEngine:
         time_str = local_time.strftime("%H:%M")
         weekday = ["Montag", "Dienstag", "Mittwoch", "Donnerstag", "Freitag", "Samstag", "Sonntag"][local_time.weekday()]
 
-        return f"""Du bist {name or '(waehle deinen Namen)'} — autonome KI, Partnerin von {owner_name}.
-HEUTE: {weekday}, {date_str}, {time_str} Uhr (Deutschland)
-Mission: {mission_text}
-{comm_hint}
-Seq: {self.sequences_total} | Calls: {self.state.get('total_tool_calls', 0)}{boundaries_line}{context_line}
+        # Dynamischer Teil (aendert sich pro Sequenz) + gecachter statischer Teil
+        dynamic = f"""HEUTE: {weekday}, {date_str}, {time_str} Uhr (Deutschland)
+Seq: {self.sequences_total} | Calls: {self.state.get('total_tool_calls', 0)}{context_line}
 
 BELIEFS: {beliefs_str}
 ZIELE: {goals_summary}
@@ -862,24 +950,9 @@ LEISTUNG: {rating_trend} | EFFIZIENZ: {efficiency_trend}
 AUDIT: {last_audit} | REVIEWS: {review_stats}
 BENCHMARKS: {benchmark_trend} | FOUNDRY: {foundry_status} | COMPOUND: {compound_stats}
 {optional_block}
-REGELN:
-- Oliver schreibt → SOFORT ausfuehren, nicht philosophieren
-- Keine Aufgabe → Arbeite an Zielen ODER verbessere dich selbst
-- EVIDENCE-BASED DEVELOPMENT (Pflicht fuer alle Projekte):
-  1. create_project mit acceptance_criteria → PLAN.md + tests.py werden generiert
-  2. Tests in tests.py ZUERST implementieren (Tests-First!)
-  3. Code schreiben der die Tests besteht
-  4. run_project_tests → MUSS ALL_TESTS_PASSED zeigen
-  5. complete_project → prueft Test-Evidenz + Kriterien automatisch
-  Kein Projekt ist fertig ohne bestandene Tests. Keine Ausnahmen.
-- Tools bauen = permanente Faehigkeit | web_search/web_read zum Lernen
-- read_own_code + modify_own_code = Selbst-Evolution (Dual-Review)
-- finish_sequence wenn fertig | send_telegram = ECHTE Nachricht
-- Projekte in 'projects/', Tools in 'tools/'
-- SEQUENZ-PLANUNG: Du hast max {MAX_STEPS_PER_SEQUENCE} Steps. Plane am Anfang was du schaffen willst. Wenn du ein sinnvolles Ergebnis hast, nutze finish_sequence — auch nach 5 Steps. Schreibe in die Summary WAS du herausgefunden hast (Erkenntnisse, Zahlen, Fakten). Qualitaet > Quantitaet.
-- DATEI-QUALITAET: Grosse Markdown-Dateien (>50 Zeilen) in ABSCHNITTEN schreiben — nicht den ganzen Inhalt in einem write_file. Pruefe nach dem Schreiben mit read_file ob die Datei vollstaendig ist. Alle Saetze muessen vollstaendig sein, keine abgebrochenen Woerter, keine offenen Klammern.
-- LOOP-GUARD: Wenn create_project "FEHLER: AEHNLICHES PROJEKT EXISTIERT" oder "FEHLER: Projekt existiert bereits" zurueckgibt, SOFORT zum bestehenden Projekt wechseln (read_file, write_file). NIEMALS das gleiche Projekt nochmal erstellen. Wenn ein Sub-Goal blockiert ist, nutze finish_sequence und erklaere warum.
-- PROZESS-REFLEXION: Bei finish_sequence beschreibe nicht nur WAS du erreicht hast, sondern WIE du gearbeitet hast. key_decision: Was war die wichtigste Entscheidung? bottleneck: Was hat dich gebremst (2-3 Saetze)? new_beliefs: Was hast du ueber deinen Arbeitsprozess gelernt?"""
+SEQUENZ-PLANUNG: Du hast max {MAX_STEPS_PER_SEQUENCE} Steps. Plane am Anfang was du schaffen willst. Wenn du ein sinnvolles Ergebnis hast, nutze finish_sequence — auch nach 5 Steps. Schreibe in die Summary WAS du herausgefunden hast (Erkenntnisse, Zahlen, Fakten). Qualitaet > Quantitaet."""
+
+        return self._static_prompt + "\n" + dynamic
 
     # === Sequenz-Memory ===
 
@@ -1062,6 +1135,12 @@ REGELN:
         focus = self.goal_stack.get_current_focus()
         parts.append(chr(10) + focus)
 
+        # Skill-Vorschlag: Bewaehrtes Vorgehen fuer diesen Goal-Typ
+        goal_type = self.semantic_memory.classify_goal_type(focus)
+        skill_prompt = self.skill_library.build_skill_prompt(goal_type)
+        if skill_prompt:
+            parts.append(skill_prompt)
+
         # Existierende Projekte zum Fokus anzeigen (Anti-Loop, max 10)
         if "FOKUS:" in focus and hasattr(self, "actions") and hasattr(self.actions, "projects_path"):
             try:
@@ -1076,8 +1155,8 @@ REGELN:
                         hint += " | HINWEIS: Erstelle KEIN neues Projekt wenn ein passendes existiert!"
                         hint += " Nutze read_file/write_file um am bestehenden Projekt weiterzuarbeiten."
                         parts.append(hint)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning("Perception: Projekt-Liste konnte nicht geladen werden: %s", e)
 
         # Umgebung
         env = self.perceiver._scan_home()
@@ -1102,7 +1181,7 @@ REGELN:
                 parts.append(f"  - [{score:.2f}] {m.get('content', '')[:200]}")
 
         # Failure-Memory + Skill-Komposition: Vor jeder Sequenz checken
-        focus = self.goal_stack.get_current_focus()
+        # (focus wurde oben schon geholt — wiederverwenden)
         failure_check = self.failure_memory.check(focus)
 
         # Skill-Komposition: Relevante existierende Tools anzeigen
@@ -1229,11 +1308,17 @@ REGELN:
         else:
             self.skills.record_success(name)
             self.strategies.record_success(name)
-            # Semantische Memory: Wichtige Ergebnisse speichern
+            # Success-Memory: Bewaehrte Ansaetze fuer positives Reinforcement
+            if name in ("write_file", "create_tool", "create_project", "complete_subgoal", "complete_project"):
+                focus = self.goal_stack.get_current_focus()
+                approach = f"{name}: {str(tool_input)[:100]}"
+                self.failure_memory.record_success(name, focus[:100], approach)
+            # Semantische Memory: Wichtige Ergebnisse mit Goal-Typ speichern
             if name in ("write_file", "create_tool", "create_project", "modify_own_code"):
+                current_goal_type = self.semantic_memory.classify_goal_type(focus)
                 self.semantic_memory.store(
                     f"{name}: {str(tool_input)[:200]} → {result[:200]}",
-                    metadata={"tool": name},
+                    metadata={"tool": name, "goal_type": current_goal_type},
                 )
             # Output-Tracking
             if name == "write_file":
@@ -1779,6 +1864,21 @@ REGELN:
                     formed.append(belief)
         self.beliefs["formed_from_experience"] = formed[-30:]
 
+        # Dual-Loop: Beliefs gegen Sequenz-Ergebnis validieren
+        rating_val = tool_input.get("performance_rating", 5)
+        outcome_positive = rating_val >= 6
+        validated = self.strategies.validate_against_outcome(
+            self.beliefs.get("formed_from_experience", []),
+            outcome_positive,
+            context=summary[:200],
+        )
+        self.beliefs["formed_from_experience"] = validated[-30:]
+
+        # Challenged Beliefs ausgeben
+        challenged = [b for b in validated if isinstance(b, dict) and b.get("status") == "challenged"]
+        if challenged:
+            print(f"  ⚠ {len(challenged)} Belief(s) in Frage gestellt (Dual-Loop)")
+
         # Prozess-Metriken automatisch berechnen
         output_count = self._seq_files_written + self._seq_tools_built
         total_steps = max(self._seq_step_count, 1)
@@ -1847,8 +1947,8 @@ REGELN:
                         alert[:200],
                         occurrences=2,
                     )
-        except Exception:
-            pass  # Nicht-kritisch — darf Sequenz nicht crashen
+        except Exception as e:
+            logger.warning("Meta-Alert-Verarbeitung fehlgeschlagen: %s", e)
 
         # Reflexion speichern (bisher nie aufgerufen — Memory-Schicht war tot)
         if bottleneck or next_time or tool_input.get("rating_reason"):
@@ -1893,6 +1993,23 @@ REGELN:
         )
         if plan_eval.get("score", 0) <= 3:
             print(f"  Plan-Score: {plan_eval.get('score')}/10 — {plan_eval.get('lesson', '')[:80]}")
+
+        # Skill-Extraktion: Bei Erfolg (Score >= 7 + Rating >= 7) als Template speichern
+        plan = self.planner.get_active_plan()
+        plan_score = plan_eval.get("score", 0)
+        goal_type = self.semantic_memory.classify_goal_type(
+            self.goal_stack.get_current_focus()
+        )
+        skill_id = self.skill_library.extract_from_sequence(
+            plan_goal=plan.get("goal", summary[:100]),
+            plan_score=plan_score,
+            summary=summary,
+            tool_sequence=[],  # Wird spaeter aus Tracking gefuellt
+            goal_type=goal_type,
+            rating=rating,
+        )
+        if skill_id:
+            print(f"  Neuer Skill extrahiert: {skill_id}")
 
         # Meta-Regeln aus Erfahrung ableiten
         self.meta_rules.learn_from_metacognition(
@@ -2209,7 +2326,7 @@ REGELN:
 
         except Exception as e:
             # Bei Fehler: Nachricht trotzdem in Inbox fuer naechste Sequenz
-            pass
+            logger.warning("Instant-Reply fehlgeschlagen: %s", e)
 
     def _send_daily_briefing(self):
         """Morgen-Briefing per Telegram — einmal am Tag."""
@@ -2293,6 +2410,13 @@ REGELN:
                     print(f"  {'=' * 40}")
                     print(f"  DREAM — Memory-Konsolidierung...")
                     result = self.dream.dream()
+                    # Dream-Empfehlungen als Goals (Feedback-Loop schliessen)
+                    dream_log = safe_json_read(self.dream.dream_log_path, default=[])
+                    if dream_log:
+                        last_dream = dream_log[-1]
+                        rec_result = self.dream._apply_recommendations(last_dream, self.goal_stack)
+                        if rec_result:
+                            result += f" | {rec_result}"
                     # Memory-Consolidation: Fibonacci-Decay auf Experiences
                     try:
                         removed = self.memory.consolidate(max_per_bucket=5)
@@ -2449,11 +2573,20 @@ REGELN:
                 elif tool_name in self._READ_TOOLS:
                     # Lese-Tools: Adaptiv kuerzen (aelter = kuertzer)
                     if len(original) > read_limit:
-                        block["content"] = original[:read_limit] + f"\n[...gekuerzt auf {read_limit} von {len(original)} Zeichen]"
+                        # JSON-sicher: Am letzten Newline vor dem Limit schneiden
+                        cut = original[:read_limit]
+                        last_nl = cut.rfind("\n")
+                        if last_nl > read_limit // 2:
+                            cut = cut[:last_nl]
+                        block["content"] = cut + f"\n[...gekuerzt auf {len(cut)} von {len(original)} Zeichen]"
 
                 elif len(original) > 1500:
-                    # Fallback: Nur sehr grosse unbekannte Blocks kuerzen
-                    block["content"] = original[:800] + "\n[...gekuerzt]"
+                    # Fallback: Nur sehr grosse unbekannte Blocks kuerzen (Newline-safe)
+                    cut = original[:800]
+                    last_nl = cut.rfind("\n")
+                    if last_nl > 400:
+                        cut = cut[:last_nl]
+                    block["content"] = cut + "\n[...gekuerzt]"
 
     @staticmethod
     def _find_tool_name_for_id(messages: list, user_idx: int, tool_use_id: str) -> str:
@@ -2670,8 +2803,8 @@ REGELN:
         try:
             if self.actions.projects_path.exists():
                 result = any(self.actions.projects_path.iterdir())
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("Projekt-Context-Check fehlgeschlagen: %s", e)
         if not result:
             focus = self.goal_stack.get_current_focus()
             result = "projekt" in focus.lower() or "project" in focus.lower()
@@ -2792,7 +2925,12 @@ REGELN:
         escalated_tiers = set()  # Tiers die durch reaktive Eskalation hinzukamen
         self._project_context_cache = None  # Cache pro Sequenz zuruecksetzen
 
-        for step in range(MAX_STEPS_PER_SEQUENCE):
+        # Adaptives Step-Budget (spart 30-40% Tokens bei einfachen Tasks)
+        step_budget = self._get_step_budget(mode, focus)
+        self._current_task_type = self._classify_task(mode, focus)
+        self._token_warning_sent = False  # Reset pro Sequenz
+
+        for step in range(step_budget):
             # Step 0: Alle Tools mit vollen Definitionen (Phi lernt das Angebot)
             # Steps 1+: Basis + eskalierte Tiers, kompakte Definitionen
             if step == 0:
@@ -2829,13 +2967,24 @@ REGELN:
                     "Schreibe JETZT dein Zwischenergebnis und nutze finish_sequence."
                 )
 
-            # Token-Budget als Sicherheitsnetz
-            if self.sequence_input_tokens >= MAX_INPUT_TOKENS_PER_SEQUENCE:
-                print(f"  [Token-Limit erreicht]")
-                # Letzten LLM-Gedanken retten fuer Kontext-Kontinuitaet
+            # Intelligentes Token-Budget: Soft-Limit bei 80%, Graceful-Finish bei 95%
+            token_usage_pct = self.sequence_input_tokens / MAX_INPUT_TOKENS_PER_SEQUENCE
+
+            if token_usage_pct >= 0.80 and not getattr(self, "_token_warning_sent", False):
+                # 80% — Phi warnen, er soll bald abschliessen
+                self._token_warning_sent = True
+                cached_system_prompt += (
+                    f"\n\n⚠ TOKEN-BUDGET: {token_usage_pct:.0%} verbraucht "
+                    f"({self.sequence_input_tokens:,} von {MAX_INPUT_TOKENS_PER_SEQUENCE:,}). "
+                    "Schliesse deine aktuelle Aufgabe AB und nutze finish_sequence. "
+                    "Sichere Zwischenergebnisse JETZT — schreibe was du herausgefunden hast."
+                )
+
+            if token_usage_pct >= 0.95:
+                # 95% — Graceful Finish: Ergebnisse retten + sauber beenden
+                print(f"  [Token-Limit 95% — Graceful Finish]")
                 last_thought = self._extract_last_llm_thought(messages)
-                # Inhaltliche Summary mit LLM-Kontext
-                budget_parts = [f"{step_count} Steps (Token-Budget)."]
+                budget_parts = [f"{step_count} Steps (Token-Budget 95%)."]
                 if self._seq_files_written > 0:
                     paths_short = [Path(p).name for p in self._seq_written_paths[:5]]
                     budget_parts.append(f"Dateien: {', '.join(paths_short)}")
@@ -2850,15 +2999,15 @@ REGELN:
                 self._handle_finish_sequence({
                     "summary": " | ".join(budget_parts),
                     "performance_rating": auto_rating,
-                    "bottleneck": "Token-Budget erreicht bevor finish_sequence aufgerufen wurde",
+                    "bottleneck": "Token-Budget 95% — graceful beendet statt hart abgebrochen",
                     "next_time_differently": "Frueher finish_sequence nutzen, Zwischenergebnisse sichern",
-                    "key_decision": "Auto-beendet: Token-Budget erschoepft",
+                    "key_decision": "Auto-beendet: Token-Budget nahe Limit",
                 })
                 finished = True
                 break
 
-            # Sliding Window: Alte Tool-Results komprimieren ab Step 4
-            if step >= 4:
+            # Sliding Window: Alte Tool-Results komprimieren ab Step 2 (vorher 4 — zu spaet)
+            if step >= 2:
                 self._compress_old_messages(messages, keep_recent=5)
 
             # Tier-Hint: Phi informieren welche Tool-Kategorien bei Bedarf verfuegbar sind
@@ -2932,8 +3081,18 @@ REGELN:
 
                         # Menschenlesbare Aktions-Beschreibungen
                         action_desc = self._describe_action(block.name, block.input)
+
+                        # Proaktiver Failure-Check: Warnung BEVOR das Tool laeuft
+                        failure_hint = self.failure_memory.check(
+                            f"{block.name} {str(block.input)[:100]}"
+                        )
+
                         result = self._execute_tool(block.name, block.input)
                         result_str = str(result)[:3000]
+
+                        # Failure-Warnung an Ergebnis anhaengen (Phi sieht es VOR der naechsten Entscheidung)
+                        if failure_hint and not result_str.startswith("FEHLER"):
+                            result_str += f"\n\n[WARNUNG aus Erfahrung]\n{failure_hint[:300]}"
 
                         # Erfolg oder Fehler
                         is_error = result_str.startswith("FEHLER") or result_str.startswith("ROLLBACK")
@@ -3026,8 +3185,8 @@ REGELN:
                 })
                 break
 
-        if not finished and step_count >= MAX_STEPS_PER_SEQUENCE:
-            print(f"\n  Max Steps ({MAX_STEPS_PER_SEQUENCE}) erreicht — Sequenz beendet.")
+        if not finished and step_count >= step_budget:
+            print(f"\n  Max Steps ({step_budget}) erreicht — Sequenz beendet.")
             # Letzten LLM-Gedanken retten
             last_thought = self._extract_last_llm_thought(messages)
             # Narrative Summary statt generischer Pipe-getrennte Stichpunkte
@@ -3065,10 +3224,14 @@ REGELN:
             self._handle_finish_sequence({
                 "summary": " ".join(narrative_parts),
                 "performance_rating": auto_rating,
-                "bottleneck": "Max Steps erreicht ohne eigenes finish_sequence — alle 40 Steps verbraucht",
-                "next_time_differently": "Frueher finish_sequence aufrufen wenn ein sinnvolles Ergebnis steht, nicht alle Steps verbrauchen",
-                "key_decision": "Auto-beendet: Max Steps erreicht",
+                "bottleneck": f"Max Steps ({step_budget}) erreicht ohne eigenes finish_sequence",
+                "next_time_differently": "Frueher finish_sequence aufrufen wenn ein sinnvolles Ergebnis steht",
+                "key_decision": f"Auto-beendet: Step-Budget {step_budget} erschoepft",
             })
+
+        # Step-History speichern (fuer lernendes Step-Budget)
+        task_type = getattr(self, "_current_task_type", "standard")
+        self._record_step_history(task_type, step_count)
 
         # Effizienz tracken
         seq_duration = time.time() - seq_start
