@@ -46,7 +46,7 @@ class Narrator:
             # Fokus bereinigen: "FOKUS: ..." entfernen, nur erste Zeile
             clean = focus.split("\n")[0].replace("FOKUS: ", "").strip()
             if clean:
-                print(f"  Ziel: {clean[:120]}")
+                print(f"  Ziel: {clean[:200]}")
         print(f"  {budget} Steps {DIM}│{RESET} Modus: {mode}")
 
     def waiting(self):
