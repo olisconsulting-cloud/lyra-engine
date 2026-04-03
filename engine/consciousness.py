@@ -1716,6 +1716,7 @@ REGELN:
 
         # Fortschritt ermitteln
         progress_text = ""
+        done, total = 0, 0
         active = self.goal_stack.goals.get("active", [])
         if active:
             sgs = active[0].get("sub_goals", [])
@@ -2652,21 +2653,38 @@ REGELN:
 
         if not finished and step_count >= MAX_STEPS_PER_SEQUENCE:
             print(f"\n  Max Steps ({MAX_STEPS_PER_SEQUENCE}) erreicht — Sequenz beendet.")
-            # Inhaltliche Summary statt generischer Meldung
-            summary_parts = [f"{step_count} Steps ausgefuehrt."]
+            # Narrative Summary statt generischer Pipe-getrennte Stichpunkte
+            focus = self.goal_stack.get_current_focus()
+            focus_topic = ""
+            if "FOKUS:" in focus:
+                focus_topic = focus.split("FOKUS:")[1].strip()[:100]
+
+            narrative_parts = []
+            narrative_parts.append(
+                f"Habe {step_count} Steps am Stueck gearbeitet"
+                + (f" an: {focus_topic}" if focus_topic else "")
+                + "."
+            )
             if self._seq_files_written > 0:
                 paths_short = [Path(p).name for p in self._seq_written_paths[:5]]
-                summary_parts.append(f"Dateien: {', '.join(paths_short)}")
+                narrative_parts.append(f"Dabei {self._seq_files_written} Dateien geschrieben ({', '.join(paths_short)}).")
             if self._seq_tools_built > 0:
-                summary_parts.append(f"{self._seq_tools_built} Tool(s) erstellt")
+                narrative_parts.append(f"{self._seq_tools_built} neue Tools gebaut.")
             if self._seq_errors > 0:
-                summary_parts.append(f"{self._seq_errors} Fehler")
-            # Erledigte Sub-Goals dieser Sequenz aus Goal-Stack
-            focus = self.goal_stack.get_current_focus()
-            if "FOKUS:" in focus:
-                summary_parts.append(f"Fokus: {focus.split('FOKUS:')[1].strip()[:100]}")
+                narrative_parts.append(
+                    f"Allerdings gab es {self._seq_errors} Fehler — "
+                    "das sollte ich in der naechsten Sequenz untersuchen."
+                )
+            if self._seq_errors == 0 and self._seq_files_written == 0 and self._seq_tools_built == 0:
+                narrative_parts.append(
+                    "Keine Dateien geschrieben und keine Fehler — "
+                    "moeglicherweise drehe ich mich im Kreis."
+                )
             self._handle_finish_sequence({
-                "summary": " | ".join(summary_parts),
+                "summary": " ".join(narrative_parts),
+                "performance_rating": 3 if self._seq_errors > 2 else 5,
+                "bottleneck": "Max Steps erreicht ohne eigenes finish_sequence",
+                "next_time_differently": "Frueher finish_sequence aufrufen wenn ein Ergebnis steht",
             })
 
         # Effizienz tracken
