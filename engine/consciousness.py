@@ -2542,6 +2542,8 @@ Antworte als JSON:
         # Fortschritts-Indikator: Zeigt dass Phi arbeitet (LLM-Call kann dauern)
         self.narrator.waiting()
 
+        _blocked_recorded = set()  # Dedup: failure_memory nur 1x pro blockiertem Tool
+
         for step in range(step_budget):
             # Tool-Tier-Auswahl (bleibt in consciousness.py — ist Tool-Logik)
             if step == 0:
@@ -2725,13 +2727,16 @@ Antworte als JSON:
                             result_str = pre_check.guidance
                             is_error = True
                             atr = pre_check  # pre_check IST ein AfterToolResult
-                            # Lerneffekt: Blockade in failure_memory speichern
-                            self.failure_memory.record(
-                                goal=focus[:100],
-                                approach=f"{block.name}: {str(block.input)[:100]}",
-                                error=pre_check.guidance[:200],
-                                lesson=f"Tool {block.name} wiederholt gescheitert — anderen Ansatz waehlen",
-                            )
+                            # Lerneffekt: Blockade nur 1x pro Tool+Input in failure_memory
+                            block_key = f"{block.name}:{str(block.input)[:80]}"
+                            if block_key not in _blocked_recorded:
+                                _blocked_recorded.add(block_key)
+                                self.failure_memory.record(
+                                    goal=focus[:100],
+                                    approach=f"{block.name}: {str(block.input)[:100]}",
+                                    error=pre_check.guidance[:200],
+                                    lesson=f"Tool {block.name} wiederholt gescheitert — anderen Ansatz waehlen",
+                                )
                         else:
                             result = self._execute_tool(block.name, block.input)
                             result_str = str(result)[:3000]

@@ -36,9 +36,9 @@ class SeqMetrics:
     step_count: int = 0
     tool_sequence: list[dict] = field(default_factory=list)
     modify_count: int = 0
-    # Neuheits-Tracking fuer Fortschritts-Puls
-    read_paths: set = field(default_factory=set)
-    unique_tools: set = field(default_factory=set)
+    # Neuheits-Tracking fuer Fortschritts-Puls (nicht JSON-serialisierbar — nur RAM)
+    read_paths: set[str] = field(default_factory=set)
+    unique_tools: set[str] = field(default_factory=set)
     _last_pulse_snapshot: int = 0
 
 
@@ -223,15 +223,15 @@ class SequenceIntelligence:
             else:
                 self._stagnant_checks = 0
 
-            if self._stagnant_checks >= 3:  # 15 Steps ohne Neuheit
+            if self._stagnant_checks >= 3:  # 20 Steps ohne Neuheit (3 Checks * 5 Steps + 5 Offset)
                 parts.append(
-                    "\n\nHARTE REGEL: 15 Steps ohne Fortschritt. "
+                    "\n\nHARTE REGEL: 20 Steps ohne Fortschritt. "
                     "Du MUSST jetzt finish_sequence aufrufen mit deinem bisherigen Stand. "
                     "Weitermachen ohne neuen Ansatz ist VERBOTEN."
                 )
-            elif self._stagnant_checks >= 2:  # 10 Steps ohne Neuheit
+            elif self._stagnant_checks >= 2:  # 15 Steps ohne Neuheit (2 Checks * 5 Steps + 5 Offset)
                 parts.append(
-                    "\n\n⚠ FORTSCHRITTS-CHECK: In den letzten 10 Steps keine neuen "
+                    "\n\n⚠ FORTSCHRITTS-CHECK: In den letzten 15 Steps keine neuen "
                     "Dateien gelesen oder geschrieben. "
                     "REFLEKTIERE: Was blockiert dich? Aendere deinen Ansatz. "
                     "(1) Andere Dateien/Quellen suchen, "
@@ -280,8 +280,7 @@ class SequenceIntelligence:
                 self._metrics.read_paths.add(read_path)
 
         # Stuck-Key: Tool + relevanter Input
-        stuck_input = tool_input.get("path", tool_input.get("name", str(tool_input)[:80]))
-        stuck_key = f"{name}:{stuck_input}"
+        stuck_key, stuck_input = self._make_stuck_key(name, tool_input)
         stuck_info = self._stuck_tracker.get(stuck_key, {"count": 0, "last_error": ""})
 
         guidance = ""
