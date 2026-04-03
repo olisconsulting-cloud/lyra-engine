@@ -822,7 +822,7 @@ REGELN:
                 "timestamp": datetime.now(timezone.utc).isoformat(),
                 "summary": summary[:500],
             })
-            data["entries"] = data["entries"][-20:]
+            data["entries"] = data["entries"][-10:]
 
             safe_json_write(mem_path, data)
         except Exception as e:

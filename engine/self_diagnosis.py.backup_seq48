@@ -452,7 +452,7 @@ class SilentFailureDetector:
                 with open(seq_mem, "r", encoding="utf-8") as f:
                     data = json.load(f)
                 entries = len(data.get("entries", []))
-                if entries < min(20, sequence_num * 0.3):  # Account for [-20:] limit in _save_sequence_memory
+                if entries < sequence_num * 0.3:  # Weniger als 30% der Sequenzen haben Memory
                     warnings.append(
                         f"STILL: Nur {entries} Memory-Eintraege fuer {sequence_num} Sequenzen — "
                         f"finish_sequence wird nicht richtig aufgerufen"
