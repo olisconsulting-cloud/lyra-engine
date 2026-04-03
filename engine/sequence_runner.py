@@ -148,9 +148,10 @@ class SequenceRunner:
 
     def _plan(self, ctx: SequenceContext, engine):
         """Phase 2: Modus, Budget und Tiers bestimmen."""
-        ctx.mode = engine.rhythm.get_mode()
-        ctx.task_type = engine._classify_task(ctx.perception)
-        ctx.step_budget = engine._get_step_budget(ctx.task_type)
+        ctx.mode = engine.rhythm.get_mode(engine.state)
+        focus = engine.goal_stack.get_current_focus() or ""
+        ctx.task_type = engine._classify_task(ctx.mode, focus)
+        ctx.step_budget = engine._get_step_budget(ctx.mode, focus)
         ctx.planned_max = ctx.step_budget
         ctx.base_tiers = engine._get_base_tiers(ctx.mode, ctx.task_type)
 
