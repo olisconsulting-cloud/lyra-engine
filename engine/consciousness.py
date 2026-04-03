@@ -38,13 +38,19 @@ from .code_review import DualReviewSystem
 from .evolution import AdaptiveRhythm, ToolFoundry, SelfBenchmark, LearningEngine, MetaCognition
 from .self_diagnosis import IntegrationTester, DependencyAnalyzer, SilentFailureDetector
 from .quantum import FailureMemory, CriticAgent, PromptMutator, SkillComposer
-from .sequence_planner import SequencePlanner
-from .checkpoint import CheckpointManager
-from .meta_rules import MetaRuleEngine
+# SequencePlanner, CheckpointManager, MetaRuleEngine —
+# Zugriff nur noch ueber SequenceIntelligence (engine/sequence_intelligence.py)
 from .skill_library import SkillLibrary
 from .proactive_learner import ProactiveLearner
 from .event_bus import EventBus, Events
 from .tool_registry import ToolRegistry, ToolDefinition
+from .perception_pipeline import PerceptionPipeline, PerceptionChannel
+from .unified_memory import (
+    UnifiedMemory, semantic_adapter, experience_adapter,
+    failure_adapter, skill_adapter, strategy_adapter,
+)
+from .sequence_runner import SequenceRunner, SequenceContext
+from .sequence_finisher import SequenceFinisher
 from . import config
 from .config import safe_json_write, safe_json_read
 
@@ -632,6 +638,39 @@ class ConsciousnessEngine:
         self.tool_registry = ToolRegistry(event_bus=self.event_bus)
         self._register_all_tools()
 
+        # Unified Memory — Cross-Domain Query ueber alle Memory-Systeme
+        self.unified_memory = UnifiedMemory()
+        self.unified_memory.register_source("semantic", self.semantic_memory, adapter=semantic_adapter)
+        self.unified_memory.register_source("experience", self.memory, adapter=experience_adapter)
+        self.unified_memory.register_source("failure", self.failure_memory, adapter=failure_adapter)
+        self.unified_memory.register_source("skill", self.skill_library, adapter=skill_adapter)
+        self.unified_memory.register_source("strategy", self.strategies, adapter=strategy_adapter)
+
+        # Perception-Pipeline — gewichtete Wahrnehmung (bereit fuer Feature-Flag)
+        self.perception_pipeline = PerceptionPipeline(config.DATA_PATH)
+
+        # Sequence-Runner — composable Sequenz-Phasen (bereit fuer Feature-Flag)
+        self.sequence_runner = SequenceRunner(event_bus=self.event_bus)
+
+        # Sequence-Finisher — saubere End-of-Sequence Verarbeitung (bereit fuer Feature-Flag)
+        self.sequence_finisher = SequenceFinisher(
+            event_bus=self.event_bus,
+            strategies=self.strategies,
+            metacognition=self.metacognition,
+            self_rating=self.self_rating,
+            memory=self.memory,
+            planner=self.planner,
+            skill_library=self.skill_library,
+            meta_rules=self.meta_rules,
+            checkpointer=self.checkpointer,
+            git=self.git,
+            communication=self.communication,
+            goal_stack=self.goal_stack,
+            semantic_memory=self.semantic_memory,
+            failure_memory=self.failure_memory,
+            efficiency=self.efficiency,
+        )
+
         # Kosten-Tracking
         self.session_input_tokens = 0
         self.session_output_tokens = 0
@@ -1038,16 +1077,15 @@ SEQUENZ-PLANUNG: Nutze write_sequence_plan am Anfang — plane dein Ziel, Exit-K
             data = safe_json_read(mem_path, default={"entries": []})
 
             # Geschriebene Dateien als Kurzpfade (nur Dateiname, max 10)
-            written = []
-            if hasattr(self, "_seq_written_paths"):
-                written = [Path(p).name for p in self.seq_intel.metrics.written_paths[-10:]]
+            m = self.seq_intel.metrics
+            written = [Path(p).name for p in m.written_paths[-10:]]
 
             data["entries"].append({
                 "seq": self.sequences_total,
                 "timestamp": datetime.now(timezone.utc).isoformat(),
                 "summary": summary[:500],
                 "files_written": written,
-                "errors": getattr(self, "_seq_errors", 0),
+                "errors": m.errors,
             })
             data["entries"] = data["entries"][-50:]
 
@@ -2214,7 +2252,7 @@ SEQUENZ-PLANUNG: Nutze write_sequence_plan am Anfang — plane dein Ziel, Exit-K
         seq_num = self.sequences_total + 1
         rating = tool_input.get("performance_rating", 0)
         rating_reason = tool_input.get("rating_reason", "")
-        errors = getattr(self, "_seq_errors", 0)
+        errors = self.seq_intel.metrics.errors
 
         # Fortschritt ermitteln
         progress_text = ""
@@ -2537,7 +2575,7 @@ Antworte als JSON:
         for step in range(MAX_STEPS_PER_SEQUENCE):
             try:
                 # Interaktion: Alle Tiers, kompakte Defs ab Step 1
-                interact_tools = select_tools({1, 2, 3, 4, 5}, compact=(step > 0))
+                interact_tools = self.tool_registry.get_api_schemas({1, 2, 3, 4, 5}, compact=(step > 0))
                 response = self._call_llm("main_work", self._build_system_prompt(), messages, interact_tools)
             except Exception as e:
                 full_response += f"\n(Fehler: {e})"
@@ -3252,7 +3290,7 @@ Antworte als JSON:
                 active_tiers = base_tiers | {1, 2}
             else:
                 active_tiers = base_tiers | escalated_tiers
-            current_tools = select_tools(active_tiers, compact=(step > 0))
+            current_tools = self.tool_registry.get_api_schemas(active_tiers, compact=(step > 0))
 
             # === SEQUENZ-INTELLIGENCE: before_step() ===
             token_pct = self.sequence_input_tokens / MAX_INPUT_TOKENS_PER_SEQUENCE
