@@ -6,10 +6,7 @@
 
 ## JETZT — Quick-Wins + Stabilitaet
 
-1. **T2** — Failure-Check pro Tool-Call entfernen (Quick-Win: 2.000-4.000 Tok/Seq!)
-   Done: Nur noch ein failure_memory.check() in Perception, keiner pro Tool-Call
-
-2. **H4** — SequenceRunner: 3 Signaturen anpassen (get_mode, classify_task, get_step_budget)
+1. **H4** — SequenceRunner: 3 Signaturen anpassen (get_mode, classify_task, get_step_budget)
    Done: Alle 3 Aufrufe matchen tatsaechliche Signaturen + review_phi.py passed
 
 3. **H6** — LLM-Fallback im Step-Loop: Retry + TASK_MODEL_MAP["fallback"] nutzen

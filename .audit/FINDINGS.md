@@ -163,7 +163,7 @@
   `_build_perception()` baut Perception manuell mit allen Quellen.
 
 ### T2: Failure-Check pro Tool-Call — redundant (Quick-Win)
-- **Status**: `open`
+- **Status**: `fixed` (2026-04-03)
 - **Erstellt**: 2026-04-03
 - **Datei**: `engine/consciousness.py:~3071-3080` (pro-Tool-Check), `~1362` (Perception-Check)
 - **Ersparnis**: 2.000-4.000 Tok/Seq

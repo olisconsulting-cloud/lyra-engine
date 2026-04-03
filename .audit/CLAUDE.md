@@ -92,7 +92,7 @@ Nicht schneller. Nicht groesser. Besser. Stabiler. Effizienter. Sicherer.
 
 ## Aktueller Status (nach jeder Session aktualisieren)
 
-- **Naechster Fix**: T2 (Failure-Check entfernen, Quick-Win) — siehe BACKLOG.md
+- **Naechster Fix**: H4 (SequenceRunner Signaturen) — siehe BACKLOG.md
 - **Offene Bugs**: 2 (H4 Signaturen, H6 Fallback) + Token/Stabilitaet
 - **Gefixt**: C1 (combine_tools), H5 (JSON _load). H1-H3/A1d/A2/A3 wontfix (Modul geloescht)
 - **Inaktive Module**: 3 (PerceptionPipeline, UnifiedMemory, SequenceRunner)

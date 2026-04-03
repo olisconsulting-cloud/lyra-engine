@@ -1941,6 +1941,7 @@ SEQUENZ-PLANUNG: Nutze write_sequence_plan am Anfang — plane dein Ziel, Exit-K
                     )
                 except Exception as fallback_error:
                     logger.error("Fallback DeepSeek auch fehlgeschlagen: %s", fallback_error)
+                    print(f"  [Fallback DeepSeek fehlgeschlagen: {fallback_error}]")
                     raise fallback_error from primary_error
 
             # Wenn schon DeepSeek war, Original-Error weiterreichen
@@ -2508,6 +2509,9 @@ Antworte als JSON:
         escalated_tiers = set()
         self._project_context_cache = None
 
+        # Fortschritts-Indikator: Zeigt dass Phi arbeitet (LLM-Call kann dauern)
+        print(f"  Modus: {mode['mode']} | Budget: {step_budget} Steps | Warte auf LLM...", end="", flush=True)
+
         for step in range(step_budget):
             # Tool-Tier-Auswahl (bleibt in consciousness.py — ist Tool-Logik)
             if step == 0:
@@ -2570,17 +2574,29 @@ Antworte als JSON:
                         "content": "[System] Weitere Tools bei Bedarf verfuegbar: " + "; ".join(missing) + ". Erwaehne den Tool-Namen wenn du ihn brauchst.",
                     })
 
-            try:
-                response = self._call_llm(
-                    "main_work", effective_system_prompt, messages, current_tools
-                )
-            except Exception as e:
-                error_msg = str(e)
-                if "tool_result" in error_msg or "tool_use" in error_msg:
-                    print(f"  Nachrichten-Sync verloren — starte neue Sequenz")
-                else:
-                    print(f"  API-Fehler: {e}")
-                    time.sleep(1)  # Kurze Pause statt 3s
+            # Step-Level Retry: API-Fehler duerfen einzelne Steps wiederholen,
+            # nicht sofort die ganze Sequenz toeten (H6)
+            response = None
+            for _retry in range(3):
+                try:
+                    response = self._call_llm(
+                        "main_work", effective_system_prompt, messages, current_tools
+                    )
+                    break  # Erfolg → weiter
+                except Exception as e:
+                    error_msg = str(e)
+                    if "tool_result" in error_msg or "tool_use" in error_msg:
+                        print(f"  Nachrichten-Sync verloren — starte neue Sequenz")
+                        break  # Nicht retrybar
+                    if _retry < 2:
+                        wait = 2 ** _retry  # 1s, 2s
+                        print(f"  API-Fehler (Retry {_retry + 1}/2): {e}")
+                        logger.warning("Step-Retry %d/2: %s", _retry + 1, e)
+                        time.sleep(wait)
+                    else:
+                        print(f"  API-Fehler nach 3 Versuchen: {e}")
+                        logger.error("Step-Loop: 3 Versuche fehlgeschlagen: %s", e)
+            if response is None:
                 break
 
             # Token-Tracking: prompt_tokens = Gesamt-Input pro Call (nicht Delta!)
@@ -2590,6 +2606,10 @@ Antworte als JSON:
                 self.sequence_input_tokens, usage.get("input_tokens", 0)
             )
             self.sequence_output_tokens += usage.get("output_tokens", 0)
+
+            # Zeilenumbruch nach "Warte auf LLM..." beim ersten Step
+            if step == 0:
+                print()  # Schliesst die "Warte auf LLM..." Zeile ab
 
             # Lyras Gedanken — nur erste sinnvolle Zeile
             for block in response["content"]:
@@ -2649,16 +2669,8 @@ Antworte als JSON:
                         step_count += 1
                         action_desc = self._describe_action(block.name, block.input)
 
-                        # Proaktiver Failure-Check (Cross-Sequenz Erfahrung)
-                        failure_hint = self.failure_memory.check(
-                            f"{block.name} {str(block.input)[:100]}"
-                        )
-
                         result = self._execute_tool(block.name, block.input)
                         result_str = str(result)[:3000]
-
-                        if failure_hint and not result_str.startswith("FEHLER"):
-                            result_str += f"\n\n[WARNUNG aus Erfahrung]\n{failure_hint[:300]}"
 
                         is_error = (result_str.startswith("FEHLER")
                                     or result_str.startswith("WARNUNG")
