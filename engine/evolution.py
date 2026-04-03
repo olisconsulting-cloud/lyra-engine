@@ -437,6 +437,206 @@ Gib NUR den Python-Code zurueck. Kein Markdown."""
 
 
 # ============================================================
+# 2b. TOOL-CURATOR — Verhindert Tool-Sprawl
+# ============================================================
+
+class ToolCurator:
+    """
+    Meta-Faehigkeit: Verhindert Tool-Duplikate und managt Tool-Lifecycle.
+
+    Vor Erstellung: Similarity-Gate (TF-IDF Cosine) gegen bestehende Tools.
+    Nach Erstellung: Health-Tracking, Konsolidierungs-Vorschlaege.
+
+    >80% Aehnlichkeit + >3 uses: HARD BLOCK (Duplikat verhindern)
+    60-80% Aehnlichkeit:          SOFT BLOCK (force=True zum Override)
+    <60%:                          Erlaubt
+    """
+
+    # Deutsche + englische Stoppwoerter fuer Beschreibungs-Vergleich
+    _STOP_WORDS = frozenset(
+        "ein eine einer das der die des dem den fuer mit und oder "
+        "von zu zur zum auf in ist sind hat an durch ueber "
+        "a an the for with and or of to on in is are has by through "
+        "tool that which this from".split()
+    )
+
+    def __init__(self, tools_path: Path, registry_path: Path):
+        self.tools_path = tools_path
+        self.registry_path = registry_path
+
+    def _load_registry(self) -> dict:
+        """Laedt aktuelle Registry (frisch, nicht gecacht)."""
+        if self.registry_path.exists():
+            with open(self.registry_path, "r", encoding="utf-8") as f:
+                return json.load(f)
+        return {"tools": {}}
+
+    def _tokenize(self, text: str) -> list:
+        """Tokenisiert Beschreibung: lowercase, Stoppwoerter raus."""
+        import re as _re
+        words = _re.findall(r'[a-zäöü0-9]+', text.lower())
+        return [w for w in words if w not in self._STOP_WORDS and len(w) > 2]
+
+    def _compute_similarity(self, desc_a: str, desc_b: str) -> float:
+        """
+        TF-IDF Cosine-Similarity mit collections.Counter.
+
+        Keine externen Dependencies — nur stdlib.
+        Returns: Float zwischen 0.0 und 1.0.
+        """
+        from collections import Counter
+        import math
+
+        tokens_a = self._tokenize(desc_a)
+        tokens_b = self._tokenize(desc_b)
+
+        if not tokens_a or not tokens_b:
+            return 0.0
+
+        vec_a = Counter(tokens_a)
+        vec_b = Counter(tokens_b)
+
+        # Cosine-Similarity
+        all_keys = set(vec_a) | set(vec_b)
+        dot = sum(vec_a.get(k, 0) * vec_b.get(k, 0) for k in all_keys)
+        mag_a = math.sqrt(sum(v * v for v in vec_a.values()))
+        mag_b = math.sqrt(sum(v * v for v in vec_b.values()))
+
+        if mag_a == 0 or mag_b == 0:
+            return 0.0
+
+        return dot / (mag_a * mag_b)
+
+    def check_before_create(self, name: str, description: str,
+                            force: bool = False) -> dict:
+        """
+        Gate-Check vor Tool-Erstellung.
+
+        Args:
+            name: Geplanter Tool-Name
+            description: Geplante Beschreibung
+            force: Soft-Block uebersteuern
+
+        Returns:
+            {"allowed": bool, "reason": str, "similar_tools": list}
+        """
+        registry = self._load_registry()
+        similar = []
+
+        for tool_name, info in registry.get("tools", {}).items():
+            if info.get("status") == "archived":
+                continue
+
+            tool_desc = info.get("description", "")
+            sim = self._compute_similarity(description, tool_desc)
+
+            if sim >= 0.6:
+                similar.append({
+                    "name": tool_name,
+                    "description": tool_desc[:80],
+                    "similarity": round(sim, 2),
+                    "uses": info.get("uses", 0),
+                })
+
+        # Sortiere nach Aehnlichkeit (hoechste zuerst)
+        similar.sort(key=lambda x: -x["similarity"])
+
+        if not similar:
+            return {"allowed": True, "reason": "Kein aehnliches Tool gefunden", "similar_tools": []}
+
+        top = similar[0]
+
+        # Hard Block: >80% Aehnlichkeit UND bewaehrtes Tool (>3 uses)
+        if top["similarity"] >= 0.8 and top["uses"] >= 3:
+            return {
+                "allowed": False,
+                "reason": (
+                    f"DUPLIKAT: '{top['name']}' ist zu {int(top['similarity']*100)}% aehnlich "
+                    f"und {top['uses']}x bewaehrt. Nutze oder kombiniere statt neu zu bauen."
+                ),
+                "similar_tools": similar,
+            }
+
+        # Soft Block: 60-80% (oder >80% aber <3 uses) — force=True zum Override
+        if not force:
+            return {
+                "allowed": False,
+                "reason": (
+                    f"Aehnliches Tool gefunden: '{top['name']}' ({int(top['similarity']*100)}% aehnlich). "
+                    f"Nutze force=True zum Override oder kombiniere mit combine_tools."
+                ),
+                "similar_tools": similar,
+            }
+
+        return {
+            "allowed": True,
+            "reason": f"Force-Override: {len(similar)} aehnliche Tools ignoriert",
+            "similar_tools": similar,
+        }
+
+    def get_health_report(self) -> list:
+        """
+        Identifiziert Tools mit schlechter Health.
+
+        Kriterien:
+        - 0 uses = ungenutzt
+        - tools mit 0 uses nach vielen anderen aktiven = Kandidat fuer Archivierung
+        """
+        registry = self._load_registry()
+        unhealthy = []
+
+        for name, info in registry.get("tools", {}).items():
+            if info.get("status") == "archived":
+                continue
+            uses = info.get("uses", 0)
+            if uses == 0:
+                unhealthy.append({
+                    "name": name,
+                    "uses": uses,
+                    "created": info.get("created", ""),
+                    "suggestion": "Archivieren oder nutzen",
+                })
+
+        return unhealthy
+
+    def suggest_consolidation(self) -> list:
+        """Findet Gruppen aehnlicher Tools (>50% Aehnlichkeit)."""
+        registry = self._load_registry()
+        active = {
+            n: info for n, info in registry.get("tools", {}).items()
+            if info.get("status") != "archived"
+        }
+
+        groups = []
+        seen = set()
+        names = list(active.keys())
+
+        for i in range(len(names)):
+            if names[i] in seen:
+                continue
+            group = [names[i]]
+            for j in range(i + 1, len(names)):
+                if names[j] in seen:
+                    continue
+                sim = self._compute_similarity(
+                    active[names[i]].get("description", ""),
+                    active[names[j]].get("description", ""),
+                )
+                if sim >= 0.5:
+                    group.append(names[j])
+                    seen.add(names[j])
+
+            if len(group) > 1:
+                seen.add(names[i])
+                groups.append({
+                    "tools": group,
+                    "suggestion": f"Konsolidierung moeglich: {', '.join(group)}",
+                })
+
+        return groups
+
+
+# ============================================================
 # 3. SELBST-BENCHMARKING
 # ============================================================
 

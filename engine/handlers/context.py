@@ -33,6 +33,7 @@ class ToolContext:
     critic: Any = None               # CriticAgent
     composer: Any = None             # SkillComposer
     foundry: Any = None              # ToolFoundry
+    curator: Any = None              # ToolCurator
     learning: Any = None             # LearningEngine
     skills: Any = None               # SkillTracker
 

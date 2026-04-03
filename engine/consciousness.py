@@ -38,7 +38,7 @@ from .ior import IORTracker
 from .dream import DreamEngine
 from .competence import CompetenceMatrix, SelfAudit
 from .code_review import DualReviewSystem
-from .evolution import AdaptiveRhythm, ToolFoundry, SelfBenchmark, LearningEngine, MetaCognition
+from .evolution import AdaptiveRhythm, ToolFoundry, ToolCurator, SelfBenchmark, LearningEngine, MetaCognition
 from .self_diagnosis import IntegrationTester, DependencyAnalyzer, SilentFailureDetector
 from .quantum import FailureMemory, CriticAgent, PromptMutator, SkillComposer
 # SequencePlanner, CheckpointManager, MetaRuleEngine —
@@ -623,6 +623,7 @@ class ConsciousnessEngine:
         self.code_review = DualReviewSystem(config.ROOT_PATH)
         self.rhythm = AdaptiveRhythm(config.DATA_PATH)
         self.foundry = ToolFoundry(config.TOOLS_PATH)
+        self.curator = ToolCurator(config.TOOLS_PATH, config.TOOLS_PATH / "registry.json")
         self.benchmark = SelfBenchmark(config.DATA_PATH, config.ROOT_PATH)
         self.learning = LearningEngine(config.DATA_PATH)
         self.metacognition = MetaCognition(config.DATA_PATH)
@@ -1486,6 +1487,7 @@ SEQUENZ-PLANUNG: Nutze write_sequence_plan am Anfang — plane dein Ziel, Exit-K
             critic=self.critic,
             composer=self.composer,
             foundry=self.foundry,
+            curator=self.curator,
             learning=self.learning,
             skills=self.skills,
             pip=self.pip,

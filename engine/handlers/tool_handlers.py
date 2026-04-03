@@ -7,12 +7,21 @@ from .context import ToolContext
 
 
 def handle_create_tool(ctx: ToolContext, tool_input: dict) -> str:
-    """Neues Tool erstellen mit Skill-Kompositions-Hint."""
+    """Neues Tool erstellen mit Curator-Gate und Skill-Kompositions-Hint."""
+    name = tool_input.get("name", "")
     desc = tool_input.get("description", "")
+
+    # Curator-Gate: Duplikate verhindern
+    if ctx.curator:
+        check = ctx.curator.check_before_create(
+            name, desc, force=tool_input.get("force", False),
+        )
+        if not check["allowed"]:
+            similar_names = [t["name"] for t in check.get("similar_tools", [])]
+            return f"BLOCKIERT: {check['reason']}\nAehnliche Tools: {similar_names}"
+
     composition_hint = ctx.composer.suggest_composition(desc)
-    result = ctx.toolchain.create_tool(
-        tool_input["name"], desc, tool_input["code"],
-    )
+    result = ctx.toolchain.create_tool(name, desc, tool_input["code"])
     if composition_hint:
         result += f"\n{composition_hint}"
     return result
