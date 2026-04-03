@@ -50,8 +50,10 @@ class Toolchain:
             json.dump(self.registry, f, indent=2, ensure_ascii=False)
 
     def _load_all_tools(self):
-        """Laedt alle registrierten Tools in den Speicher."""
+        """Laedt alle registrierten, aktiven Tools in den Speicher."""
         for name, info in self.registry.get("tools", {}).items():
+            if info.get("status") == "archived":
+                continue
             filepath = self.tools_path / info.get("file", "")
             if filepath.exists():
                 try:
@@ -159,12 +161,17 @@ class Toolchain:
         Fuehrt ein registriertes Tool aus.
 
         Args:
-            name: Tool-Name
+            name: Tool-Name (oder Alias eines archivierten Tools)
             **kwargs: Parameter fuer das Tool
 
         Returns:
             Tool-Output
         """
+        # Alias-Aufloesung: Alte Tool-Namen auf neue umleiten
+        resolved = self.registry.get("aliases", {}).get(name, name)
+        if resolved != name:
+            name = resolved
+
         if name not in self.loaded_tools:
             # Versuche neu zu laden
             info = self.registry.get("tools", {}).get(name)
