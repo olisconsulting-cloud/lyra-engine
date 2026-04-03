@@ -42,6 +42,13 @@ MODELS = {
         "output_cost": 25.00,
         "use_for": "Kritische Selbstverbesserung, Audit",
     },
+    "claude_sonnet": {
+        "provider": "anthropic",
+        "model_id": "claude-sonnet-4-6",
+        "input_cost": 3.00,
+        "output_cost": 15.00,
+        "use_for": "Schnelle Zusammenfassungen, Graceful-Finish, leichte Analyse",
+    },
     "deepseek_v3": {
         "provider": "deepseek",
         "model_id": "deepseek-chat",
@@ -53,16 +60,17 @@ MODELS = {
 
 # Welches Modell fuer welche Aufgabe — EINZIGE Stelle fuer Modell-Zuordnung
 TASK_MODEL_MAP = {
-    "main_work": "kimi_k25",                   # Kimi K2.5 — Hauptarbeit (zurueckgesetzt nach System-Optimierung)
-    "code_review": "claude_opus",              # Opus 4.6 als unabhaengiger Reviewer (echtes Dual-Review)
-    "audit_primary": "claude_opus",          # Opus fuer Tiefenanalyse
-    "audit_secondary": "kimi_k25",           # Kimi als Gegenpruefung
-    "telegram_reply": "kimi_k25",            # Sofort-Antwort
-    "dream": "kimi_k25",                     # Memory-Konsolidierung
-    "tool_generation": "kimi_k25",           # Tool-Foundry
-    "goal_planning": "claude_opus",          # Opus fuer Goal-Zerlegung (bestimmt nachfolgende Arbeit)
-    "result_validation": "claude_opus",      # Opus fuer Ergebnis-Pruefung bei Projekt-Abschluss
-    "fallback": "deepseek_v3",               # Fallback wenn Kimi versagt
+    "main_work": "kimi_k25",              # Kimi K2.5 — Hauptarbeit, Tool-Use, Coding ($0)
+    "code_review": "claude_sonnet",        # Sonnet 4.6 — Code-Review (vorher Opus — 80% guenstiger, gleiche Qualitaet fuer Diffs)
+    "audit_primary": "claude_opus",        # Opus 4.6 — Tiefenanalyse (hier lohnt sich Opus)
+    "audit_secondary": "kimi_k25",         # Kimi — Gegenpruefung ($0)
+    "telegram_reply": "kimi_k25",          # Kimi — Sofort-Antwort ($0)
+    "dream": "claude_sonnet",              # Sonnet 4.6 — Memory-Konsolidierung (vorher Kimi — Sonnet analysiert Muster besser)
+    "tool_generation": "kimi_k25",         # Kimi — Coding ist Kimis Staerke ($0)
+    "goal_planning": "claude_sonnet",      # Sonnet 4.6 — Goal-Zerlegung (vorher Opus — Sonnet reicht, 80% guenstiger)
+    "result_validation": "claude_opus",    # Opus 4.6 — Ergebnis-Pruefung (kritisch, hier keine Abstriche)
+    "graceful_finish": "claude_sonnet",    # Sonnet 4.6 — Sequenz-Zusammenfassungen bei Auto-Finish
+    "fallback": "deepseek_v3",             # DeepSeek V3 — Fallback wenn Kimi versagt
 }
 
 
