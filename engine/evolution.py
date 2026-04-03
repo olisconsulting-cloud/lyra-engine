@@ -437,19 +437,22 @@ Gib NUR den Python-Code zurueck. Kein Markdown."""
 
 
 # ============================================================
-# 2b. TOOL-CURATOR — Verhindert Tool-Sprawl
+# 2b. TOOL-CURATOR — Gerichtete Evolution statt Blockade
 # ============================================================
 
 class ToolCurator:
     """
-    Meta-Faehigkeit: Verhindert Tool-Duplikate und managt Tool-Lifecycle.
+    Meta-Faehigkeit: Lenkt Tool-Evolution statt sie zu blockieren.
 
-    Vor Erstellung: Similarity-Gate (TF-IDF Cosine) gegen bestehende Tools.
-    Nach Erstellung: Health-Tracking, Konsolidierungs-Vorschlaege.
+    Philosophie: Iteration IST Lernen. Phi darf immer bauen.
+    Aber der Curator stellt sicher, dass jede Iteration BESSER wird.
 
-    >80% Aehnlichkeit + >3 uses: HARD BLOCK (Duplikat verhindern)
-    60-80% Aehnlichkeit:          SOFT BLOCK (force=True zum Override)
-    <60%:                          Erlaubt
+    Evolve-Flow:
+    1. challenge()    — Findet aehnliche Tools, setzt Benchmark
+    2. evaluate()     — Vergleicht neues Tool mit Benchmark nach Bau
+    3. evolve_merge() — Bestes aus beiden wird aktiv, Rest archiviert
+
+    Kein Blockieren. Nur Kanalisieren.
     """
 
     # Deutsche + englische Stoppwoerter fuer Beschreibungs-Vergleich
@@ -463,6 +466,8 @@ class ToolCurator:
     def __init__(self, tools_path: Path, registry_path: Path):
         self.tools_path = tools_path
         self.registry_path = registry_path
+        # Log aller Evolve-Entscheidungen
+        self.evolution_log_path = tools_path / "evolution_log.json"
 
     def _load_registry(self) -> dict:
         """Laedt aktuelle Registry (frisch, nicht gecacht)."""
@@ -496,7 +501,6 @@ class ToolCurator:
         vec_a = Counter(tokens_a)
         vec_b = Counter(tokens_b)
 
-        # Cosine-Similarity
         all_keys = set(vec_a) | set(vec_b)
         dot = sum(vec_a.get(k, 0) * vec_b.get(k, 0) for k in all_keys)
         mag_a = math.sqrt(sum(v * v for v in vec_a.values()))
@@ -507,18 +511,25 @@ class ToolCurator:
 
         return dot / (mag_a * mag_b)
 
-    def check_before_create(self, name: str, description: str,
-                            force: bool = False) -> dict:
+    # === SCHRITT 1: Challenge — Benchmark setzen ===
+
+    def challenge(self, name: str, description: str) -> dict:
         """
-        Gate-Check vor Tool-Erstellung.
+        Findet aehnliche Tools und setzt sie als Benchmark.
+
+        Blockiert NICHT. Gibt Phi stattdessen den Auftrag, besser zu sein.
 
         Args:
             name: Geplanter Tool-Name
             description: Geplante Beschreibung
-            force: Soft-Block uebersteuern
 
         Returns:
-            {"allowed": bool, "reason": str, "similar_tools": list}
+            {
+                "has_benchmark": bool,
+                "benchmark": {...} oder None,
+                "similar_tools": [...],
+                "challenge_text": str  — wird Phi im Prompt gezeigt
+            }
         """
         registry = self._load_registry()
         similar = []
@@ -526,53 +537,293 @@ class ToolCurator:
         for tool_name, info in registry.get("tools", {}).items():
             if info.get("status") == "archived":
                 continue
+            if tool_name == name:
+                continue  # Sich selbst nicht als Benchmark
 
             tool_desc = info.get("description", "")
             sim = self._compute_similarity(description, tool_desc)
 
-            if sim >= 0.6:
+            if sim >= 0.4:
                 similar.append({
                     "name": tool_name,
-                    "description": tool_desc[:80],
+                    "description": tool_desc[:100],
                     "similarity": round(sim, 2),
                     "uses": info.get("uses", 0),
+                    "version": info.get("version", 1),
                 })
 
-        # Sortiere nach Aehnlichkeit (hoechste zuerst)
-        similar.sort(key=lambda x: -x["similarity"])
+        similar.sort(key=lambda x: (-x["similarity"], -x["uses"]))
 
         if not similar:
-            return {"allowed": True, "reason": "Kein aehnliches Tool gefunden", "similar_tools": []}
-
-        top = similar[0]
-
-        # Hard Block: >80% Aehnlichkeit UND bewaehrtes Tool (>3 uses)
-        if top["similarity"] >= 0.8 and top["uses"] >= 3:
             return {
-                "allowed": False,
-                "reason": (
-                    f"DUPLIKAT: '{top['name']}' ist zu {int(top['similarity']*100)}% aehnlich "
-                    f"und {top['uses']}x bewaehrt. Nutze oder kombiniere statt neu zu bauen."
-                ),
-                "similar_tools": similar,
+                "has_benchmark": False,
+                "benchmark": None,
+                "similar_tools": [],
+                "challenge_text": "Neues Gebiet — kein Benchmark vorhanden. Baue frei.",
             }
 
-        # Soft Block: 60-80% (oder >80% aber <3 uses) — force=True zum Override
-        if not force:
-            return {
-                "allowed": False,
-                "reason": (
-                    f"Aehnliches Tool gefunden: '{top['name']}' ({int(top['similarity']*100)}% aehnlich). "
-                    f"Nutze force=True zum Override oder kombiniere mit combine_tools."
-                ),
-                "similar_tools": similar,
-            }
+        # Bester Kandidat wird Benchmark
+        benchmark = similar[0]
+        challenge_text = (
+            f"EVOLUTION-CHALLENGE: '{benchmark['name']}' existiert "
+            f"({benchmark['uses']}x bewaehrt, {int(benchmark['similarity']*100)}% aehnlich). "
+            f"Dein neues Tool muss BESSER sein. "
+            f"Benchmark-Features: {benchmark['description']}"
+        )
 
         return {
-            "allowed": True,
-            "reason": f"Force-Override: {len(similar)} aehnliche Tools ignoriert",
+            "has_benchmark": True,
+            "benchmark": benchmark,
             "similar_tools": similar,
+            "challenge_text": challenge_text,
         }
+
+    # === SCHRITT 2: Evaluate — Neues Tool vs Benchmark vergleichen ===
+
+    def evaluate(self, new_name: str, benchmark_name: str,
+                 toolchain) -> dict:
+        """
+        Vergleicht neues Tool mit Benchmark nach dem Bau.
+
+        Kriterien:
+        - Beide muessen lauffaehig sein (run() ohne Fehler)
+        - Code-Qualitaet: LOC, Fehlerbehandlung, Docstrings
+        - Feature-Abdeckung: Keywords in Beschreibung
+        - Gesamturteil: besser / gleichwertig / schlechter
+
+        Args:
+            new_name: Name des neu gebauten Tools
+            benchmark_name: Name des bestehenden Benchmark-Tools
+            toolchain: Toolchain-Instanz fuer Code-Zugriff
+
+        Returns:
+            {
+                "winner": str,           — Name des besseren Tools
+                "verdict": str,          — 'better' | 'equal' | 'worse'
+                "scores": {...},         — Detail-Scores beider Tools
+                "learning": str,         — Was Phi daraus lernen kann
+                "recommendation": str,   — Naechster Schritt
+            }
+        """
+        new_code = toolchain.get_tool_code(new_name)
+        bench_code = toolchain.get_tool_code(benchmark_name)
+
+        if new_code.startswith("FEHLER") or bench_code.startswith("FEHLER"):
+            return {
+                "winner": benchmark_name if new_code.startswith("FEHLER") else new_name,
+                "verdict": "error",
+                "scores": {},
+                "learning": "Tool-Code konnte nicht geladen werden",
+                "recommendation": "Code-Fehler beheben",
+            }
+
+        new_score = self._score_tool_quality(new_code, new_name)
+        bench_score = self._score_tool_quality(bench_code, benchmark_name)
+
+        # Registry-Info fuer Uses
+        registry = self._load_registry()
+        bench_uses = registry.get("tools", {}).get(benchmark_name, {}).get("uses", 0)
+
+        # Gesamtbewertung: Qualitaet + Bonus fuer Bewaehrtheit
+        # Neues Tool muss qualitativ BESSER sein um zu gewinnen,
+        # weil das alte schon in Produktion bewaehrt ist
+        new_total = new_score["total"]
+        bench_total = bench_score["total"]
+
+        # Bewaehrtheits-Bonus: +1 pro 5 Uses (max +10)
+        proven_bonus = min(bench_uses // 5, 10)
+        bench_total_adj = bench_total + proven_bonus
+
+        if new_total > bench_total_adj:
+            verdict = "better"
+            winner = new_name
+        elif new_total >= bench_total - 2:
+            verdict = "equal"
+            winner = new_name  # Bei Gleichstand gewinnt das Neuere
+        else:
+            verdict = "worse"
+            winner = benchmark_name
+
+        # Lern-Signal generieren
+        strengths_new = [k for k in ("error_handling", "docstrings", "features", "structure")
+                         if new_score.get(k, 0) > bench_score.get(k, 0)]
+        strengths_bench = [k for k in ("error_handling", "docstrings", "features", "structure")
+                           if bench_score.get(k, 0) > new_score.get(k, 0)]
+
+        learning_parts = []
+        if strengths_new:
+            learning_parts.append(f"Neues Tool besser bei: {', '.join(strengths_new)}")
+        if strengths_bench:
+            learning_parts.append(f"Benchmark besser bei: {', '.join(strengths_bench)}")
+        if proven_bonus > 0:
+            learning_parts.append(f"Benchmark hat +{proven_bonus} Bewaehrtheits-Bonus ({bench_uses} Uses)")
+
+        learning = " | ".join(learning_parts) if learning_parts else "Beide Tools gleichwertig"
+
+        # Empfehlung
+        if verdict == "better":
+            recommendation = (
+                f"EVOLUTION: '{new_name}' ist besser. "
+                f"Empfehlung: combine_tools({benchmark_name}, {new_name}) "
+                f"um das Beste aus beiden zu vereinen, dann '{benchmark_name}' archivieren."
+            )
+        elif verdict == "equal":
+            recommendation = (
+                f"GLEICHWERTIG: '{new_name}' ist auf Augenhoehe. "
+                f"Empfehlung: combine_tools fuer Feature-Merge, "
+                f"oder '{new_name}' als aktive Alternative behalten."
+            )
+        else:
+            recommendation = (
+                f"BENCHMARK GEWINNT: '{benchmark_name}' ist staerker. "
+                f"Lerne daraus: {learning}. "
+                f"'{new_name}' kann archiviert oder verbessert werden."
+            )
+
+        result = {
+            "winner": winner,
+            "verdict": verdict,
+            "scores": {"new": new_score, "benchmark": bench_score,
+                       "proven_bonus": proven_bonus},
+            "learning": learning,
+            "recommendation": recommendation,
+        }
+
+        self._log_evolution(new_name, benchmark_name, result)
+        return result
+
+    def _score_tool_quality(self, code: str, name: str) -> dict:
+        """
+        Bewertet Tool-Code-Qualitaet ohne ihn auszufuehren.
+
+        Kriterien (je 0-10 Punkte, max 40):
+        - error_handling: try/except Bloecke
+        - docstrings: Dokumentation vorhanden
+        - features: Keyword-Vielfalt (verschiedene Funktionalitaeten)
+        - structure: Funktionen/Klassen statt monolithischer Code
+        """
+        lines = code.splitlines()
+        loc = len([l for l in lines if l.strip() and not l.strip().startswith('#')])
+
+        # Error Handling: try/except Nutzung
+        try_count = sum(1 for l in lines if 'try:' in l)
+        except_count = sum(1 for l in lines if 'except' in l)
+        error_score = min(10, (try_count + except_count) * 2)
+
+        # Docstrings: Dreifach-Quotes
+        docstring_count = code.count('"""')
+        docstring_score = min(10, docstring_count * 2)
+
+        # Features: Verschiedene Keywords = breitere Funktionalitaet
+        feature_keywords = {
+            'import', 'class', 'def', 'return', 'json', 'dict',
+            'list', 'str', 'int', 'float', 'bool', 'Path',
+            'open', 'read', 'write', 'http', 'url', 'api',
+            'auth', 'token', 'header', 'response', 'request',
+            'validate', 'check', 'parse', 'format', 'log',
+        }
+        found_features = sum(1 for kw in feature_keywords if kw in code.lower())
+        feature_score = min(10, found_features)
+
+        # Structure: Funktionen und Klassen statt flacher Code
+        def_count = sum(1 for l in lines if l.strip().startswith('def '))
+        class_count = sum(1 for l in lines if l.strip().startswith('class '))
+        structure_score = min(10, def_count * 2 + class_count * 3)
+
+        total = error_score + docstring_score + feature_score + structure_score
+
+        return {
+            "name": name,
+            "loc": loc,
+            "error_handling": error_score,
+            "docstrings": docstring_score,
+            "features": feature_score,
+            "structure": structure_score,
+            "total": total,
+        }
+
+    # === SCHRITT 3: evolve_merge — Bestes vereinen ===
+
+    def evolve_merge(self, winner: str, loser: str,
+                     toolchain, archive_loser: bool = True) -> str:
+        """
+        Fuehrt den Merge-Schritt aus nach Evaluation.
+
+        Wenn das neue Tool gewonnen hat:
+        - combine_tools wird empfohlen (aber nicht erzwungen)
+        - Uses des alten Tools werden transferiert
+
+        Wenn das Benchmark gewonnen hat:
+        - Neues Tool wird archiviert
+        - Lern-Signal wird zurueckgegeben
+
+        Args:
+            winner: Name des Gewinners
+            loser: Name des Verlierers
+            toolchain: Toolchain-Instanz
+            archive_loser: Verlierer automatisch archivieren
+
+        Returns:
+            Ergebnis-Nachricht
+        """
+        registry = self._load_registry()
+        winner_info = registry.get("tools", {}).get(winner, {})
+        loser_info = registry.get("tools", {}).get(loser, {})
+
+        # Uses-Transfer: Verlierer-Uses zum Gewinner addieren
+        loser_uses = loser_info.get("uses", 0)
+        if loser_uses > 0 and winner in registry.get("tools", {}):
+            registry["tools"][winner]["uses"] = \
+                registry["tools"][winner].get("uses", 0) + loser_uses
+
+        # Archivieren wenn gewuenscht
+        if archive_loser:
+            result = toolchain.archive_tool(
+                loser,
+                reason=f"Evolution: {winner} hat gewonnen (Scores verglichen)",
+            )
+            # Alias setzen
+            toolchain.add_alias(loser, winner)
+        else:
+            result = f"'{loser}' bleibt aktiv als Alternative zu '{winner}'"
+
+        return (
+            f"EVOLUTION ABGESCHLOSSEN: '{winner}' ist aktiv. "
+            f"{result} | Uses transferiert: +{loser_uses}"
+        )
+
+    # === Evolution-Log ===
+
+    def _log_evolution(self, new_name: str, bench_name: str, result: dict):
+        """Loggt Evolve-Entscheidungen fuer Lern-Analyse."""
+        try:
+            log = []
+            if self.evolution_log_path.exists():
+                with open(self.evolution_log_path, "r", encoding="utf-8") as f:
+                    log = json.load(f)
+
+            from datetime import datetime, timezone
+            log.append({
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "new_tool": new_name,
+                "benchmark": bench_name,
+                "verdict": result.get("verdict"),
+                "winner": result.get("winner"),
+                "learning": result.get("learning", ""),
+                "scores": {
+                    "new_total": result.get("scores", {}).get("new", {}).get("total", 0),
+                    "bench_total": result.get("scores", {}).get("benchmark", {}).get("total", 0),
+                },
+            })
+            # Maximal 100 Eintraege
+            log = log[-100:]
+
+            with open(self.evolution_log_path, "w", encoding="utf-8") as f:
+                json.dump(log, f, indent=2, ensure_ascii=False)
+        except Exception:
+            pass  # Log-Fehler sind nicht kritisch
+
+    # === Bestehende Utility-Methoden ===
 
     def get_health_report(self) -> list:
         """
@@ -634,6 +885,24 @@ class ToolCurator:
                 })
 
         return groups
+
+    def get_evolution_stats(self) -> str:
+        """Zusammenfassung aller bisherigen Evolutionen."""
+        try:
+            if not self.evolution_log_path.exists():
+                return "Noch keine Tool-Evolutionen durchgefuehrt."
+            with open(self.evolution_log_path, "r", encoding="utf-8") as f:
+                log = json.load(f)
+            total = len(log)
+            better = sum(1 for e in log if e.get("verdict") == "better")
+            equal = sum(1 for e in log if e.get("verdict") == "equal")
+            worse = sum(1 for e in log if e.get("verdict") == "worse")
+            return (
+                f"Tool-Evolutionen: {total} | "
+                f"Besser: {better} | Gleichwertig: {equal} | Schlechter: {worse}"
+            )
+        except Exception:
+            return "Evolution-Log nicht lesbar."
 
 
 # ============================================================

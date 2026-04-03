@@ -2881,6 +2881,16 @@ Antworte als JSON:
                         and mode.get("mode") not in ("evolution", "sprint")
                         and not finished):
                     self.narrator.enforcement("auto_finish", step_count, enforcement_limit)
+                    # MetaCognition: Enforcement loggen (Lern-Feedback)
+                    m = self.seq_intel.metrics
+                    self.metacognition.record(
+                        bottleneck=f"Enforcement: Auto-Finish bei Step {step_count} (Limit {enforcement_limit})",
+                        strategy_change="Code-Enforcement statt Prompt — Sequenz automatisch beendet",
+                        sequence=self.sequences_total + 1,
+                        wasted_steps=max(0, step_count - m.files_written - m.tools_built),
+                        productive_steps=m.files_written + m.tools_built,
+                        key_decision="auto_finish_enforcement",
+                    )
                     try:
                         finish_data = self._graceful_finish(messages, step_count)
                         finish_data["enforcement"] = "auto_finish_step_limit"
