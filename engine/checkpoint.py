@@ -98,8 +98,8 @@ class CheckpointManager:
             step=step,
             focus=focus,
             sub_goal=sub_goal,
-            files_read=[],  # Wird spaeter aus Tracking gefuellt
-            files_written=list(getattr(engine, "_seq_written_paths", [])),
+            files_read=[],
+            files_written=list(getattr(engine.seq_intel.metrics, "written_paths", [])),
             findings=findings,
             plan_goal=plan_goal,
         )

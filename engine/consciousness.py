@@ -1259,47 +1259,61 @@ SEQUENZ-PLANUNG: Nutze write_sequence_plan am Anfang — plane dein Ziel, Exit-K
             parts.append(learn_context)
 
         # Existierende Projekte zum Fokus anzeigen (Anti-Loop, max 10)
+        # Cache: Nur alle 10 Sequenzen neu scannen (Projekte aendern sich selten)
         if "FOKUS:" in focus and hasattr(self, "actions") and hasattr(self.actions, "projects_path"):
             try:
-                projects_path = self.actions.projects_path
-                if projects_path.exists():
-                    try:
-                        all_dirs = [d for d in projects_path.iterdir() if d.is_dir()]
-                        existing = sorted(
-                            all_dirs,
-                            key=lambda d: d.stat().st_mtime, reverse=True,
-                        )
-                    except (OSError, PermissionError):
-                        existing = []
+                cache = getattr(self, "_projects_cache", None)
+                cache_age = getattr(self, "_projects_cache_seq", 0)
+                need_refresh = cache is None or (self.sequences_total - cache_age) >= 10
 
-                    if existing:
-                        proj_list = ", ".join(d.name for d in existing[:10])
-                        hint = "EXISTIERENDE PROJEKTE: " + proj_list
-                        if len(existing) > 10:
-                            hint += f" (+{len(existing) - 10} weitere)"
-                        hint += " | HINWEIS: Erstelle KEIN neues Projekt wenn ein passendes existiert!"
-                        hint += " Nutze read_file/write_file um am bestehenden Projekt weiterzuarbeiten."
-                        parts.append(hint)
+                if need_refresh:
+                    projects_path = self.actions.projects_path
+                    cache = {"hint": "", "files": []}
+                    if projects_path.exists():
+                        try:
+                            all_dirs = [d for d in projects_path.iterdir() if d.is_dir()]
+                            existing = sorted(
+                                all_dirs,
+                                key=lambda d: d.stat().st_mtime, reverse=True,
+                            )
+                        except (OSError, PermissionError):
+                            existing = []
 
-                        # Datei-Inventar der 2 zuletzt bearbeiteten Projekte (max 25 pro Projekt)
-                        _SKIP_EXT = frozenset((".pyc", ".pyo", ".tmp", ".bak"))
-                        for proj_dir in existing[:2]:
-                            try:
-                                files = sorted(
-                                    f.name for f in proj_dir.iterdir()
-                                    if (f.is_file()
-                                        and not f.name.startswith(".")
-                                        and f.suffix not in _SKIP_EXT)
-                                )
-                                if files:
-                                    display = ", ".join(files[:25])
-                                    if len(files) > 25:
-                                        display += f" (+{len(files) - 25} weitere)"
-                                    parts.append(
-                                        f"DATEIEN IN {proj_dir.name}/: {display}"
+                        if existing:
+                            proj_list = ", ".join(d.name for d in existing[:10])
+                            hint = "EXISTIERENDE PROJEKTE: " + proj_list
+                            if len(existing) > 10:
+                                hint += f" (+{len(existing) - 10} weitere)"
+                            hint += " | HINWEIS: Erstelle KEIN neues Projekt wenn ein passendes existiert!"
+                            hint += " Nutze read_file/write_file um am bestehenden Projekt weiterzuarbeiten."
+                            cache["hint"] = hint
+
+                            _SKIP_EXT = frozenset((".pyc", ".pyo", ".tmp", ".bak"))
+                            for proj_dir in existing[:2]:
+                                try:
+                                    files = sorted(
+                                        f.name for f in proj_dir.iterdir()
+                                        if (f.is_file()
+                                            and not f.name.startswith(".")
+                                            and f.suffix not in _SKIP_EXT)
                                     )
-                            except (OSError, PermissionError):
-                                continue
+                                    if files:
+                                        display = ", ".join(files[:25])
+                                        if len(files) > 25:
+                                            display += f" (+{len(files) - 25} weitere)"
+                                        cache["files"].append(
+                                            f"DATEIEN IN {proj_dir.name}/: {display}"
+                                        )
+                                except (OSError, PermissionError):
+                                    continue
+
+                    self._projects_cache = cache
+                    self._projects_cache_seq = self.sequences_total
+
+                if cache.get("hint"):
+                    parts.append(cache["hint"])
+                for f in cache.get("files", []):
+                    parts.append(f)
             except Exception as e:
                 logger.warning("Perception: Projekt-Liste konnte nicht geladen werden: %s", e)
 
@@ -1307,10 +1321,14 @@ SEQUENZ-PLANUNG: Nutze write_sequence_plan am Anfang — plane dein Ziel, Exit-K
         env = self.perceiver._scan_home()
         parts.append(f"\nDateisystem: {env}")
 
-        # Datei-Aenderungen
-        file_changes = self.file_watcher.check_changes()
-        if file_changes:
-            parts.append(f"\n{file_changes}")
+        # Datei-Aenderungen (Debounce: nur alle 5 Sequenzen — os.walk ist teuer)
+        if self.sequences_total % 5 == 0:
+            file_changes = self.file_watcher.check_changes()
+            if file_changes:
+                self._last_file_changes = file_changes
+                parts.append(f"\n{file_changes}")
+        elif hasattr(self, "_last_file_changes") and self._last_file_changes:
+            parts.append(f"\n{self._last_file_changes}")
 
         # Offene Tasks
         next_task = self.task_queue.get_next()
@@ -1318,7 +1336,15 @@ SEQUENZ-PLANUNG: Nutze write_sequence_plan am Anfang — plane dein Ziel, Exit-K
             parts.append(f"\nNAECHSTE AUFGABE: {next_task['description']} [{next_task.get('priority', 'normal')}]")
 
         # Relevanteste Erinnerungen (Phi-Decay + Valenz-Gewichtung)
-        relevant = self.memory.retrieve_relevant(top_k=3)
+        # Cache: Ergebnis bleibt gleich solange Focus sich nicht aendert
+        _mem_cache = getattr(self, "_memory_cache", {})
+        _mem_cache_focus = _mem_cache.get("focus", "")
+        if _mem_cache_focus != focus or not _mem_cache.get("results"):
+            relevant = self.memory.retrieve_relevant(top_k=3)
+            self._memory_cache = {"focus": focus, "results": relevant}
+        else:
+            relevant = _mem_cache["results"]
+
         if relevant:
             parts.append("\nWICHTIGSTE ERINNERUNGEN:")
             for m in relevant:
@@ -1336,19 +1362,8 @@ SEQUENZ-PLANUNG: Nutze write_sequence_plan am Anfang — plane dein Ziel, Exit-K
         if failure_check:
             parts.append(f"\n{failure_check}")
 
-        # Semantische Memory: Top-3 relevante Erinnerungen zum aktuellen Fokus
-        if focus:
-            try:
-                relevant = self.semantic_memory.search(focus, top_k=3)
-                if relevant:
-                    parts.append("\nRELEVANTE ERINNERUNGEN:")
-                    for mem in relevant:
-                        content = mem.get("content", "")[:150]
-                        score = mem.get("similarity", 0)
-                        if score > 0.01:
-                            parts.append(f"  - [{score:.2f}] {content}")
-            except (OSError, KeyError, TypeError) as e:
-                parts.append(f"  (Memory-Suche fehlgeschlagen: {e})")
+        # Semantische Memory: ENTFERNT — redundant mit memory.retrieve_relevant() oben
+        # (Spart ~2-3s pro Sequenz durch vermiedene doppelte Suche)
 
         # Efficiency-Alerts (von letzter Trend-Analyse)
         eff_alerts = getattr(self, "_efficiency_alerts", [])
@@ -1929,10 +1944,19 @@ SEQUENZ-PLANUNG: Nutze write_sequence_plan am Anfang — plane dein Ziel, Exit-K
 
     # === Interaktion (fuer interact.py) ===
 
+    # Circuit Breaker: Trackt Provider-Failures fuer automatischen Fallback
+    _provider_failures: dict = {}   # {provider: consecutive_failure_count}
+    _provider_cooldown: dict = {}   # {provider: cooldown_until_sequence_nr}
+
     def _call_llm(self, task: str, system: str, messages: list,
                   tools: Optional[list] = None, max_tokens: int = MAX_TOKENS) -> dict:
         """
-        Zentraler LLM-Call — routet automatisch zum richtigen Modell.
+        Zentraler LLM-Call mit automatischem Fallback + Circuit Breaker.
+
+        Wenn der primaere Provider fehlschlaegt:
+        1. Retry im Provider selbst (Timeout, 429)
+        2. Fallback auf DeepSeek V3
+        3. Circuit Breaker: Nach 2 Fails → DeepSeek fuer 10 Sequenzen
 
         Args:
             task: Aufgaben-Typ (main_work, code_review, audit_primary, etc.)
@@ -1946,6 +1970,56 @@ SEQUENZ-PLANUNG: Nutze write_sequence_plan am Anfang — plane dein Ziel, Exit-K
         """
         from .llm_router import MODELS
         model_key = self.llm.get_model_for_task(task)
+        provider = MODELS.get(model_key, {}).get("provider", "google")
+
+        # Circuit Breaker: Provider im Cooldown? → direkt Fallback
+        cooldown_until = self._provider_cooldown.get(provider, 0)
+        if cooldown_until > self.sequences_total:
+            remaining = cooldown_until - self.sequences_total
+            logger.info("Circuit Breaker: %s im Cooldown (%d Seq uebrig) → DeepSeek", provider, remaining)
+            return self._call_provider("deepseek_v3", system, messages, tools, max_tokens)
+
+        # Primaerer Call
+        try:
+            result = self._call_provider(model_key, system, messages, tools, max_tokens)
+            # Erfolg → Failure-Counter zuruecksetzen
+            self._provider_failures[provider] = 0
+            return result
+        except Exception as primary_error:
+            # Failure tracken
+            failures = self._provider_failures.get(provider, 0) + 1
+            self._provider_failures[provider] = failures
+            logger.warning(
+                "LLM-Fehler %s (Versuch %d): %s", provider, failures, primary_error
+            )
+
+            # Circuit Breaker: Ab 2 Failures → Cooldown fuer 10 Sequenzen
+            if failures >= 2:
+                self._provider_cooldown[provider] = self.sequences_total + 10
+                logger.warning(
+                    "Circuit Breaker AKTIV: %s gesperrt fuer 10 Sequenzen → DeepSeek",
+                    provider,
+                )
+
+            # Fallback auf DeepSeek (nur wenn primaerer Provider nicht schon DeepSeek ist)
+            if provider != "deepseek":
+                try:
+                    logger.info("Fallback: %s → DeepSeek V3", provider)
+                    print(f"  [Fallback: {provider} → DeepSeek V3]")
+                    return self._call_provider(
+                        "deepseek_v3", system, messages, tools, max_tokens
+                    )
+                except Exception as fallback_error:
+                    logger.error("Fallback DeepSeek auch fehlgeschlagen: %s", fallback_error)
+                    raise fallback_error from primary_error
+
+            # Wenn schon DeepSeek war, Original-Error weiterreichen
+            raise
+
+    def _call_provider(self, model_key: str, system: str, messages: list,
+                       tools: Optional[list], max_tokens: int) -> dict:
+        """Ruft einen spezifischen Provider auf (ohne Fallback-Logik)."""
+        from .llm_router import MODELS
         provider = MODELS.get(model_key, {}).get("provider", "google")
 
         if provider == "anthropic":
@@ -2923,7 +2997,7 @@ Antworte als JSON:
                     print(f"  Nachrichten-Sync verloren — starte neue Sequenz")
                 else:
                     print(f"  API-Fehler: {e}")
-                    time.sleep(3)
+                    time.sleep(1)  # Kurze Pause statt 3s
                 break
 
             # Token-Tracking: prompt_tokens = Gesamt-Input pro Call (nicht Delta!)

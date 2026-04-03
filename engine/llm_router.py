@@ -88,7 +88,7 @@ class LLMRouter:
         self.google_key = os.getenv("GOOGLE_AI_API_KEY", "").strip()
         self.deepseek_key = os.getenv("DEEPSEEK_API_KEY", "").strip()
         self.nvidia_key = os.getenv("NVIDIA_API_KEY", "").strip()
-        self.http = httpx.Client(timeout=120.0)
+        self.http = httpx.Client(timeout=30.0)  # 30s statt 120s — Kimi antwortet in 3-10s
         self._http_owned = True  # Marker fuer Cleanup
 
         # Kosten-Tracking (thread-safe)
@@ -283,22 +283,37 @@ class LLMRouter:
             if oai_tools:
                 body["tools"] = oai_tools
 
-        # Retry mit Backoff (NVIDIA gibt gelegentlich 429 zurueck)
+        # Retry mit Backoff (429 Rate-Limit + Timeout)
+        import time as _time
+        last_error = None
+        resp = None
         for attempt in range(3):
-            resp = self.http.post(
-                "https://integrate.api.nvidia.com/v1/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {self.nvidia_key}",
-                    "Content-Type": "application/json",
-                },
-                json=body,
-            )
+            try:
+                resp = self.http.post(
+                    "https://integrate.api.nvidia.com/v1/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {self.nvidia_key}",
+                        "Content-Type": "application/json",
+                    },
+                    json=body,
+                )
+            except httpx.TimeoutException as e:
+                last_error = e
+                logger.warning("NVIDIA Timeout (Versuch %d/3): %s", attempt + 1, e)
+                if attempt < 2:
+                    _time.sleep(2 ** attempt)
+                    continue
+                raise ValueError(f"NVIDIA API Timeout nach 3 Versuchen") from e
+
             if resp.status_code == 429:
-                import time
-                time.sleep(2 ** attempt)  # 1s, 2s, 4s
-                continue
+                logger.warning("NVIDIA Rate-Limit 429 (Versuch %d/3)", attempt + 1)
+                if attempt < 2:
+                    _time.sleep(2 ** attempt)
+                    continue
             break
 
+        if resp is None:
+            raise ValueError("NVIDIA API: Kein Response erhalten")
         if resp.status_code != 200:
             raise ValueError(f"NVIDIA API Fehler {resp.status_code}: {resp.text[:200]}")
 

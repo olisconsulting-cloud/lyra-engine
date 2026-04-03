@@ -296,8 +296,8 @@ Sei STRENG aber FAIR. Finde echte Probleme, keine Stilfragen."""
         t_gemini = threading.Thread(target=run_gemini)
         t_opus.start()
         t_gemini.start()
-        t_opus.join(timeout=120)
-        t_gemini.join(timeout=120)
+        t_opus.join(timeout=45)
+        t_gemini.join(timeout=45)
 
         opus = opus_result[0] or {"findings": [], "overall_quality": 0, "summary": "Opus Timeout"}
         gemini = gemini_result[0] or {"findings": [], "overall_quality": 0, "summary": "Gemini Timeout"}
