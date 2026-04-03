@@ -43,8 +43,8 @@ from .config import safe_json_write, safe_json_read
 
 logger = logging.getLogger(__name__)
 
-MAX_STEPS_PER_SEQUENCE = 40          # Von Oliver auf 40 erhoeht (vorher 15)
-MAX_INPUT_TOKENS_PER_SEQUENCE = 400_000  # Von Oliver auf 400k erhoeht (vorher 250k)
+MAX_STEPS_PER_SEQUENCE = 15          # Realistisches Limit (Kompression + Token-Budget)
+MAX_INPUT_TOKENS_PER_SEQUENCE = 250_000  # Kumulativ — erlaubt 12-15 Steps mit Kompression
 MAX_TOKENS = 16000                    # Max Output-Tokens pro LLM-Call
 
 # Stoppwoerter fuer Spin-Key-Normalisierung (identisch mit actions.py/goal_stack.py)
