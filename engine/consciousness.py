@@ -44,6 +44,7 @@ from .skill_library import SkillLibrary
 from .proactive_learner import ProactiveLearner
 from .event_bus import EventBus, Events
 from .tool_registry import ToolRegistry
+from .handlers import ToolContext, register_all_handlers
 from .perception_pipeline import PerceptionPipeline
 from .unified_memory import (
     UnifiedMemory, semantic_adapter, experience_adapter,
@@ -639,6 +640,9 @@ class ConsciousnessEngine:
         # create_tool = normaler Arbeitsfluss
         self._requires_approval = {"pip_install"}
 
+        # State laden (vor Tool-Registry, da _register_all_tools State-Felder braucht)
+        self.load_state()
+
         # Tool-Registry — zentrale Tool-Verwaltung (nach _requires_approval)
         self.tool_registry = ToolRegistry(event_bus=self.event_bus)
         self._register_all_tools()
@@ -664,10 +668,10 @@ class ConsciousnessEngine:
             metacognition=self.metacognition,
             self_rating=self.self_rating,
             memory=self.memory,
-            planner=self.planner,
+            planner=self.seq_intel,
             skill_library=self.skill_library,
-            meta_rules=self.meta_rules,
-            checkpointer=self.checkpointer,
+            meta_rules=self.seq_intel,
+            checkpointer=self.seq_intel,
             git=self.git,
             communication=self.communication,
             goal_stack=self.goal_stack,
@@ -1370,7 +1374,8 @@ SEQUENZ-PLANUNG: Nutze write_sequence_plan am Anfang — plane dein Ziel, Exit-K
     # === Tool-Ausfuehrung ===
 
     def _register_all_tools(self):
-        """Registriert alle Tools in der ToolRegistry aus TOOLS + TOOL_TIERS + REQUIRED_FIELDS."""
+        """Registriert alle Tools in der ToolRegistry und verdrahtet Handler aus engine/handlers/."""
+        # 1. Tool-Definitionen registrieren (Schema, Tier, Pflichtfelder)
         for api_def in TOOLS:
             name = api_def["name"]
             self.tool_registry.register_from_api_def(
@@ -1379,10 +1384,43 @@ SEQUENZ-PLANUNG: Nutze write_sequence_plan am Anfang — plane dein Ziel, Exit-K
                 required_fields=self.REQUIRED_FIELDS.get(name, []),
                 requires_approval=(name in self._requires_approval),
             )
-            # Handler: Delegiert an bestehende _execute_tool_inner
-            self.tool_registry.set_handler(
-                name, lambda inp, n=name: self._execute_tool_inner(n, inp)
-            )
+
+        # 2. ToolContext erstellen — alle Dependencies fuer die Handler
+        self._tool_context = ToolContext(
+            actions=self.actions,
+            toolchain=self.toolchain,
+            goal_stack=self.goal_stack,
+            seq_intel=self.seq_intel,
+            communication=self.communication,
+            semantic_memory=self.semantic_memory,
+            web=self.web,
+            proactive_learner=self.proactive_learner,
+            self_modify=self.self_modify,
+            code_review=self.code_review,
+            critic=self.critic,
+            composer=self.composer,
+            foundry=self.foundry,
+            learning=self.learning,
+            skills=self.skills,
+            pip=self.pip,
+            git=self.git,
+            task_queue=self.task_queue,
+            integration_tester=self.integration_tester,
+            dependency_analyzer=self.dependency_analyzer,
+            silent_failure_detector=self.silent_failure_detector,
+            sequences_total=self.sequences_total,
+            _installed_packages=self._installed_packages,
+            # Callbacks fuer Logik die in consciousness.py bleibt
+            opus_goal_planning=self._opus_goal_planning,
+            opus_result_validation=self._opus_result_validation,
+            cross_model_review=self._cross_model_review,
+            check_markdown_quality=self._check_markdown_quality,
+            save_all=self._save_all,
+            handle_finish_sequence=self._handle_finish_sequence,
+        )
+
+        # 3. Handler aus engine/handlers/ registrieren
+        register_all_handlers(self.tool_registry, self._tool_context)
 
     # === Event-Handler — Subsysteme reagieren in Echtzeit ===
 
@@ -1555,525 +1593,28 @@ SEQUENZ-PLANUNG: Nutze write_sequence_plan am Anfang — plane dein Ziel, Exit-K
     }
 
     def _execute_tool_inner(self, name: str, tool_input: dict) -> str:
-        """Interne Tool-Ausfuehrung. Validierung passiert in _execute_tool."""
+        """Interne Tool-Ausfuehrung — delegiert an Handler aus engine/handlers/.
+
+        Die Handler sind als pure Funktionen in Domain-Modulen organisiert.
+        Der ToolContext stellt alle Dependencies bereit.
+        """
+        # Laufzeit-State synchronisieren (aendert sich pro Sequenz)
+        self._tool_context.sequences_total = self.sequences_total
+        self._tool_context._seq_force_used = getattr(self, "_seq_force_used", 0)
+
+        from .handlers import HANDLER_MAP
+        handler = HANDLER_MAP.get(name)
+        if not handler:
+            return f"Unbekanntes Tool: {name}"
         try:
-            if name == "write_file":
-                path = tool_input["path"]
-                content = tool_input["content"]
-                force = bool(tool_input.get("force", False))
-                # force-Missbrauch tracken (max 3 pro Sequenz)
-                if force:
-                    self._seq_force_used = getattr(self, "_seq_force_used", 0) + 1
-                    if self._seq_force_used > 3:
-                        return (
-                            "FEHLER: force wurde diese Sequenz bereits 3x genutzt. "
-                            "Das deutet auf ein systematisches Problem hin. "
-                            "Pruefe ob du bestehende Dateien aktualisieren solltest."
-                        )
-                # Quality Gate fuer Markdown-Dateien
-                if path.endswith(".md") and len(content) > 200:
-                    issues = self._check_markdown_quality(content)
-                    if issues:
-                        result = self.actions.write_file(path, content, force=force)
-                        # Quality-Warnung nur anhaengen wenn Datei tatsaechlich geschrieben wurde
-                        if result.startswith("FEHLER") or result.startswith("WARNUNG"):
-                            return result
-                        return f"{result}\nQUALITAETS-WARNUNG: {'; '.join(issues)}"
-                return self.actions.write_file(path, content, force=force)
-
-            elif name == "read_file":
-                return self.actions.read_file(tool_input["path"])
-
-            elif name == "list_directory":
-                return self.actions.list_directory(tool_input.get("path", ""))
-
-            elif name == "execute_python":
-                return self.actions.run_code(tool_input["code"])
-
-            elif name == "web_search":
-                query = tool_input["query"]
-                # Web-Cache pruefen bevor echte Suche
-                cached = self.proactive_learner.web_cache.get(query)
-                if cached:
-                    results = cached.get("results", [])
-                    formatted = "\n".join(
-                        f"  {i+1}. {r}" if isinstance(r, str) else
-                        f"  {i+1}. {r.get('title', '')}: {r.get('snippet', '')}"
-                        for i, r in enumerate(results[:5])
-                    )
-                    return f"[CACHE] Ergebnisse fuer '{query[:50]}':\n{formatted}"
-                result = self.web.search(query)
-                # Ergebnis cachen fuer naechste Sequenz
-                if result and "FEHLER" not in result:
-                    # Ergebnis als Liste von Strings speichern
-                    result_lines = [l.strip() for l in result.split("\n") if l.strip()][:5]
-                    self.proactive_learner.store_research_result(query, result_lines)
-                return result
-
-            elif name == "web_read":
-                return self.web.read_page(tool_input["url"])
-
-            elif name == "send_telegram":
-                msg = tool_input["message"]
-                channel = "telegram" if self.communication.telegram_active else "outbox"
-                self.communication.send_message(msg, channel=channel)
-                return f"Nachricht gesendet ({channel}): {msg[:100]}..."
-
-            elif name == "create_project":
-                return self.actions.create_project(
-                    tool_input["name"],
-                    tool_input.get("description", ""),
-                    tool_input.get("acceptance_criteria"),
-                    tool_input.get("phases"),
-                )
-
-            elif name == "create_tool":
-                # Skill-Komposition: Pruefen ob existierende Tools helfen
-                desc = tool_input.get("description", "")
-                # Skill-Komposition: Hint IMMER anzeigen (auch bei Fehler)
-                composition_hint = self.composer.suggest_composition(desc)
-                result = self.toolchain.create_tool(
-                    tool_input["name"], desc, tool_input["code"],
-                )
-                if composition_hint:
-                    result += f"\n{composition_hint}"
-                return result
-
-            elif name == "use_tool":
-                return self.toolchain.use_tool(
-                    tool_input["name"],
-                    **(tool_input.get("arguments") or {}),
-                )
-
-            elif name == "set_goal":
-                title = tool_input["title"]
-                description = tool_input.get("description", "")
-                sub_goals = tool_input.get("sub_goals")
-                # Duplikat-Check zuerst — vor teurem Opus-Call
-                similar = self.goal_stack._find_similar_goal(title)
-                if not similar:
-                    # Nur Opus aufrufen wenn es KEIN Duplikat ist
-                    if not sub_goals or len(sub_goals) < 2:
-                        opus_sub_goals = self._opus_goal_planning(title, description)
-                        if opus_sub_goals:
-                            sub_goals = opus_sub_goals
-                result = self.goal_stack.create_goal(title, description, sub_goals)
-                # Neues Goal → alten Checkpoint loeschen (sonst falscher Resume-Kontext)
-                self.seq_intel.clear_checkpoint()
-                return result
-
-            elif name == "complete_subgoal":
-                result = self.goal_stack.complete_subgoal(
-                    tool_input["goal_index"],
-                    tool_input["subgoal_index"],
-                    tool_input.get("result", ""),
-                )
-                # Auto-Erkennung: Lehrprojekt abgeschlossen → Skill-Update
-                if "ZIEL ERREICHT" in result:
-                    # Report-Trigger: Gesamtergebnis als Dokument
-                    try:
-                        completed = self.goal_stack.goals.get("completed", [])
-                        if completed:
-                            goal = completed[-1]
-                            goal_title = goal.get("title", "Ergebnis")
-
-                            # 1. Sub-Goal-Ergebnisse sammeln
-                            sections = []
-                            for sg in goal.get("sub_goals", []):
-                                if sg.get("result"):
-                                    sections.append(f"## {sg['title']}\n{sg['result']}")
-
-                            # 2. Projekt-Dateien einbeziehen (die echten Ergebnisse)
-                            import re
-                            safe_name = re.sub(r"[^a-z0-9-]", "", goal_title.lower().replace(" ", "-"))[:40]
-                            project_dir = config.DATA_PATH / "projects"
-                            for md_file in sorted(project_dir.rglob("*.md")):
-                                if md_file.name in ("README.md", "PLAN.md", "PROGRESS.md"):
-                                    continue
-                                try:
-                                    content = md_file.read_text(encoding="utf-8")[:2000]
-                                    rel = md_file.relative_to(project_dir)
-                                    sections.append(f"## Datei: {rel}\n{content}")
-                                except (OSError, UnicodeDecodeError):
-                                    continue
-
-                            if sections:
-                                report = f"# Ergebnis: {goal_title}\n\n"
-                                report += "\n\n".join(sections)
-                                report += f"\n\n---\nErstellt: {datetime.now(timezone.utc).isoformat()}\n"
-                                report_path = project_dir / f"REPORT_{safe_name}.md"
-                                report_path.write_text(report, encoding="utf-8")
-                                result += f" | Report: REPORT_{safe_name}.md"
-                                if self.communication.telegram_active:
-                                    self.communication.send_message(
-                                        f"ZIEL ERREICHT: {goal_title}\n\n{report[:3500]}",
-                                        channel="telegram",
-                                    )
-                    except (OSError, KeyError) as e:
-                        logger.warning(f" Goal-Completion Report fehlgeschlagen: {e}")
-
-                    goals = self.goal_stack._load()
-                    for g in goals.get("completed", []):
-                        if "lehrprojekt" in g.get("title", "").lower():
-                            project_name = g.get("title", "").replace("Lehrprojekt: ", "")
-                            learn_result = self.learning.complete_learning_project(
-                                project_name, self.skills
-                            )
-                            result += f" | {learn_result}"
-                            break
-                return result
-
-            elif name == "read_own_code":
-                return self.self_modify.read_source(tool_input["path"])
-
-            elif name == "modify_own_code":
-                # Sicherheit: Max 3 modify_own_code pro Sequenz
-                if not hasattr(self, "_modify_count_this_seq"):
-                    self.seq_intel.metrics.modify_count = 0
-                self.seq_intel.metrics.modify_count += 1
-                if self.seq_intel.metrics.modify_count > 3:
-                    return (
-                        "FEHLER: Maximum 3 Code-Aenderungen pro Sequenz erreicht. "
-                        "Beende die Sequenz und mache in der naechsten weiter."
-                    )
-
-                # Alten Code lesen fuer Critic-Vergleich (ROHER Dateiinhalt, nicht formatiert)
-                try:
-                    raw_path = (config.ROOT_PATH / tool_input["path"]).resolve()
-                    old_code = raw_path.read_text(encoding="utf-8") if raw_path.exists() else ""
-                except (OSError, KeyError, UnicodeDecodeError):
-                    old_code = ""
-
-                # Dual-Review: Syntax + Opus 4.6 pruefen
-                review_result = self.code_review.review_and_apply_fix(
-                    file_path=tool_input["path"],
-                    new_content=tool_input["new_content"],
-                    reason=tool_input.get("reason", "Selbstverbesserung"),
-                )
-                if review_result["accepted"]:
-                    # Critic-Agent: Ist es BESSER als vorher?
-                    critic = self.critic.evaluate_change(
-                        tool_input["path"], old_code,
-                        tool_input["new_content"],
-                        tool_input.get("reason", ""),
-                    )
-                    raw_score = critic.get("score", 5)
-                    # Score validieren: Muss int/float sein, sonst Default 5
-                    try:
-                        score = int(raw_score) if not isinstance(raw_score, (int, float)) else raw_score
-                    except (ValueError, TypeError):
-                        score = 5
-                    score = max(1, min(10, score))
-                    critic_note = f" | Critic: {score}/10"
-                    if critic.get("side_effects"):
-                        critic_note += f" | Seiteneffekte: {critic['side_effects'][:80]}"
-
-                    # CRITIC ENTSCHEIDET: Score < 4 = Rollback
-                    if isinstance(score, (int, float)) and score < 4:
-                        # Rollback — Critic sagt: Verschlechterung
-                        self.code_review._rollback(
-                            (config.ROOT_PATH / tool_input["path"]).resolve(),
-                            old_code,
-                        )
-                        return (
-                            f"ROLLBACK — Critic-Score zu niedrig ({score}/10): "
-                            f"{critic.get('side_effects', 'Verschlechterung')[:100]}"
-                        )
-
-                    self.communication.write_journal(
-                        f"Code geaendert (REVIEW OK{critic_note}): {tool_input['path']}\n"
-                        f"Grund: {tool_input.get('reason', '?')}",
-                        self.sequences_total,
-                    )
-                    return f"Code geaendert{critic_note}: {tool_input['path']}"
-                else:
-                    return f"ROLLBACK — Review abgelehnt: {review_result['reason']}"
-
-            # === Semantische Memory ===
-            elif name == "remember":
-                results = self.semantic_memory.search(tool_input["query"], top_k=5)
-                if not results:
-                    return f"Keine Erinnerungen zu '{tool_input['query']}' gefunden."
-                lines = [f"Erinnerungen zu '{tool_input['query']}':"]
-                for r in results:
-                    imp = r.get("importance", 0.3)
-                    lines.append(
-                        f"  [{r['similarity']:.2f}|imp:{imp:.1f}] "
-                        f"({r.get('metadata', {}).get('tool', '?')}) "
-                        f"{r['content'][:200]}"
-                    )
-                return "\n".join(lines)
-
-            elif name == "update_memory":
-                return self.semantic_memory.update(
-                    tool_input["entry_id"], tool_input["new_content"],
-                )
-
-            elif name == "delete_memory":
-                return self.semantic_memory.delete(tool_input["entry_id"])
-
-            # === Package Management ===
-            elif name == "pip_install":
-                pkg = tool_input["package"]
-                # Bereits installierte Pakete ueberspringen
-                if pkg.lower() in self._installed_packages:
-                    return f"Bereits installiert: {pkg}"
-                result = self.pip.install(pkg)
-                if "already satisfied" in result.lower() or "installiert" in result.lower():
-                    self._installed_packages.add(pkg.lower())
-                    self._save_all()  # Installation sofort persistieren
-                elif not result.startswith("FEHLER"):
-                    self._installed_packages.add(pkg.lower())
-                    self._save_all()
-                return result
-
-            # === Git ===
-            elif name == "git_commit":
-                return self.git.commit(tool_input["message"])
-
-            elif name == "git_status":
-                return self.git.status()
-
-            elif name == "verify_project":
-                # Liest PLAN.md und gibt Akzeptanzkriterien zurueck
-                plan_path = config.DATA_PATH / "projects" / tool_input["project_name"] / "PLAN.md"
-                if not plan_path.exists():
-                    return f"FEHLER: Kein PLAN.md in projects/{tool_input['project_name']}/"
-
-                plan_content = plan_path.read_text(encoding="utf-8")
-
-                # Akzeptanzkriterien extrahieren
-                criteria_lines = []
-                in_criteria = False
-                for line in plan_content.split("\n"):
-                    # Header erkennen (nur ## Zeilen, nicht Checkbox-Zeilen)
-                    if line.startswith("##") and ("akzeptanzkriterien" in line.lower() or "acceptance" in line.lower()):
-                        in_criteria = True
-                        continue
-                    if in_criteria:
-                        if line.startswith("##"):
-                            break
-                        if line.strip().startswith("- ["):
-                            criteria_lines.append(line.strip())
-
-                if not criteria_lines:
-                    return f"Keine Akzeptanzkriterien in PLAN.md gefunden."
-
-                result = f"AKZEPTANZKRITERIEN fuer {tool_input['project_name']}:\n"
-                result += "\n".join(criteria_lines)
-                result += "\n\nPruefe JEDES Kriterium. Ist es erfuellt? Wenn nicht: was fehlt?"
-                return result
-
-            elif name == "run_project_tests":
-                project_name = tool_input["project_name"]
-                tests_path = config.DATA_PATH / "projects" / project_name / "tests.py"
-                if not tests_path.exists():
-                    return f"FEHLER: Keine tests.py in projects/{project_name}/. Erstelle zuerst Tests."
-
-                # Tests ECHT ausfuehren
-                test_output = self.actions.run_script(
-                    f"projects/{project_name}/tests.py", timeout=60,
-                )
-
-                # Evidenz speichern (maschinenlesbar)
-                evidence_path = config.DATA_PATH / "projects" / project_name / ".test_evidence.json"
-                all_passed = "ALL_TESTS_PASSED" in test_output
-                evidence = {
-                    "timestamp": datetime.now(timezone.utc).isoformat(),
-                    "passed": all_passed,
-                    "output": test_output[:2000],
-                    "sequence": self.sequences_total,
-                }
-                safe_json_write(evidence_path, evidence)
-
-                # PROGRESS.md aktualisieren — in die richtige Section
-                self.actions._update_progress(
-                    project_name,
-                    f"Tests: {'ALL PASS' if all_passed else 'FAILED'}",
-                    section="Test-Ergebnisse",
-                )
-
-                return test_output
-
-            elif name == "complete_project":
-                project_name = tool_input["project_name"]
-                plan_path = config.DATA_PATH / "projects" / project_name / "PLAN.md"
-                progress_path = config.DATA_PATH / "projects" / project_name / "PROGRESS.md"
-                evidence_path = config.DATA_PATH / "projects" / project_name / ".test_evidence.json"
-
-                if not plan_path.exists():
-                    return f"FEHLER: Kein PLAN.md in projects/{project_name}/"
-
-                # === EVIDENCE-GATE: Tests muessen gelaufen und bestanden sein ===
-                # Atomar: Lesen + Validieren in einem try-Block (kein TOCTOU)
-                evidence = safe_json_read(evidence_path, default=None)
-                if evidence is None:
-                    return (
-                        f"FEHLER: Keine gueltige Test-Evidenz vorhanden.\n"
-                        f"Fuehre zuerst run_project_tests('{project_name}') aus."
-                    )
-
-                # Staleness-Check: Evidenz muss aus dieser Sequenz stammen
-                evidence_seq = evidence.get("sequence", -1)
-                if evidence_seq != self.sequences_total:
-                    return (
-                        f"FEHLER: Test-Evidenz ist veraltet (Sequenz {evidence_seq}, "
-                        f"aktuell {self.sequences_total}).\n"
-                        f"Fuehre run_project_tests('{project_name}') erneut aus."
-                    )
-
-                if not evidence.get("passed"):
-                    return (
-                        f"FEHLER: Tests nicht bestanden. Projekt kann nicht abgeschlossen werden.\n"
-                        f"Letzter Test-Output:\n{evidence.get('output', '')[:500]}\n"
-                        f"Behebe die Fehler und fuehre run_project_tests erneut aus."
-                    )
-
-                # Akzeptanzkriterien aus PLAN.md lesen
-                plan_content = plan_path.read_text(encoding="utf-8")
-                required_criteria = []
-                in_criteria = False
-                for line in plan_content.split("\n"):
-                    if line.startswith("##") and ("akzeptanzkriterien" in line.lower() or "acceptance" in line.lower()):
-                        in_criteria = True
-                        continue
-                    if in_criteria:
-                        if line.startswith("##"):
-                            break
-                        if line.strip().startswith("- ["):
-                            criterion = line.strip()[6:].strip() if "] " in line else line.strip()[4:].strip()
-                            required_criteria.append(criterion)
-
-                if not required_criteria:
-                    return "FEHLER: Keine Akzeptanzkriterien in PLAN.md gefunden."
-
-                # Pruefen ob ALLE Kriterien in verified_criteria enthalten sind
-                verified = tool_input.get("verified_criteria", [])
-                missing = []
-                for req in required_criteria:
-                    found = any(req.lower()[:30] in v.lower() for v in verified)
-                    if not found:
-                        missing.append(req)
-
-                if missing:
-                    return (
-                        f"FEHLER: Projekt kann nicht abgeschlossen werden.\n"
-                        f"Fehlende Kriterien ({len(missing)}):\n" +
-                        "\n".join(f"  - [ ] {m}" for m in missing)
-                    )
-
-                # === OPUS ERGEBNIS-VALIDIERUNG ===
-                # Opus prueft ob die Ergebnisse inhaltlich sinnvoll sind
-                project_path = config.DATA_PATH / "projects" / project_name
-                opus_validation = self._opus_result_validation(
-                    project_name, required_criteria, verified
-                )
-                if opus_validation and not opus_validation.get("approved", False):
-                    return (
-                        f"OPUS-VALIDIERUNG FEHLGESCHLAGEN:\n"
-                        f"{opus_validation.get('reason', 'Unbekannter Grund')}\n"
-                        f"Behebe die Probleme und versuche es erneut."
-                    )
-
-                # === CROSS-MODEL-REVIEW bei Projekten mit 3+ Dateien ===
-                code_files = [f for f in project_path.iterdir()
-                              if f.suffix == ".py" and f.name != "tests.py"]
-                if len(code_files) >= 3:
-                    review = self._cross_model_review(project_name, code_files)
-                    if review and not review.get("approved", False):
-                        return (
-                            f"FEHLER: Cross-Model-Review nicht bestanden.\n"
-                            f"Grund: {review.get('reason', '?')}\n"
-                            f"Issues: {'; '.join(review.get('issues', []))}\n"
-                            f"Behebe die Issues und versuche es erneut."
-                        )
-
-                # Alles OK — Projekt abschliessen
-                updated_plan = plan_content
-                for criterion in required_criteria:
-                    updated_plan = updated_plan.replace(f"- [ ] {criterion}", f"- [x] {criterion}")
-                plan_path.write_text(updated_plan, encoding="utf-8")
-
-                # PROGRESS.md: Abschluss mit Evidenz dokumentieren
-                if progress_path.exists():
-                    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M")
-                    summary = tool_input.get("summary", "Abgeschlossen")
-                    review_note = f" | Cross-Review: OK" if len(code_files) >= 3 else ""
-                    progress_content = progress_path.read_text(encoding="utf-8")
-                    progress_content = progress_content.replace(
-                        "## Status: IN ARBEIT",
-                        f"## Status: FERTIG ({now})"
-                    )
-                    progress_content += (
-                        f"\n### Abschluss\n"
-                        f"- [{now}] {summary}\n"
-                        f"- Evidenz: Tests ALL_TESTS_PASSED ({evidence.get('timestamp', '?')}){review_note}\n"
-                    )
-                    progress_path.write_text(progress_content, encoding="utf-8")
-
-                self.communication.write_journal(
-                    f"Projekt '{project_name}' ABGESCHLOSSEN (evidence-based): {tool_input.get('summary', '')}",
-                    self.sequences_total,
-                )
-                return f"Projekt '{project_name}' erfolgreich abgeschlossen! {len(required_criteria)} Kriterien erfuellt, Tests bestanden."
-
-            elif name == "self_diagnose":
-                parts = []
-                # Integrations-Check
-                integ = self.integration_tester.get_report()
-                parts.append(integ)
-                # Dependency-Analyse
-                dep = self.dependency_analyzer.analyze()
-                parts.append(dep["report"])
-                # Stille Fehler
-                silent = self.silent_failure_detector.get_recent_warnings()
-                if silent:
-                    parts.append(silent)
-                else:
-                    parts.append("Keine stillen Fehler erkannt.")
-                return "\n\n".join(parts)
-
-            # === Task Queue ===
-            # === Tool-Foundry (Meta-Tools) ===
-            elif name == "generate_tool":
-                # Skill-Komposition: Existierende Tools pruefen
-                composition_hint = self.composer.suggest_composition(tool_input["description"])
-                result = self.foundry.generate_tool(
-                    tool_input["name"],
-                    tool_input["description"],
-                    self.toolchain,
-                )
-                if composition_hint:
-                    result += f"\n{composition_hint}"
-                return result
-
-            elif name == "combine_tools":
-                return self.foundry.combine_tools(
-                    tool_input["tool_a"],
-                    tool_input["tool_b"],
-                    tool_input["new_name"],
-                    self.toolchain,
-                )
-
-            elif name == "complete_task":
-                return self.task_queue.complete_task(tool_input.get("result", ""))
-
-            elif name == "finish_sequence":
-                return self._handle_finish_sequence(tool_input)
-
-            elif name == "write_sequence_plan":
-                return self.seq_intel.save_plan(tool_input)
-
-            elif name == "update_sequence_plan":
-                result = self.seq_intel.update_plan(tool_input)
-                self.seq_intel.on_plan_updated()
-                return result
-
-            else:
-                return f"Unbekanntes Tool: {name}"
-
+            result = handler(self._tool_context, tool_input)
+            # force-Counter zurueckschreiben (wird in file_handlers mutiert)
+            self._seq_force_used = self._tool_context._seq_force_used
+            return result
         except Exception as e:
             return f"FEHLER bei {name}: {e}"
+
+    # Handler-Logik lebt jetzt in engine/handlers/*.py
 
     def _handle_finish_sequence(self, tool_input: dict) -> str:
         """Verarbeitet das Ende einer Sequenz."""
