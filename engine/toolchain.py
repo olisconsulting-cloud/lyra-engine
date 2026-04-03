@@ -251,18 +251,85 @@ class Toolchain:
     # === Uebersicht ===
 
     def list_tools(self) -> str:
-        """Liste aller verfuegbaren Tools."""
+        """Liste aller aktiven Tools (archivierte werden ausgeblendet)."""
         tools = self.registry.get("tools", {})
         if not tools:
             return "(keine Tools — baue dein erstes!)"
 
         lines = []
         for name, info in sorted(tools.items()):
+            if info.get("status") == "archived":
+                continue
             uses = info.get("uses", 0)
             version = info.get("version", 1)
             lines.append(f"  - {name} (v{version}, {uses}x benutzt): {info.get('description', '')[:60]}")
 
-        return "\n".join(lines)
+        return "\n".join(lines) if lines else "(keine aktiven Tools)"
+
+    # === Archiv & Alias-System ===
+
+    def archive_tool(self, name: str, reason: str = "") -> str:
+        """
+        Archiviert ein Tool: verschiebt Datei, markiert in Registry.
+
+        Args:
+            name: Tool-Name
+            reason: Grund fuer Archivierung (z.B. 'Consolidated into unified_api_client')
+
+        Returns:
+            Ergebnis-Nachricht
+        """
+        info = self.registry.get("tools", {}).get(name)
+        if not info:
+            return f"FEHLER: Tool '{name}' nicht in Registry."
+
+        if info.get("status") == "archived":
+            return f"Tool '{name}' ist bereits archiviert."
+
+        # Datei verschieben
+        archived_dir = self.tools_path / "_archived"
+        archived_dir.mkdir(exist_ok=True)
+
+        src = self.tools_path / info.get("file", f"{name}.py")
+        dst = archived_dir / src.name
+        if src.exists():
+            # Wenn Ziel existiert, altes Archiv ueberschreiben
+            if dst.exists():
+                dst.unlink()
+            src.rename(dst)
+
+        # Registry aktualisieren (Eintrag bleibt, Status aendert sich)
+        info["status"] = "archived"
+        info["archived_date"] = datetime.now(timezone.utc).isoformat()
+        if reason:
+            info["archived_reason"] = reason
+        self._save_registry()
+
+        # Aus geladenen Tools entfernen
+        self.loaded_tools.pop(name, None)
+
+        return f"Tool '{name}' archiviert. Grund: {reason or 'nicht angegeben'}"
+
+    def add_alias(self, old_name: str, new_name: str) -> str:
+        """
+        Registriert einen Alias: use_tool(old_name) wird auf new_name umgeleitet.
+
+        Args:
+            old_name: Alter Tool-Name (der umgeleitet werden soll)
+            new_name: Neuer Tool-Name (das Ziel)
+
+        Returns:
+            Ergebnis-Nachricht
+        """
+        if new_name not in self.registry.get("tools", {}):
+            return f"FEHLER: Ziel-Tool '{new_name}' nicht in Registry."
+
+        if "aliases" not in self.registry:
+            self.registry["aliases"] = {}
+
+        self.registry["aliases"][old_name] = new_name
+        self._save_registry()
+        return f"Alias: '{old_name}' -> '{new_name}'"
 
     def get_tool_code(self, name: str) -> str:
         """Gibt den Quellcode eines Tools zurueck."""
