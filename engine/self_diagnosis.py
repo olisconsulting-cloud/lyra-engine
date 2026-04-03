@@ -285,7 +285,7 @@ class IntegrationTester:
 
         # Tool-Namen aus TOOLS-Liste extrahieren (name-Felder)
         import re
-        tool_defs = set(re.findall(r'"name":\s*"(\w+)"', content[:15000]))
+        tool_defs = set(re.findall(r'"name":\s*"(\w+)"', content))
 
         # Handler aus _execute_tool_inner extrahieren (elif name == "xxx")
         handlers = set(re.findall(r'(?:if|elif)\s+name\s*==\s*"(\w+)"', content))
@@ -451,12 +451,17 @@ class SilentFailureDetector:
             try:
                 with open(seq_mem, "r", encoding="utf-8") as f:
                     data = json.load(f)
-                entries = len(data.get("entries", []))
-                if entries < min(20, sequence_num * 0.3):  # Account for [-20:] limit in _save_sequence_memory
-                    warnings.append(
-                        f"STILL: Nur {entries} Memory-Eintraege fuer {sequence_num} Sequenzen — "
-                        f"finish_sequence wird nicht richtig aufgerufen"
-                    )
+                all_entries = data.get("entries", [])
+                entries = len(all_entries)
+                # Pruefe ob die LETZTEN 5 Sequenzen gespeichert wurden (nicht historische Luecken)
+                if entries > 0 and sequence_num > 5:
+                    recent_seqs = {e.get("seq") for e in all_entries[-5:]}
+                    expected_recent = set(range(max(0, sequence_num - 4), sequence_num + 1))
+                    missing_recent = expected_recent - recent_seqs
+                    if len(missing_recent) >= 3:
+                        warnings.append(
+                            f"Sequence-Memory: {len(missing_recent)} der letzten 5 Sequenzen fehlen"
+                        )
             except Exception:
                 pass
 

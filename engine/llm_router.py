@@ -53,7 +53,7 @@ MODELS = {
 
 # Welches Modell fuer welche Aufgabe — EINZIGE Stelle fuer Modell-Zuordnung
 TASK_MODEL_MAP = {
-    "main_work": "claude_opus",               # Opus 4.6 fuer System-Optimierung (temporaer, vorher: kimi_k25)
+    "main_work": "kimi_k25",                   # Kimi K2.5 — Hauptarbeit (zurueckgesetzt nach System-Optimierung)
     "code_review": "claude_opus",              # Opus 4.6 als unabhaengiger Reviewer (echtes Dual-Review)
     "audit_primary": "claude_opus",          # Opus fuer Tiefenanalyse
     "audit_secondary": "kimi_k25",           # Kimi als Gegenpruefung
@@ -419,7 +419,14 @@ class LLMRouter:
 
         self._track_cost(model_key, input_tokens, output_tokens)
 
-        stop_reason = "tool_use" if has_tool_use else "end_turn"
+        # finish_reason korrekt auswerten — length hat Vorrang (abgeschnittene Tool-Calls sind gefaehrlich)
+        openai_finish = choice.get("finish_reason") or "stop"
+        if openai_finish == "length":
+            stop_reason = "length"
+        elif has_tool_use:
+            stop_reason = "tool_use"
+        else:
+            stop_reason = "end_turn"
 
         return {
             "content": content,
@@ -565,7 +572,14 @@ class LLMRouter:
 
         self._track_cost(model_key, input_tokens, output_tokens)
 
-        stop_reason = "tool_use" if has_tool_use else "end_turn"
+        # Gemini finish_reason — MAX_TOKENS hat Vorrang (abgeschnittene Tool-Calls sind gefaehrlich)
+        gemini_finish = (candidates[0].get("finishReason") or "STOP").upper()
+        if gemini_finish == "MAX_TOKENS":
+            stop_reason = "length"
+        elif has_tool_use:
+            stop_reason = "tool_use"
+        else:
+            stop_reason = "end_turn"
 
         return {
             "content": content,
