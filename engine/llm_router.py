@@ -69,7 +69,7 @@ TASK_MODEL_MAP = {
     "tool_generation": "kimi_k25",         # Kimi — Coding ist Kimis Staerke ($0)
     "goal_planning": "claude_sonnet",      # Sonnet 4.6 — Goal-Zerlegung (vorher Opus — Sonnet reicht, 80% guenstiger)
     "result_validation": "claude_opus",    # Opus 4.6 — Ergebnis-Pruefung (kritisch, hier keine Abstriche)
-    "graceful_finish": "claude_sonnet",    # Sonnet 4.6 — Sequenz-Zusammenfassungen bei Auto-Finish
+    "graceful_finish": "kimi_k25",          # Kimi K2.5 — Sequenz-Zusammenfassungen bei Auto-Finish ($0, vorher Sonnet)
     "fallback": "deepseek_v3",             # DeepSeek V3 — Fallback wenn Kimi versagt
 }
 
