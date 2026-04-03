@@ -53,7 +53,7 @@ Python: 3.14, kein venv noetig.
 | Metrik | Aktuell (2026-04-03) | Ziel |
 |--------|----------------------|------|
 | Token-Verschwendung/Seq | ~5.000-9.000 | <3.000 |
-| Verifizierte Bugs | 1 offen (H4) | 0 |
+| Verifizierte Bugs | 0 offen | 0 |
 | Inaktive Module | 3 von 3 | 0 von 3 |
 | Dead Code Zeilen | ~50 | 0 |
 
@@ -92,8 +92,8 @@ Nicht schneller. Nicht groesser. Besser. Stabiler. Effizienter. Sicherer.
 
 ## Aktueller Status (nach jeder Session aktualisieren)
 
-- **Naechster Fix**: H4 (SequenceRunner Signaturen) — siehe BACKLOG.md
-- **Offene Bugs**: 1 (H4 Signaturen) + Token/Stabilitaet
-- **Gefixt**: C1, H5, H6 (Step-Retry). H1-H3/A1d/A2/A3 wontfix (Modul geloescht)
+- **Naechster Fix**: A1a (PerceptionPipeline aktivieren) — siehe BACKLOG.md
+- **Offene Bugs**: 0 — alle verifzierten Bugs gefixt
+- **Gefixt**: C1, H4, H5, H6, T2, T6, T7, S5. H1-H3/A1d/A2/A3/A4 wontfix.
 - **Inaktive Module**: 3 (PerceptionPipeline, UnifiedMemory, SequenceRunner)
-- **Letzte Session**: 2026-04-03 (H6 Step-Level Retry)
+- **Letzte Session**: 2026-04-03 (Alle Bugs gefixt, Token-Quick-Wins erledigt)
