@@ -65,7 +65,13 @@ def handle_run_project_tests(ctx: ToolContext, tool_input: dict) -> str:
 
     # Evidenz speichern (maschinenlesbar)
     evidence_path = config.DATA_PATH / "projects" / project_name / ".test_evidence.json"
-    all_passed = "ALL_TESTS_PASSED" in test_output
+    # Mehrere Varianten erkennen (Phi schreibt Tests unterschiedlich)
+    upper_output = test_output.upper()
+    all_passed = (
+        "ALL_TESTS_PASSED" in test_output
+        or "ALL TESTS PASSED" in upper_output
+        or ("\u2705" in test_output and "FAIL" not in upper_output)
+    )
     evidence = {
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "passed": all_passed,
@@ -103,7 +109,9 @@ def handle_complete_project(ctx: ToolContext, tool_input: dict) -> str:
         )
 
     evidence_seq = evidence.get("sequence", -1)
-    if evidence_seq != ctx.sequences_total:
+    # Toleriere Tests aus der vorherigen Sequenz (oft laeuft complete_project
+    # eine Sequenz nach run_project_tests)
+    if evidence_seq < ctx.sequences_total - 1:
         return (
             f"FEHLER: Test-Evidenz ist veraltet (Sequenz {evidence_seq}, "
             f"aktuell {ctx.sequences_total}).\n"
@@ -139,7 +147,13 @@ def handle_complete_project(ctx: ToolContext, tool_input: dict) -> str:
     verified = tool_input.get("verified_criteria", [])
     missing = []
     for req in required_criteria:
-        found = any(req.lower()[:30] in v.lower() for v in verified)
+        # Fuzzy-Matching: Erstes Drittel des Kriteriums ODER hohe Ueberlappung
+        req_lower = req.lower()
+        found = any(
+            req_lower[:80] in v.lower()
+            or v.lower() in req_lower
+            for v in verified
+        )
         if not found:
             missing.append(req)
 

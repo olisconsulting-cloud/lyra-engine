@@ -28,15 +28,27 @@ def handle_use_tool(ctx: ToolContext, tool_input: dict) -> str:
 
 def handle_generate_tool(ctx: ToolContext, tool_input: dict) -> str:
     """Tool per Foundry generieren mit Skill-Kompositions-Hint."""
-    composition_hint = ctx.composer.suggest_composition(tool_input["description"])
-    result = ctx.foundry.generate_tool(
-        tool_input["name"],
-        tool_input["description"],
-        ctx.toolchain,
-    )
-    if composition_hint:
-        result += f"\n{composition_hint}"
-    return result
+    try:
+        # Composition-Hint isoliert abfragen (kann fehlschlagen)
+        try:
+            composition_hint = ctx.composer.suggest_composition(
+                tool_input.get("description", ""),
+            )
+        except Exception:
+            composition_hint = None
+
+        name = tool_input.get("name", "")
+        desc = tool_input.get("description", "")
+        if not name or not desc:
+            return "FEHLER: name und description erforderlich."
+
+        result = ctx.foundry.generate_tool(name, desc, ctx.toolchain)
+
+        if composition_hint and isinstance(result, str):
+            result += f"\n{composition_hint}"
+        return result
+    except Exception as e:
+        return f"FEHLER: generate_tool fehlgeschlagen: {e}"
 
 
 def handle_combine_tools(ctx: ToolContext, tool_input: dict) -> str:

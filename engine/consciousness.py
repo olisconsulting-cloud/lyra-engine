@@ -637,9 +637,9 @@ class ConsciousnessEngine:
         self._sequences_since_audit = 0
         self._sequences_since_benchmark = 0
 
-        # Circuit Breaker: Trackt Provider-Failures fuer automatischen Fallback
-        self._provider_failures = {}   # {provider: consecutive_failure_count}
-        self._provider_cooldown = {}   # {provider: cooldown_until_sequence_nr}
+        # Circuit Breaker: Wird in load_state() aus state.json geladen
+        self._provider_failures = {}
+        self._provider_cooldown = {}
 
         # Laufzeit
         self.running = False
@@ -858,6 +858,9 @@ class ConsciousnessEngine:
         self.sequences_total = self.state.get("sequences_total", 0)
         self._installed_packages = set(self.state.get("installed_packages", []))
         self._approved_packages = set(self.state.get("approved_packages", []))
+        # Circuit Breaker: Aus State laden (ueberlebt Neustarts)
+        self._provider_failures = self.state.get("provider_failures", {})
+        self._provider_cooldown = self.state.get("provider_cooldown", {})
         self.preferences = self._load_preferences()
 
     def _save_all(self):
@@ -865,6 +868,9 @@ class ConsciousnessEngine:
         # Installierte/genehmigte Pakete im State persistieren
         self.state["installed_packages"] = sorted(self._installed_packages)
         self.state["approved_packages"] = sorted(self._approved_packages)
+        # Circuit Breaker persistent speichern
+        self.state["provider_failures"] = self._provider_failures
+        self.state["provider_cooldown"] = self._provider_cooldown
         for path, data in [
             (self.state_path, self.state),
             (self.beliefs_path, self.beliefs),

@@ -113,7 +113,7 @@ class LLMRouter:
         # Getrennte Pools: Primary-Timeout blockiert nicht den Fallback-Pool
         _timeout = httpx.Timeout(
             connect=10.0,   # Verbindung aufbauen: 10s reicht
-            read=90.0,      # Antwort abwarten: 90s (120k Context braucht Zeit)
+            read=45.0,      # Antwort abwarten: 45s (war 90s — zu lang fuer tote Provider)
             write=15.0,     # Request senden: 15s
             pool=10.0,      # Connection-Pool: 10s
         )
