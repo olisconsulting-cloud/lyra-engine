@@ -310,6 +310,7 @@ class LLMRouter:
                 if attempt < 2:
                     _time.sleep(2 ** attempt)
                     continue
+                # 3. Versuch auch 429 → break und unten als Fehler behandeln
             break
 
         if resp is None:

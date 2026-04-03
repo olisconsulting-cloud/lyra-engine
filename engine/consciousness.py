@@ -20,6 +20,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
+import httpx
+
 from .llm_router import LLMRouter, TASK_MODEL_MAP
 from .phi import phi_blend
 from .memory_manager import MemoryManager
@@ -44,6 +46,9 @@ from .skill_library import SkillLibrary
 from .proactive_learner import ProactiveLearner
 from .event_bus import EventBus, Events
 from .tool_registry import ToolRegistry
+from .quality_checks import check_markdown_quality
+from .message_compression import compress_old_messages, estimate_tokens
+from .reporting import build_narrative_report
 from .handlers import ToolContext, register_all_handlers
 from .perception_pipeline import PerceptionPipeline
 from .unified_memory import (
@@ -613,6 +618,10 @@ class ConsciousnessEngine:
         self._sequences_since_dream = 0
         self._sequences_since_audit = 0
         self._sequences_since_benchmark = 0
+
+        # Circuit Breaker: Trackt Provider-Failures fuer automatischen Fallback
+        self._provider_failures = {}   # {provider: consecutive_failure_count}
+        self._provider_cooldown = {}   # {provider: cooldown_until_sequence_nr}
 
         # Laufzeit
         self.running = False
@@ -1322,7 +1331,7 @@ SEQUENZ-PLANUNG: Nutze write_sequence_plan am Anfang — plane dein Ziel, Exit-K
         parts.append(f"\nDateisystem: {env}")
 
         # Datei-Aenderungen (Debounce: nur alle 5 Sequenzen — os.walk ist teuer)
-        if self.sequences_total % 5 == 0:
+        if self.sequences_total > 0 and self.sequences_total % 5 == 0:
             file_changes = self.file_watcher.check_changes()
             if file_changes:
                 self._last_file_changes = file_changes
@@ -1336,12 +1345,12 @@ SEQUENZ-PLANUNG: Nutze write_sequence_plan am Anfang — plane dein Ziel, Exit-K
             parts.append(f"\nNAECHSTE AUFGABE: {next_task['description']} [{next_task.get('priority', 'normal')}]")
 
         # Relevanteste Erinnerungen (Phi-Decay + Valenz-Gewichtung)
-        # Cache: Ergebnis bleibt gleich solange Focus sich nicht aendert
+        # Cache-Key: Nur Goal-Titel ohne Status (Status aendert sich jede Sequenz)
+        focus_cache_key = focus.split("[")[0].strip() if focus else ""
         _mem_cache = getattr(self, "_memory_cache", {})
-        _mem_cache_focus = _mem_cache.get("focus", "")
-        if _mem_cache_focus != focus or not _mem_cache.get("results"):
+        if _mem_cache.get("key") != focus_cache_key or not _mem_cache.get("results"):
             relevant = self.memory.retrieve_relevant(top_k=3)
-            self._memory_cache = {"focus": focus, "results": relevant}
+            self._memory_cache = {"key": focus_cache_key, "results": relevant}
         else:
             relevant = _mem_cache["results"]
 
@@ -1429,7 +1438,7 @@ SEQUENZ-PLANUNG: Nutze write_sequence_plan am Anfang — plane dein Ziel, Exit-K
             opus_goal_planning=self._opus_goal_planning,
             opus_result_validation=self._opus_result_validation,
             cross_model_review=self._cross_model_review,
-            check_markdown_quality=self._check_markdown_quality,
+            check_markdown_quality=check_markdown_quality,
             save_all=self._save_all,
             handle_finish_sequence=self._handle_finish_sequence,
         )
@@ -1771,9 +1780,19 @@ SEQUENZ-PLANUNG: Nutze write_sequence_plan am Anfang — plane dein Ziel, Exit-K
         # Telegram-Bericht nach jeder Sequenz — narrativ mit Selbstreflexion
         if self.communication.telegram_active:
             try:
-                report = self._build_narrative_report(
-                    tool_input, summary, bottleneck, next_time
+                active_goals = self.goal_stack.goals.get("active", [])
+                focus = self.goal_stack.get_current_focus()
+                last_progress = getattr(self, "_last_reported_progress", None)
+                report, new_progress = build_narrative_report(
+                    tool_input, summary, bottleneck, next_time,
+                    seq_num=self.sequences_total + 1,
+                    errors=self.seq_intel.metrics.errors,
+                    active_goals=active_goals,
+                    current_focus=focus,
+                    last_reported_progress=last_progress,
                 )
+                if new_progress is not None:
+                    self._last_reported_progress = new_progress
                 self.communication.send_message(report, channel="telegram")
             except Exception as e:
                 logger.warning(f" Telegram-Report fehlgeschlagen: {e}")
@@ -1944,10 +1963,6 @@ SEQUENZ-PLANUNG: Nutze write_sequence_plan am Anfang — plane dein Ziel, Exit-K
 
     # === Interaktion (fuer interact.py) ===
 
-    # Circuit Breaker: Trackt Provider-Failures fuer automatischen Fallback
-    _provider_failures: dict = {}   # {provider: consecutive_failure_count}
-    _provider_cooldown: dict = {}   # {provider: cooldown_until_sequence_nr}
-
     def _call_llm(self, task: str, system: str, messages: list,
                   tools: Optional[list] = None, max_tokens: int = MAX_TOKENS) -> dict:
         """
@@ -1974,18 +1989,18 @@ SEQUENZ-PLANUNG: Nutze write_sequence_plan am Anfang — plane dein Ziel, Exit-K
 
         # Circuit Breaker: Provider im Cooldown? → direkt Fallback
         cooldown_until = self._provider_cooldown.get(provider, 0)
-        if cooldown_until > self.sequences_total:
+        if cooldown_until >= self.sequences_total:
             remaining = cooldown_until - self.sequences_total
             logger.info("Circuit Breaker: %s im Cooldown (%d Seq uebrig) → DeepSeek", provider, remaining)
             return self._call_provider("deepseek_v3", system, messages, tools, max_tokens)
 
-        # Primaerer Call
+        # Primaerer Call (nur API-Fehler abfangen — Programmierfehler sollen laut scheitern)
         try:
             result = self._call_provider(model_key, system, messages, tools, max_tokens)
             # Erfolg → Failure-Counter zuruecksetzen
             self._provider_failures[provider] = 0
             return result
-        except Exception as primary_error:
+        except (ValueError, httpx.HTTPError, TimeoutError, ConnectionError, OSError) as primary_error:
             # Failure tracken
             failures = self._provider_failures.get(provider, 0) + 1
             self._provider_failures[provider] = failures
@@ -2461,128 +2476,7 @@ Antworte als JSON:
             print(f"  {self.llm.get_cost_summary()}")
             print("  State gespeichert. Bis zum naechsten Mal.\n")
 
-    # === Sliding Window — Token-Optimierung ===
-
-    # Tools die SICHER komprimiert werden koennen (Output ist unwichtig)
-    _SAFE_TO_COMPRESS = frozenset({
-        "write_file", "send_telegram", "list_directory",
-        "create_project", "create_tool", "pip_install",
-        "git_commit", "set_goal", "complete_subgoal",
-        "finish_sequence", "modify_own_code", "generate_tool",
-    })
-
-    # Lese-Tools: Behalten vollen Inhalt in den letzten N, werden
-    # danach auf Zusammenfassung gekuerzt (nicht geloescht)
-    _READ_TOOLS = frozenset({
-        "read_file", "read_own_code", "execute_python",
-        "web_search", "web_read", "use_tool",
-    })
-
-    def _compress_old_messages(self, messages: list, keep_recent: int = 5):
-        """
-        Komprimiert alte Tool-Results um Token zu sparen.
-
-        Adaptive Strategie: Je aelter ein Eintrag, desto staerker komprimiert.
-        - _SAFE_TO_COMPRESS Tools (Schreib-Aktionen): Immer auf Einzeiler
-        - _READ_TOOLS (Lese-Aktionen): Adaptiv — neuere behalten mehr Kontext
-        - Unbekannte Tools: NICHT komprimieren (sicheres Default)
-        """
-        if len(messages) <= keep_recent * 2 + 1:
-            return
-
-        compress_until = len(messages) - keep_recent * 2
-
-        for i in range(1, compress_until):
-            msg = messages[i]
-            if msg["role"] != "user":
-                continue
-
-            content = msg.get("content")
-            if not isinstance(content, list):
-                continue
-
-            # Adaptive Limit: Aeltere Messages werden staerker gekuerzt
-            # Position 1 (aelteste) → 300 Zeichen, Position nahe keep_recent → 800
-            age_ratio = i / max(compress_until, 1)  # 0.0 (aelteste) bis 1.0
-            read_limit = int(300 + 500 * age_ratio)  # 300-800 Zeichen
-
-            for block in content:
-                if not isinstance(block, dict) or block.get("type") != "tool_result":
-                    continue
-
-                original = block.get("content", "")
-                if len(original) <= 150:
-                    continue  # Schon komprimiert oder kurz
-
-                tool_name = self._find_tool_name_for_id(
-                    messages, i, block.get("tool_use_id", ""),
-                )
-
-                if tool_name in self._SAFE_TO_COMPRESS:
-                    # Schreib-Tools: Auf Einzeiler komprimieren
-                    # ABER: Quality-Warnungen beibehalten
-                    if "QUALITAETS-WARNUNG" in original:
-                        warning_start = original.index("QUALITAETS-WARNUNG")
-                        block["content"] = f"[OK mit Warnung] {original[warning_start:][:200]}"
-                    else:
-                        first_line = original.split("\n")[0][:80]
-                        block["content"] = f"[OK] {first_line}"
-
-                elif tool_name in self._READ_TOOLS:
-                    # Lese-Tools: Adaptiv kuerzen (aelter = kuertzer)
-                    if len(original) > read_limit:
-                        # JSON-sicher: Am letzten Newline vor dem Limit schneiden
-                        cut = original[:read_limit]
-                        last_nl = cut.rfind("\n")
-                        if last_nl > read_limit // 2:
-                            cut = cut[:last_nl]
-                        block["content"] = cut + f"\n[...gekuerzt auf {len(cut)} von {len(original)} Zeichen]"
-
-                elif len(original) > 1500:
-                    # Fallback: Nur sehr grosse unbekannte Blocks kuerzen (Newline-safe)
-                    cut = original[:800]
-                    last_nl = cut.rfind("\n")
-                    if last_nl > 400:
-                        cut = cut[:last_nl]
-                    block["content"] = cut + "\n[...gekuerzt]"
-
-    @staticmethod
-    def _estimate_tokens(system_prompt: str, messages: list, tools: list) -> int:
-        """Schaetzt Token-Verbrauch VOR dem API-Call (ca. 4 Zeichen pro Token).
-
-        Keine externe Abhaengigkeit (kein tiktoken). Genauigkeit: +/-15%,
-        reicht fuer Budget-Entscheidungen vor dem Call.
-        """
-        char_count = len(system_prompt)
-        for msg in messages:
-            content = msg.get("content", "")
-            if isinstance(content, str):
-                char_count += len(content)
-            elif isinstance(content, list):
-                for block in content:
-                    if isinstance(block, dict):
-                        char_count += len(block.get("content", ""))
-                        char_count += len(str(block.get("input", "")))
-                    elif hasattr(block, "text"):
-                        char_count += len(block.text or "")
-        for tool in tools:
-            char_count += len(str(tool))
-        return char_count // 4
-
-    @staticmethod
-    def _find_tool_name_for_id(messages: list, user_idx: int, tool_use_id: str) -> str:
-        """Findet den Tool-Namen fuer eine tool_use_id in der vorherigen Assistant-Message."""
-        if user_idx < 1:
-            return ""
-        prev = messages[user_idx - 1]
-        if prev.get("role") != "assistant":
-            return ""
-        for block in prev.get("content", []):
-            if not isinstance(block, dict):
-                continue
-            if block.get("id") == tool_use_id:
-                return block.get("name", "")
-        return ""
+    # Sliding Window lebt jetzt in engine/message_compression.py
 
     def _opus_result_validation(self, project_name: str,
                                 criteria: list[str],
@@ -2687,60 +2581,6 @@ Antworte als JSON:
         except Exception as e:
             print(f"  [Opus Goal-Planning Fehler: {e}]")
         return None
-
-    @staticmethod
-    def _check_markdown_quality(content: str) -> list[str]:
-        """
-        Prueft Markdown-Output auf typische LLM-Halluzinations-Muster.
-        Rein regex-basiert, kein extra API-Call.
-
-        Returns:
-            Liste von gefundenen Problemen (leer = OK)
-        """
-        import re
-        issues = []
-
-        # Code-Bloecke entfernen (zwischen ``` — dort gelten andere Regeln)
-        prose = re.sub(r'```.*?```', '', content, flags=re.DOTALL)
-
-        # 1. Offene Klammern ohne Schliessen (nur in Prosa, nicht in Code)
-        open_braces = prose.count("{") - prose.count("}")
-        if open_braces > 2:
-            issues.append(f"{open_braces} ungeschlossene Klammern")
-
-        # 2. Abgebrochene Saetze: Zeilen die mit Komma oder offener Klammer enden
-        lines = prose.split("\n")
-        broken_lines = 0
-        in_list = False
-        for line in lines:
-            stripped = line.rstrip()
-            if not stripped or stripped.startswith("#") or stripped.startswith("|"):
-                continue
-            # Listen-Eintraege mit Komma am Ende sind normal
-            if stripped.startswith("-") or stripped.startswith("*"):
-                in_list = True
-                continue
-            in_list = False
-            # Offene Klammer am Zeilenende = verdaechtig
-            if len(stripped) > 20 and stripped[-1] in ("(", "{"):
-                broken_lines += 1
-        if broken_lines >= 3:
-            issues.append(f"{broken_lines} abgebrochene Saetze/Zeilen")
-
-        # 3. Wiederholte Woerter (Stottern): gleiches Wort 3+ Mal hintereinander
-        stutter = re.findall(r'\b(\w+)\s+\1\s+\1\b', content, re.IGNORECASE)
-        if stutter:
-            issues.append(f"Wort-Wiederholungen: {stutter[:3]}")
-
-        # 4. Extrem kurze Zeilen nach Ueberschrift (abgebrochener Content)
-        for i, line in enumerate(lines):
-            if line.startswith("#") and i + 1 < len(lines):
-                next_line = lines[i + 1].strip()
-                if 0 < len(next_line) < 5 and not next_line.startswith("-"):
-                    issues.append(f"Abgebrochener Inhalt nach '{line.strip()[:40]}'")
-                    break
-
-        return issues
 
     def _describe_action(self, tool_name: str, tool_input: dict) -> str:
         """Uebersetzt Tool-Calls in menschenlesbare Beschreibungen."""
@@ -2954,14 +2794,14 @@ Antworte als JSON:
 
             # Sliding Window: Alte Tool-Results komprimieren ab Step 2 (vorher 4 — zu spaet)
             if step >= 2:
-                self._compress_old_messages(messages, keep_recent=5)
+                compress_old_messages(messages, keep_recent=5)
 
             # Pre-Count: Token-Verbrauch schaetzen BEVOR der Call rausgeht
-            estimated = self._estimate_tokens(effective_system_prompt, messages, current_tools)
+            estimated = estimate_tokens(effective_system_prompt, messages, current_tools)
             if estimated > MAX_INPUT_TOKENS_PER_SEQUENCE * 0.90:
                 print(f"  [Pre-Count: ~{estimated:,} Token — komprimiere aggressiv]")
-                self._compress_old_messages(messages, keep_recent=3)
-                estimated = self._estimate_tokens(effective_system_prompt, messages, current_tools)
+                compress_old_messages(messages, keep_recent=3)
+                estimated = estimate_tokens(effective_system_prompt, messages, current_tools)
                 if estimated > MAX_INPUT_TOKENS_PER_SEQUENCE * 0.95:
                     print(f"  [Pre-Count: ~{estimated:,} Tokens — Graceful Finish]")
                     try:
