@@ -49,10 +49,11 @@ class AdaptiveRhythm:
                 "instruction": str,  # Wird in die Perception eingefuegt
             }
         """
-        # Daten sammeln
+        # Daten sammeln (goals.json nur einmal lesen)
         has_oliver_tasks = self._has_pending_tasks()
-        has_active_goals = self._has_active_goals()
-        has_audit_findings = self._has_audit_goals()
+        goals = self._load_goals()
+        has_active_goals = self._has_active_goals(goals)
+        has_audit_findings = self._has_audit_goals(goals)
         sequences = state.get("sequences_total", 0)
         skill_gaps = self._get_biggest_skill_gap()
 
@@ -183,30 +184,30 @@ class AdaptiveRhythm:
         except Exception:
             return False
 
-    def _has_active_goals(self) -> bool:
+    def _load_goals(self) -> dict:
+        """Laedt goals.json einmal — wird von get_mode() gecacht."""
         goals_path = self.data_path / "consciousness" / "goals.json"
         if not goals_path.exists():
-            return False
+            return {}
         try:
             with open(goals_path, "r", encoding="utf-8") as f:
-                goals = json.load(f)
-            return bool(goals.get("active"))
-        except Exception:
-            return False
+                return json.load(f)
+        except (json.JSONDecodeError, ValueError, OSError):
+            return {}
 
-    def _has_audit_goals(self) -> bool:
-        goals_path = self.data_path / "consciousness" / "goals.json"
-        if not goals_path.exists():
-            return False
-        try:
-            with open(goals_path, "r", encoding="utf-8") as f:
-                goals = json.load(f)
-            for g in goals.get("active", []):
-                if "audit" in g.get("title", "").lower() or "optimierung" in g.get("title", "").lower():
-                    return True
-            return False
-        except Exception:
-            return False
+    def _has_active_goals(self, goals: dict = None) -> bool:
+        if goals is None:
+            goals = self._load_goals()
+        return bool(goals.get("active"))
+
+    def _has_audit_goals(self, goals: dict = None) -> bool:
+        if goals is None:
+            goals = self._load_goals()
+        for g in goals.get("active", []):
+            title = g.get("title", "").lower()
+            if "audit" in title or "optimierung" in title:
+                return True
+        return False
 
     def _get_spin_loop_streak(self) -> int:
         """Liest den Spin-Loop-Counter aus dem SilentFailureDetector."""
