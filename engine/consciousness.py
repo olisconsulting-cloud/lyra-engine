@@ -617,6 +617,7 @@ class ConsciousnessEngine:
         self.skills = SkillTracker(config.DATA_PATH)
         self.strategies = StrategyEvolution(config.DATA_PATH)
         self.efficiency = EfficiencyTracker(config.DATA_PATH)
+        self.ior = IORTracker(config.DATA_PATH)
         self.dream = DreamEngine(config.DATA_PATH, call_llm=self._call_llm)
         self.self_audit = SelfAudit(config.ROOT_PATH)
         self.code_review = DualReviewSystem(config.ROOT_PATH)
@@ -1717,6 +1718,17 @@ SEQUENZ-PLANUNG: Nutze write_sequence_plan am Anfang — plane dein Ziel, Exit-K
         output_count = self.seq_intel.metrics.files_written + self.seq_intel.metrics.tools_built
         total_steps = max(self.seq_intel.metrics.step_count, 1)
         efficiency_ratio = round(output_count / total_steps, 3)
+
+        # IOR-Tracking: Input-Output-Ratio messen
+        ior_result = self.ior.record_sequence({
+            "tokens_used": 0,  # Spaeter: aus LLM-Router Token-Counter lesen
+            "tool_calls": self.seq_intel.metrics.step_count,
+            "files_written": self.seq_intel.metrics.files_written,
+            "tools_built": self.seq_intel.metrics.tools_built,
+            "goals_completed": 0,  # Spaeter: aus GoalStack zaehlen
+            "skills_reused": 0,    # Spaeter: aus SkillTracker zaehlen
+            "cross_transfers": 0,  # Spaeter: SemanticMemory Cross-Domain erkennen
+        })
 
         # Valenz aus Performance-Rating ableiten (nicht mehr hardcoded 0.7)
         # Rating 1-10 → Valenz -0.5 bis 1.0 (schlechte Sequenzen = negativ)

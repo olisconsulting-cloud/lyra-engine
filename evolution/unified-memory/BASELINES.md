@@ -79,6 +79,20 @@ aber Phi hat sie nicht abgerufen/angewendet.
 - **UM-Q2** (Anti-Patterns): Skill-Prompt enthaelt Warnungen aus FailureMemory
 - **UM-Q3** (Semantische Suche): Skill-Hit-Rate steigt (Cross-Domain-Matches)
 
+### IOR Meta-Metrik (neu ab 2026-04-03)
+
+| Metrik | Wert | Methode | Datum |
+|--------|------|---------|-------|
+| IOR-Level | **linear** | engine/ior.py: Noch keine Daten, startet bei "linear" | 2026-04-03 |
+| IOR-Ratio (Durchschnitt) | — | ior.json: Wird nach 20-30 Sequenzen befuellt | — |
+| Leverage-Sequenzen | — | ior.json: Sequenzen mit skills_reused > 0 | — |
+| Emergenz-Sequenzen | — | ior.json: Sequenzen mit cross_transfers > 0 | — |
+
+> **IOR als Erfolgsmetrik fuer Unified Memory:** Wenn SkillLibrary und FailureMemory
+> tatsaechlich integriert sind, steigt die IOR von "linear" Richtung "leverage".
+> Skill-Wiederverwendung ist der direkteste Indikator fuer erfolgreiche Integration.
+> Cross-Domain-Transfer (Emergenz) ist das Fernziel.
+
 ## Phase 2 — Nach Dream-Integration
 
 (wird nach Phase 2 befuellt)
