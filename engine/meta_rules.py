@@ -174,29 +174,34 @@ class MetaRuleEngine:
         """Analysiert Metacognition-Daten und leitet Muster ab.
 
         Wird nach jeder Sequenz aufgerufen.
+        Robustes Matching: mehrere Synonyme pro Pattern, damit Counts steigen.
         """
-        # Token-Budget bei Recherche
-        if "token" in bottleneck.lower() and "recherche" in bottleneck.lower():
+        bl = bottleneck.lower()
+
+        # Token-Budget: bei JEDER Token-Erschoepfung (nicht nur Recherche)
+        if any(w in bl for w in ("token", "budget", "token-limit", "erschoepft", "ausgegangen")):
             self.record_pattern(
                 "token_budget_research",
-                "Token-Budget geht bei Recherche-Tasks aus"
+                "Token-Budget geht aus bevor Aufgabe abgeschlossen"
             )
 
-        # Kein finish_sequence
-        if "finish_sequence" in bottleneck.lower() or "max steps" in bottleneck.lower():
+        # Kein finish_sequence: breitere Erkennung
+        if any(w in bl for w in ("finish_sequence", "max steps", "max_steps",
+                                  "abgebrochen", "timeout", "abbruch",
+                                  "kein explizites", "token-limit")):
             self.record_pattern(
                 "no_finish_sequence",
                 "finish_sequence wird nicht rechtzeitig aufgerufen"
             )
 
-        # Keine Dateien geschrieben
+        # Keine Dateien geschrieben (datenbasiert, unabhaengig von Bottleneck-Text)
         if files_written == 0 and steps > 10:
             self.record_pattern(
                 "zero_output_loop",
                 f"Sequenz {seq_num}: {steps} Steps ohne Output"
             )
 
-        # Fehlerrate zu hoch
+        # Fehlerrate zu hoch (datenbasiert)
         if errors > 3:
             self.record_pattern(
                 "high_error_rate",

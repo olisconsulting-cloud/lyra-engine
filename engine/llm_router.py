@@ -60,7 +60,7 @@ MODELS = {
     },
     "gemini_flash": {
         "provider": "google",
-        "model_id": "gemini-2.0-flash",
+        "model_id": "gemini-2.5-flash",
         "input_cost": 0.10,
         "output_cost": 0.40,
         "use_for": "Zweiter Fallback wenn DeepSeek versagt",
@@ -107,7 +107,7 @@ class LLMRouter:
         self.deepseek_key = os.getenv("DEEPSEEK_API_KEY", "").strip()
         self.nvidia_key = os.getenv("NVIDIA_API_KEY", "").strip()
         self.openai_key = os.getenv("OPENAI_API_KEY", "").strip()
-        self.http = httpx.Client(timeout=30.0)  # 30s statt 120s — Kimi antwortet in 3-10s
+        self.http = httpx.Client(timeout=15.0)  # 15s — schneller Fallback bei Timeout
         self._http_owned = True  # Marker fuer Cleanup
 
         # Kosten-Tracking (thread-safe)
@@ -309,7 +309,7 @@ class LLMRouter:
         import time as _time
         last_error = None
         resp = None
-        for attempt in range(3):
+        for attempt in range(2):
             try:
                 resp = self.http.post(
                     "https://integrate.api.nvidia.com/v1/chat/completions",
@@ -321,18 +321,17 @@ class LLMRouter:
                 )
             except httpx.TimeoutException as e:
                 last_error = e
-                logger.warning("NVIDIA Timeout (Versuch %d/3): %s", attempt + 1, e)
-                if attempt < 2:
-                    _time.sleep(2 ** attempt)
+                logger.warning("NVIDIA Timeout (Versuch %d/2): %s", attempt + 1, e)
+                if attempt < 1:
+                    _time.sleep(1)
                     continue
-                raise ValueError(f"NVIDIA API Timeout nach 3 Versuchen") from e
+                raise ValueError(f"NVIDIA API Timeout nach 2 Versuchen") from e
 
             if resp.status_code == 429:
-                logger.warning("NVIDIA Rate-Limit 429 (Versuch %d/3)", attempt + 1)
-                if attempt < 2:
-                    _time.sleep(2 ** attempt)
+                logger.warning("NVIDIA Rate-Limit 429 (Versuch %d/2)", attempt + 1)
+                if attempt < 1:
+                    _time.sleep(1)
                     continue
-                # 3. Versuch auch 429 → break und unten als Fehler behandeln
             break
 
         if resp is None:
@@ -609,10 +608,31 @@ class LLMRouter:
             }
             schema = tool.get("input_schema", {})
             if schema.get("properties"):
-                decl["parameters"] = schema
+                decl["parameters"] = self._fix_gemini_schema(schema)
             declarations.append(decl)
 
         return [{"function_declarations": declarations}]
+
+    def _fix_gemini_schema(self, schema: dict) -> dict:
+        """Bereinigt JSON-Schema fuer Gemini: array-Properties brauchen explizites items-Feld."""
+        import copy
+        schema = copy.deepcopy(schema)
+
+        def fix_properties(props: dict):
+            for key, prop in props.items():
+                if prop.get("type") == "array" and "items" not in prop:
+                    prop["items"] = {"type": "string"}
+                # Rekursiv: nested Objects mit eigenen Properties
+                if prop.get("type") == "object" and "properties" in prop:
+                    fix_properties(prop["properties"])
+                # items koennen auch Objects mit Properties sein
+                if "items" in prop and isinstance(prop["items"], dict):
+                    if prop["items"].get("type") == "object" and "properties" in prop["items"]:
+                        fix_properties(prop["items"]["properties"])
+
+        if "properties" in schema:
+            fix_properties(schema["properties"])
+        return schema
 
     def _gemini_to_anthropic_response(self, data: dict, model_key: str) -> dict:
         """Konvertiert Gemini Response zu Anthropic-kompatiblem Format."""

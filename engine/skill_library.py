@@ -63,18 +63,25 @@ class SkillLibrary:
         """
         # Qualitaets-Gate: Gute Sequenzen extrahieren (nicht nur perfekte)
         if plan_score < 5 or rating < 5:
+            logger.info(
+                "Skill nicht extrahiert: score=%d, rating=%d (min 5/5) — %s",
+                plan_score, rating, plan_goal[:60],
+            )
             return None
 
         # Tool-Sequenz zu abstraktem Pattern verdichten
         tool_names = [t.get("name", "") for t in tool_sequence if t.get("name")]
         if len(tool_names) < 2:
+            logger.info("Skill nicht extrahiert: nur %d Tools (min 2) — %s",
+                        len(tool_names), plan_goal[:60])
             return None  # Zu wenig Schritte fuer ein Muster
 
         # Duplikat-Check: Aehnlicher Skill schon vorhanden?
         existing = self.find_by_goal_type(goal_type)
         for skill in existing:
             if self._is_similar(skill.get("plan_goal", ""), plan_goal):
-                # Bestehenden Skill aktualisieren statt neuen erstellen
+                logger.info("Skill-Update statt Neu: %s (aehnlich zu %s)",
+                            plan_goal[:50], skill.get("plan_goal", "")[:50])
                 return self._update_skill(skill["id"], plan_score, rating)
 
         # Neuen Skill erstellen
@@ -161,14 +168,14 @@ class SkillLibrary:
 
     @staticmethod
     def _is_similar(text_a: str, text_b: str) -> bool:
-        """Einfacher Wort-Overlap-Check (>= 50%)."""
+        """Wort-Overlap-Check (>= 60% Jaccard-Similarity)."""
         words_a = set(text_a.lower().split())
         words_b = set(text_b.lower().split())
         if not words_a or not words_b:
             return False
         overlap = len(words_a & words_b)
         union = len(words_a | words_b)
-        return union > 0 and overlap / union >= 0.5
+        return union > 0 and overlap / union >= 0.6
 
     # === Skill-Abruf ===
 

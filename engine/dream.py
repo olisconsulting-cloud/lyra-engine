@@ -273,7 +273,7 @@ Antworte als JSON:
                     "timestamp": datetime.now(timezone.utc).isoformat(),
                     "summary": f"[DREAM] {summary}",
                 })
-                data["entries"] = data["entries"][-10:]
+                data["entries"] = data["entries"][-50:]
                 with open(seq_mem_path, "w", encoding="utf-8") as f:
                     json.dump(data, f, indent=2, ensure_ascii=False)
                 applied.append("Summary gespeichert")

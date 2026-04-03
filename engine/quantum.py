@@ -53,7 +53,12 @@ class FailureMemory:
         self.failures = self._load()
 
     def _load(self) -> list:
-        return safe_json_read(self.failures_path, default=[])
+        entries = safe_json_read(self.failures_path, default=[])
+        # Legacy-Migration: Alte Eintraege ohne type-Feld korrigieren
+        for entry in entries:
+            if "type" not in entry:
+                entry["type"] = "failure"
+        return entries
 
     def _save(self):
         safe_json_write(self.failures_path, self.failures[-100:])

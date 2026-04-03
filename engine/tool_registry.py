@@ -128,7 +128,13 @@ class ToolRegistry:
         """Kompakte API-Definition ohne Property-Descriptions."""
         schema = td.input_schema
         props = schema.get("properties", {})
-        minimal_props = {k: {"type": v.get("type", "string")} for k, v in props.items()}
+        minimal_props = {}
+        for k, v in props.items():
+            entry = {"type": v.get("type", "string")}
+            # Arrays brauchen items — Gemini/OpenAI lehnen Schema ohne items ab
+            if entry["type"] == "array" and "items" in v:
+                entry["items"] = v["items"]
+            minimal_props[k] = entry
         compact = {
             "name": td.name,
             "description": td.name.replace("_", " "),

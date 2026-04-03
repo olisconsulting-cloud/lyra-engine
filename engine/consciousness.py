@@ -1349,8 +1349,15 @@ SEQUENZ-PLANUNG: Nutze write_sequence_plan am Anfang — plane dein Ziel, Exit-K
         if failure_check:
             parts.append(f"\n{failure_check}")
 
-        # Semantische Memory: ENTFERNT — redundant mit memory.retrieve_relevant() oben
-        # (Spart ~2-3s pro Sequenz durch vermiedene doppelte Suche)
+        # Semantische Memory: Fruehere Erkenntnisse aus finish_sequence
+        try:
+            semantic_hits = self.semantic_memory.search(focus, top_k=3)
+            if semantic_hits:
+                parts.append("\nFRUEHERE ERKENNTNISSE:")
+                for hit in semantic_hits:
+                    parts.append(f"  - {hit.get('content', '')[:150]}")
+        except Exception:
+            pass  # Nicht kritisch — Perception funktioniert auch ohne
 
         # Efficiency-Alerts (von letzter Trend-Analyse)
         eff_alerts = getattr(self, "_efficiency_alerts", [])
@@ -1528,13 +1535,7 @@ SEQUENZ-PLANUNG: Nutze write_sequence_plan am Anfang — plane dein Ziel, Exit-K
                 focus = self.goal_stack.get_current_focus()
                 approach = f"{name}: {str(tool_input)[:100]}"
                 self.failure_memory.record_success(name, focus[:100], approach)
-            # Semantische Memory: Wichtige Ergebnisse mit Goal-Typ speichern
-            if name in ("write_file", "create_tool", "create_project", "modify_own_code"):
-                current_goal_type = self.semantic_memory.classify_goal_type(focus)
-                self.semantic_memory.store(
-                    f"{name}: {str(tool_input)[:200]} → {result[:200]}",
-                    metadata={"tool": name, "goal_type": current_goal_type},
-                )
+            # Semantische Memory: Verschoben nach finish_sequence (Erkenntnisse statt Tool-Calls)
             # Output-Tracking
             if name == "write_file":
                 self.seq_intel.metrics.files_written += 1
@@ -1702,13 +1703,25 @@ SEQUENZ-PLANUNG: Nutze write_sequence_plan am Anfang — plane dein Ziel, Exit-K
         bottleneck = tool_input.get("bottleneck", "")
         next_time = tool_input.get("next_time_differently", "")
         key_decision = tool_input.get("key_decision", "")
-        if bottleneck or next_time:
-            self.metacognition.record(
-                bottleneck, next_time, self.sequences_total,
-                wasted_steps=max(0, self.seq_intel.metrics.step_count - output_count),
-                productive_steps=output_count,
-                key_decision=key_decision,
-            )
+
+        # Bottleneck-Defaults: automatisch ableiten wenn Phi nichts liefert
+        if not bottleneck:
+            sm = self.seq_intel.metrics
+            if sm.errors > 2:
+                bottleneck = f"Hohe Fehlerrate ({sm.errors} Fehler bei {sm.step_count} Steps)"
+            elif sm.step_count > 20 and sm.files_written == 0:
+                bottleneck = f"Kein Output nach {sm.step_count} Steps"
+            elif sm.step_count >= 25:
+                bottleneck = f"Viele Steps ohne expliziten Bottleneck ({sm.step_count} Steps)"
+
+        # IMMER aufrufen — auch mit leeren Strings, damit datenbasierte
+        # Patterns (files_written==0, errors>3) in meta_rules zaehlen
+        self.metacognition.record(
+            bottleneck, next_time, self.sequences_total,
+            wasted_steps=max(0, self.seq_intel.metrics.step_count - output_count),
+            productive_steps=output_count,
+            key_decision=key_decision,
+        )
 
         # MetaCognition-Muster → Process-Regeln
         try:
@@ -1745,6 +1758,19 @@ SEQUENZ-PLANUNG: Nutze write_sequence_plan am Anfang — plane dein Ziel, Exit-K
                 })
             except Exception as e:
                 logger.warning(f" Reflection nicht gespeichert: {e}")
+
+        # Semantische Memory: Erkenntnisse statt Tool-Calls speichern
+        insight = tool_input.get("key_insight", "") or summary
+        if insight:
+            try:
+                focus = self.goal_stack.get_current_focus()
+                goal_type = self.semantic_memory.classify_goal_type(focus)
+                self.semantic_memory.store(
+                    insight[:500],
+                    metadata={"tool": "finish_sequence", "goal_type": goal_type},
+                )
+            except Exception as e:
+                logger.warning(f" Semantische Memory nicht gespeichert: {e}")
 
         # Journal
         self.communication.write_journal(summary, self.sequences_total)
@@ -2640,12 +2666,22 @@ Antworte als JSON:
             if step == 0:
                 print()  # Schliesst die "Warte auf LLM..." Zeile ab
 
-            # Lyras Gedanken — nur erste sinnvolle Zeile
+            # Lyras Gedanken — erste Zeile, am Satzende gekuerzt (nicht mitten im Wort)
             for block in response["content"]:
                 if hasattr(block, "text") and block.text.strip():
                     first_line = block.text.strip().split("\n")[0].strip()
                     if first_line and len(first_line) > 5:
-                        print(f"  💭 {first_line[:120]}")
+                        if len(first_line) <= 150:
+                            thought = first_line
+                        else:
+                            # Naechstes Satzende nach Zeichen 80 suchen
+                            cut = -1
+                            for end_char in ".!?":
+                                pos = first_line.find(end_char, 80)
+                                if pos != -1 and (cut == -1 or pos < cut):
+                                    cut = pos
+                            thought = first_line[:cut + 1] if cut != -1 else first_line[:150] + "…"
+                        print(f"  💭 {thought}")
 
             # Reaktive Tool-Eskalation: Phi erwaehnt fehlende Tools → naechster Step bekommt sie
             # Erweitert: Auch natuerliche Sprache erkennen + genutzte Tools tracken
@@ -2794,6 +2830,15 @@ Antworte als JSON:
             m = self.seq_intel.metrics
             status = "FAILED" if m.errors > 3 and m.files_written == 0 else "PAUSED"
             print(f"  Status: {status} ({m.errors} Fehler, {m.files_written} Dateien)")
+
+        # Emergency-Finish: API komplett ausgefallen, Schleife ohne finish_sequence beendet
+        if not finished and step_count < step_budget:
+            print(f"  ⚠ Sequenz ohne finish_sequence beendet — Emergency-Save")
+            self._save_sequence_memory(
+                f"Sequenz abgebrochen nach {step_count} Steps — API komplett ausgefallen"
+            )
+            self.sequences_total += 1
+            self._save_all()
 
         # Step-History speichern
         task_type = getattr(self, "_current_task_type", "standard")
