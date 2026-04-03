@@ -151,6 +151,7 @@ class SemanticMemory:
         "recherche", "tool_building", "bug_fix", "analyse",
         "self_improvement", "documentation", "testing",
         "api_integration", "report_building", "project_work",
+        "process_management",
     }
 
     @staticmethod
@@ -190,7 +191,8 @@ class SemanticMemory:
         # API-Integration
         if any(k in fl for k in ("api-", "api ", "endpoint", "http", "request")):
             return "api_integration"
-        if "api" in fl and any(k in fl for k in ("integr", "client", "wrapper", "explorer")):
+        if "api" in fl and any(k in fl for k in ("integr", "client", "wrapper", "explorer",
+                                                      "demo", "tool", "projekt")):
             return "api_integration"
 
         # Analyse / Audit
@@ -204,6 +206,12 @@ class SemanticMemory:
             return "self_improvement"
         if any(k in fl for k in ("optimier", "improv", "verbesser")):
             return "self_improvement"
+
+        # Process-Management: finish_sequence, Sub-Goals, Checklisten
+        if any(k in fl for k in ("finish_sequence", "checkliste", "sub-goal", "subgoal")):
+            return "process_management"
+        if any(k in fl for k in ("sequenz abschliess", "sequenz dokumentier")):
+            return "process_management"
 
         # Report / HTML / Dashboard
         if any(k in fl for k in ("html", "report", "bericht", "dashboard")):
@@ -219,6 +227,8 @@ class SemanticMemory:
         if any(k in fl for k in ("erstell", "aufbau", "erweit", "integr")):
             return "project_work"
         if any(k in fl for k in ("plan", "startplan", "vorbereitung")):
+            return "project_work"
+        if any(k in fl for k in ("abschliess", "vervollstaendig", "fertigstell")):
             return "project_work"
 
         return "sonstiges"

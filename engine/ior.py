@@ -10,7 +10,6 @@ interpretiert sie durch die IOR-Linse.
 
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
 
 from .config import safe_json_read, safe_json_write
 

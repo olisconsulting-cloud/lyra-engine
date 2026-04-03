@@ -1719,17 +1719,6 @@ SEQUENZ-PLANUNG: Nutze write_sequence_plan am Anfang — plane dein Ziel, Exit-K
         total_steps = max(self.seq_intel.metrics.step_count, 1)
         efficiency_ratio = round(output_count / total_steps, 3)
 
-        # IOR-Tracking: Input-Output-Ratio messen
-        ior_result = self.ior.record_sequence({
-            "tokens_used": 0,  # Spaeter: aus LLM-Router Token-Counter lesen
-            "tool_calls": self.seq_intel.metrics.step_count,
-            "files_written": self.seq_intel.metrics.files_written,
-            "tools_built": self.seq_intel.metrics.tools_built,
-            "goals_completed": 0,  # Spaeter: aus GoalStack zaehlen
-            "skills_reused": 0,    # Spaeter: aus SkillTracker zaehlen
-            "cross_transfers": 0,  # Spaeter: SemanticMemory Cross-Domain erkennen
-        })
-
         # Valenz aus Performance-Rating ableiten (nicht mehr hardcoded 0.7)
         # Rating 1-10 → Valenz -0.5 bis 1.0 (schlechte Sequenzen = negativ)
         rating = tool_input.get("performance_rating", 5)
@@ -2941,6 +2930,20 @@ Antworte als JSON:
             "cost": round(seq_cost, 4),
             "duration_seconds": round(seq_duration, 1),
         })
+
+        # IOR-Tracking: Input-Output-Ratio messen
+        try:
+            self.ior.record_sequence({
+                "tokens_used": self.sequence_input_tokens + self.sequence_output_tokens,
+                "tool_calls": m.tool_calls,
+                "files_written": m.files_written,
+                "tools_built": m.tools_built,
+                "goals_completed": 0,  # Spaeter: aus GoalStack zaehlen
+                "skills_reused": 0,    # Spaeter: aus SkillTracker zaehlen
+                "cross_transfers": 0,  # Spaeter: SemanticMemory Cross-Domain erkennen
+            })
+        except Exception as e:
+            print(f"  [WARNUNG] IOR nicht gespeichert: {e}")
 
         # Efficiency-Trend-Analyse alle 5 Sequenzen
         if self.sequences_total % 5 == 0:

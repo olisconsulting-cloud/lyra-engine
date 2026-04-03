@@ -31,6 +31,7 @@ class SkillLibrary:
         self.skills_path.mkdir(parents=True, exist_ok=True)
         self.index_path = self.skills_path / "index.json"
         self.index = self._load_index()
+        self._migrate_v2()
 
     def _load_index(self) -> dict:
         return safe_json_read(self.index_path, default={
@@ -40,6 +41,46 @@ class SkillLibrary:
 
     def _save_index(self):
         safe_json_write(self.index_path, self.index)
+
+    def _migrate_v2(self):
+        """Einmalige Reklassifizierung: sonstiges-Skills korrekt zuordnen."""
+        if self.index.get("schema_version", 0) >= 2:
+            return
+
+        _REMAP = {
+            "skill_sonstiges_28": "process_management",
+            "skill_sonstiges_30": "process_management",
+            "skill_sonstiges_29": "process_management",
+            "skill_sonstiges_25": "process_management",
+            "skill_sonstiges_27": "process_management",
+            "skill_sonstiges_26": "process_management",
+            "skill_sonstiges_8": "api_integration",
+            "skill_sonstiges_16": "api_integration",
+            "skill_sonstiges_9": "api_integration",
+            "skill_sonstiges_15": "api_integration",
+            "skill_sonstiges_18": "api_integration",
+            "skill_sonstiges_6": "api_integration",
+            "skill_sonstiges_20": "project_work",
+            "skill_sonstiges_14": "project_work",
+            "skill_sonstiges_10": "project_work",
+            "skill_sonstiges_17": "project_work",
+            "skill_sonstiges_19": "project_work",
+            "skill_sonstiges_11": "testing",
+            "skill_sonstiges_23": "testing",
+            "skill_sonstiges_3": "report_building",
+        }
+
+        migrated = 0
+        for skill in self.index.get("skills", []):
+            new_type = _REMAP.get(skill.get("id"))
+            if new_type:
+                skill["goal_type"] = new_type
+                migrated += 1
+
+        self.index["schema_version"] = 2
+        if migrated > 0:
+            self._save_index()
+            logger.info("Skill-Migration v2: %d Skills reklassifiziert", migrated)
 
     # === Skill-Extraktion ===
 
