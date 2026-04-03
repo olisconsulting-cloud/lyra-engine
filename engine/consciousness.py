@@ -2873,6 +2873,23 @@ Antworte als JSON:
                 if finished:
                     break
 
+                # === ENFORCEMENT: Auto-Finish ab Step 15 ===
+                # Meta-Rules als Code — nicht bitten, erzwingen.
+                # Ausnahme: evolution/sprint braucht Raum fuer Selbstverbesserung.
+                enforcement_limit = 15
+                if (step_count >= enforcement_limit
+                        and mode.get("mode") not in ("evolution", "sprint")
+                        and not finished):
+                    self.narrator.enforcement("auto_finish", step_count, enforcement_limit)
+                    try:
+                        finish_data = self._graceful_finish(messages, step_count)
+                        finish_data["enforcement"] = "auto_finish_step_limit"
+                        self._handle_finish_sequence(finish_data)
+                    except Exception as e:
+                        logger.warning("Enforcement Auto-Finish fehlgeschlagen: %s", e)
+                    finished = True
+                    break
+
             elif response["stop_reason"] == "length":
                 # Token-Limit erreicht — Output wurde abgeschnitten!
                 self.narrator.token_warning(100, "truncated")
