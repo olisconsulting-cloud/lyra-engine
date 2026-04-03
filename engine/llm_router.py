@@ -215,7 +215,7 @@ class LLMRouter:
 
     def call_deepseek(
         self, model_key: str, system: str, messages: list,
-        tools: Optional[list] = None, max_tokens: int = 16000,
+        tools: Optional[list] = None, max_tokens: int = 8192,
     ) -> dict:
         """
         Ruft DeepSeek V3.2 auf — OpenAI-kompatible API.
@@ -226,6 +226,9 @@ class LLMRouter:
             raise ValueError("DEEPSEEK_API_KEY nicht konfiguriert")
 
         model_id = MODELS[model_key]["model_id"]
+
+        # DeepSeek erlaubt max 8192 Tokens
+        max_tokens = min(max_tokens, 8192)
 
         # Anthropic Messages → OpenAI Messages konvertieren
         oai_messages = self._anthropic_to_openai_messages(system, messages)
