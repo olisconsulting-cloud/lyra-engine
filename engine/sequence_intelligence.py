@@ -21,6 +21,7 @@ from pathlib import Path
 from .checkpoint import CheckpointManager
 from .sequence_planner import SequencePlanner
 from .meta_rules import MetaRuleEngine
+from .policy import PolicyEngine
 
 
 # === Datenklassen (Return-Types) ===
@@ -92,6 +93,7 @@ class SequenceIntelligence:
         self._checkpointer = CheckpointManager(consciousness_path)
         self._planner = SequencePlanner(consciousness_path)
         self._meta_rules = MetaRuleEngine(consciousness_path)
+        self._policy = PolicyEngine(consciousness_path)
 
         # Per-Sequence State (reset in init_sequence)
         self._metrics = SeqMetrics()
@@ -123,6 +125,9 @@ class SequenceIntelligence:
         self._stagnant_checks = 0
         self._plan_cache_dirty = False
         self._focus = focus
+
+        # Policy Engine: Policies speichern falls dirty, dann Sequenz-Counter setzen
+        self._policy.save_if_dirty()
 
         # Plan-Cache laden
         self._cached_plan = self._planner.get_active_plan()
@@ -256,7 +261,8 @@ class SequenceIntelligence:
         )
 
     def after_tool(self, name: str, tool_input: dict,
-                   result_str: str, is_error: bool) -> AfterToolResult:
+                   result_str: str, is_error: bool,
+                   goal_context: str = "") -> AfterToolResult:
         """Verarbeitet Tool-Ergebnis: Stuck-Detection + Metriken.
 
         Args:
@@ -314,6 +320,9 @@ class SequenceIntelligence:
                 except Exception:
                     pass
 
+            # Policy Engine: Failure lernen (cross-Sequenz)
+            self._policy.record_after_tool(name, tool_input, result_str, True, goal_context)
+
             return AfterToolResult(
                 guidance=guidance,
                 is_stuck=stuck_info["count"] >= 2,
@@ -333,6 +342,9 @@ class SequenceIntelligence:
             for k in stale_keys:
                 del self._stuck_tracker[k]
 
+            # Policy Engine: Erfolg lernen (cross-Sequenz)
+            self._policy.record_after_tool(name, tool_input, result_str, False, goal_context)
+
             return AfterToolResult(guidance="", is_stuck=False, stuck_count=0)
 
     @staticmethod
@@ -341,12 +353,18 @@ class SequenceIntelligence:
         stuck_input = tool_input.get("path", tool_input.get("name", str(tool_input)[:80]))
         return f"{name}:{stuck_input}", stuck_input
 
-    def check_blocked(self, name: str, tool_input: dict) -> AfterToolResult:
-        """Prueft ob ein Tool blockiert ist (3+ Fehler mit gleichem Input).
+    def check_blocked(self, name: str, tool_input: dict,
+                      goal_context: str = "") -> AfterToolResult:
+        """Prueft ob ein Tool blockiert ist (Stuck-Tracker + Policy Engine).
+
+        Zwei Ebenen:
+        1. Stuck-Tracker: Per-Sequenz RAM (3+ gleiche Fehler in dieser Sequenz)
+        2. Policy Engine: Cross-Sequenz Disk (Erfahrung aus allen Sequenzen)
 
         Wird VOR Tool-Ausfuehrung aufgerufen. Bei Block wird das Tool
         nicht ausgefuehrt — spart API-Call und verhindert Endlos-Schleifen.
         """
+        # Ebene 1: Per-Sequenz Stuck-Tracker (RAM, schnell)
         stuck_key, stuck_input = self._make_stuck_key(name, tool_input)
         info = self._stuck_tracker.get(stuck_key, {"count": 0, "last_error": ""})
         if info["count"] >= 3:
@@ -361,7 +379,26 @@ class SequenceIntelligence:
                 stuck_count=info["count"],
                 blocked=True,
             )
+
+        # Ebene 2: Cross-Sequenz Policy Engine (Disk, persistent)
+        verdict = self._policy.check_before_tool(name, tool_input, goal_context)
+        if not verdict.allowed:
+            alternative = self._policy.suggest_alternative(name, goal_context)
+            return AfterToolResult(
+                guidance=(
+                    f"POLICY-BLOCK: {verdict.reason}. "
+                    f"{alternative or 'Anderen Ansatz waehlen.'}"
+                ),
+                is_stuck=True,
+                stuck_count=0,
+                blocked=True,
+            )
+
         return AfterToolResult(guidance="", is_stuck=False, stuck_count=0, blocked=False)
+
+    def set_current_sequence(self, seq_num: int):
+        """Setzt Sequenz-Nummer fuer Policy-Engine (Exploration-Timing)."""
+        self._policy.set_current_sequence(seq_num)
 
     def on_plan_updated(self) -> None:
         """Invalidiert Plan-Cache. Aufrufen nach update_sequence_plan."""
@@ -426,6 +463,9 @@ class SequenceIntelligence:
             files_written=files,
             stuck_patterns=stuck_patterns,
         )
+
+        # Policy Engine: Sequence-Ende → Policies speichern
+        self._policy.save_if_dirty()
 
         # Stagnation erkennen fuer Lerneffekt
         stagnation = self._stagnant_checks >= 2

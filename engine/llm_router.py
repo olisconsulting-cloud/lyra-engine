@@ -2,18 +2,19 @@
 Multi-LLM Router — Waehlt das optimale Modell je nach Aufgabe.
 
 Aufstellung:
-- Kimi K2.5 (NVIDIA): Haupt-Arbeit (80%) — Tool-Use, Code, Telegram ($0)
-- Claude Sonnet 4.6: Code-Review + letzter Fallback — nativer Tool-Use
+- Gemma 4 31B (NVIDIA): Haupt-Arbeit (80%) — Reasoning, Coding, Vision ($0 NIM)
+- Kimi K2.5 (NVIDIA): Fallback-Stufe 1 — bewaehrtes Tool-Use ($0)
+- Claude Sonnet 4.6: Letzter Fallback — nativer Tool-Use
 - Claude Opus 4.6: Audit, Result-Validation — Tiefenanalyse
-- GPT-4.1-mini (OpenAI): Dream, Goal-Planning, Fallback-Stufe 2
-- DeepSeek V3.2: Fallback-Stufe 1 (~35x guenstiger als Sonnet)
+- GPT-4.1-mini (OpenAI): Dream — JSON-Garantie
+- DeepSeek V3.2: Fallback-Stufe 2 (~35x guenstiger als Sonnet)
 
-Fallback-Kette: NVIDIA → DeepSeek → GPT-4.1-mini → Sonnet 4.6
+Fallback-Kette: Kimi → DeepSeek → GPT-4.1-mini → Sonnet 4.6
 
 TASK_MODEL_MAP ist die EINZIGE Stelle fuer Modell-Zuordnung.
 Alle Module importieren von hier — keine hardcodierten Modell-IDs.
 
-Kosten: ~$5-8/Tag statt $50-100 mit Opus-only
+Kosten: ~$2-5/Tag (Gemma $0 auf NIM, GPT-4.1-mini nur fuer Dream)
 """
 
 import copy
@@ -34,13 +35,21 @@ from anthropic import Anthropic
 # === Modell-Konfiguration ===
 
 MODELS = {
+    "gemma4_31b": {
+        "provider": "google",
+        "model_id": "gemma-4-31b-it",
+        "input_cost": 0.14,  # Google AI Studio — guenstigstes Reasoning-Modell
+        "output_cost": 0.40,
+        "max_output_tokens": 65536,  # 64K — Modell kann 131K
+        "use_for": "Haupt-Arbeit, Reasoning, Coding, Goal-Planning, Vision",
+    },
     "kimi_k25": {
         "provider": "nvidia",
         "model_id": "moonshotai/kimi-k2-instruct",
         "input_cost": 0.0,  # Kostenlos ueber NVIDIA API
         "output_cost": 0.0,
         "max_output_tokens": 16384,
-        "use_for": "Haupt-Arbeit, Tool-Use, Coding, Telegram, Code-Review",
+        "use_for": "Fallback-Stufe 1, Telegram-Antworten",
     },
     "claude_opus": {
         "provider": "anthropic",
@@ -86,22 +95,23 @@ MODELS = {
 
 # Welches Modell fuer welche Aufgabe — EINZIGE Stelle fuer Modell-Zuordnung
 TASK_MODEL_MAP = {
-    "main_work": "kimi_k25",              # Kimi K2.5 — Hauptarbeit, Tool-Use, Coding ($0)
-    "code_review": "claude_sonnet",        # Sonnet 4.6 — Code-Review (vorher Opus — 80% guenstiger, gleiche Qualitaet fuer Diffs)
-    "audit_primary": "claude_opus",        # Opus 4.6 — Tiefenanalyse (hier lohnt sich Opus)
-    "audit_secondary": "kimi_k25",         # Kimi — Gegenpruefung ($0)
-    "telegram_reply": "kimi_k25",          # Kimi — Sofort-Antwort ($0)
-    "dream": "gpt4_1_mini",                # GPT-4.1-mini — Memory-Konsolidierung (89% guenstiger als Sonnet, JSON-Garantie)
-    "tool_generation": "kimi_k25",         # Kimi — Coding ist Kimis Staerke ($0)
-    "goal_planning": "gpt4_1_mini",        # GPT-4.1-mini — Goal-Zerlegung (89% guenstiger als Sonnet, Structured Outputs)
+    "main_work": "gemma4_31b",             # Gemma 4 31B — Hauptarbeit, Tool-Use, Coding ($0 NIM, GPQA 84%, LiveCodeBench 80%)
+    "code_review": "gemma4_31b",           # Gemma 4 — Code-Review (GPQA 84% > Sonnet ~67%, 37x guenstiger)
+    "audit_primary": "claude_opus",        # Opus 4.6 — Tiefenanalyse (hier keine Abstriche)
+    "audit_secondary": "gemma4_31b",       # Gemma 4 — Gegenpruefung ($0, staerker als Kimi)
+    "telegram_reply": "gemma4_31b",        # Gemma 4 — Sofort-Antwort ($0, 140+ Sprachen)
+    "dream": "gpt4_1_mini",                # GPT-4.1-mini — Memory-Konsolidierung (JSON-Garantie, Structured Outputs)
+    "tool_generation": "gemma4_31b",       # Gemma 4 — LiveCodeBench 80% vs Kimi 53.7%
+    "goal_planning": "gemma4_31b",         # Gemma 4 — AIME 89% vs GPT-4.1-mini ~50% (4x guenstiger, 2x staerker)
     "result_validation": "claude_opus",    # Opus 4.6 — Ergebnis-Pruefung (kritisch, hier keine Abstriche)
-    "graceful_finish": "kimi_k25",          # Kimi K2.5 — Sequenz-Zusammenfassungen bei Auto-Finish ($0, vorher Sonnet)
-    "fallback": "deepseek_v3",             # DeepSeek V3 — Fallback Stufe 1 (Kette: DeepSeek → GPT-4.1-mini → Sonnet)
+    "graceful_finish": "gemma4_31b",       # Gemma 4 — Sequenz-Zusammenfassungen ($0)
+    "fallback": "kimi_k25",               # Kimi K2.5 — Fallback Stufe 1 (bewaehrt, $0)
 }
 
 
 # Fallback-Kette: Wenn Primary ausfaellt, diese Reihenfolge versuchen
-FALLBACK_CHAIN = ["deepseek_v3", "gpt4_1_mini", "claude_sonnet"]
+# Kimi als erstes (bewaehrt + $0), dann DeepSeek, GPT, Sonnet als letzter
+FALLBACK_CHAIN = ["kimi_k25", "deepseek_v3", "gpt4_1_mini", "claude_sonnet"]
 
 
 class ProviderHealth:
@@ -255,10 +265,11 @@ class ProviderHealth:
         health.last_error_type = data.get("last_error_type", "")
         health.total_failures = data.get("total_failures", 0)
         health.total_successes = data.get("total_successes", 0)
-        # State: Dead bleibt dead, Cooldown wird zu healthy (Neustart = frischer Versuch)
-        # session_timeouts: Reset auf 0 (frische Session, frische Chance)
-        saved_state = data.get("state", cls.HEALTHY)
-        health.state = cls.DEAD if saved_state == cls.DEAD else cls.HEALTHY
+        # Neustart = frischer Versuch fuer ALLE Provider
+        # Dead-State ueberlebt sonst ewig (dead_since ist monotonic, nicht persistiert)
+        # Statistik (total_failures/successes) bleibt fuer Monitoring erhalten
+        health.state = cls.HEALTHY
+        health.consecutive_failures = 0
         return health
 
 
@@ -283,7 +294,7 @@ class LLMRouter:
 
     Anthropic: Tool-Use ueber native API (Sonnet, Opus)
     OpenAI: REST API (GPT-4.1-mini)
-    NVIDIA: OpenAI-kompatible REST API (Kimi K2.5)
+    NVIDIA: OpenAI-kompatible REST API (Gemma 4 31B + Kimi K2.5)
     Google: Tool-Use ueber REST API (Gemini Flash)
     DeepSeek: OpenAI-kompatible REST API (Fallback)
 
@@ -334,7 +345,7 @@ class LLMRouter:
 
     def get_model_for_task(self, task: str) -> str:
         """Gibt den Modell-Key fuer eine Aufgabe zurueck."""
-        return TASK_MODEL_MAP.get(task, "kimi_k25")
+        return TASK_MODEL_MAP.get(task, "gemma4_31b")
 
     def _clamp_max_tokens(self, model_key: str, max_tokens: int) -> int:
         """Clampt max_tokens gegen das API-Limit des Modells."""
@@ -347,7 +358,7 @@ class LLMRouter:
 
     def call(
         self, task: str, system: str, messages: list,
-        tools: Optional[list] = None, max_tokens: int = 16000,
+        tools: Optional[list] = None, max_tokens: int = 32000,
         on_fallback: Optional[callable] = None,
     ) -> dict:
         """
@@ -376,7 +387,7 @@ class LLMRouter:
             )
             return self._fallback_call(
                 system, messages, tools, max_tokens,
-                skip_provider=provider, original_task=task,
+                skip_model=model_key, original_task=task,
                 on_fallback=on_fallback,
             )
 
@@ -394,15 +405,15 @@ class LLMRouter:
                 health.record_failure(status_code, error_type)
 
             logger.warning(
-                "Provider %s fehlgeschlagen (%s, HTTP %d) → Fallback-Kette",
-                provider, error_type, status_code,
+                "Modell %s fehlgeschlagen (%s, HTTP %d) → Fallback-Kette",
+                model_key, error_type, status_code,
             )
 
             # Fallback-Kette versuchen
             try:
                 return self._fallback_call(
                     system, messages, tools, max_tokens,
-                    skip_provider=provider, original_task=task,
+                    skip_model=model_key, original_task=task,
                     on_fallback=on_fallback,
                 )
             except Exception:
@@ -429,10 +440,13 @@ class LLMRouter:
 
     def _fallback_call(
         self, system: str, messages: list, tools: Optional[list],
-        max_tokens: int, skip_provider: str, original_task: str,
+        max_tokens: int, skip_model: str, original_task: str,
         on_fallback: Optional[callable] = None,
     ) -> dict:
         """Versucht Fallback-Kette mit Health-Tracking pro Provider.
+
+        Skip-Logik: Ueberspringt das fehlgeschlagene MODELL, nicht den ganzen Provider.
+        So kann Kimi K2.5 (nvidia) als Fallback dienen wenn Gemma 4 (nvidia) ausfaellt.
 
         Proaktiver Provider-Switch: Timeout-anfaellige Provider werden
         ans Ende der Kette verschoben statt uebersprungen — so bleiben
@@ -450,10 +464,11 @@ class LLMRouter:
         )
 
         for fb_key in sorted_chain:
-            fb_provider = MODELS.get(fb_key, {}).get("provider", "")
-            if fb_provider == skip_provider:
+            # Skip das fehlgeschlagene Modell selbst (nicht den ganzen Provider)
+            if fb_key == skip_model:
                 continue
 
+            fb_provider = MODELS.get(fb_key, {}).get("provider", "")
             fb_health = self.provider_health.get(fb_provider)
             if fb_health and not fb_health.is_available():
                 logger.debug("Fallback %s uebersprungen (nicht verfuegbar)", fb_key)
@@ -468,7 +483,7 @@ class LLMRouter:
             # Narrator/UI ueber Fallback informieren
             if on_fallback:
                 try:
-                    on_fallback(skip_provider, fb_key)
+                    on_fallback(skip_model, fb_key)
                 except Exception:
                     pass  # UI-Callback darf nie den Call blockieren
 
@@ -486,7 +501,7 @@ class LLMRouter:
                 logger.warning("Fallback %s fehlgeschlagen: %s", fb_key, fb_error)
                 continue
 
-        raise ValueError(f"Alle Provider fehlgeschlagen (Primary: {skip_provider})")
+        raise ValueError(f"Alle Provider fehlgeschlagen (Primary: {skip_model})")
 
     @staticmethod
     def _extract_status_code(error: Exception) -> int:
@@ -552,7 +567,7 @@ class LLMRouter:
 
     def call_anthropic(
         self, model_key: str, system: str, messages: list,
-        tools: Optional[list] = None, max_tokens: int = 16000,
+        tools: Optional[list] = None, max_tokens: int = 32000,
     ) -> dict:
         """
         Ruft Claude auf mit Prompt-Caching fuer System + Tools.
@@ -599,7 +614,7 @@ class LLMRouter:
 
     def call_gemini(
         self, model_key: str, system: str, messages: list,
-        tools: Optional[list] = None, max_tokens: int = 16000,
+        tools: Optional[list] = None, max_tokens: int = 32000,
     ) -> dict:
         """
         Ruft Gemini auf — konvertiert Anthropic-Format zu Google-Format.
@@ -651,6 +666,21 @@ class LLMRouter:
 
         if resp is None:
             raise ValueError("Gemini API: Kein Response erhalten")
+        if resp.status_code == 429:
+            # Rate-Limit: Retry-After Header parsen oder 3s Default
+            retry_after = int(resp.headers.get("Retry-After", "3"))
+            logger.warning("Gemini Rate-Limit 429 — warte %ds", retry_after)
+            time.sleep(retry_after)
+            try:
+                resp = self.http_fallback.post(
+                    f"https://generativelanguage.googleapis.com/v1beta/models/{model_id}:generateContent",
+                    params={"key": self.google_key},
+                    json=body,
+                )
+            except (httpx.TimeoutException, httpx.ConnectError) as e:
+                raise ValueError("Gemini API Timeout nach 429-Retry") from e
+            if resp.status_code == 429:
+                raise ValueError(f"Gemini API Rate-Limit 429 nach Retry: {resp.text[:200]}")
         if resp.status_code != 200:
             raise ValueError(f"Gemini API Fehler {resp.status_code}: {resp.text[:200]}")
 
@@ -719,13 +749,13 @@ class LLMRouter:
         data = resp.json()
         return self._openai_to_anthropic_response(data, model_key)
 
-    # === NVIDIA (Kimi K2.5 — OpenAI-kompatibel) ===
+    # === NVIDIA (Gemma 4 31B + Kimi K2.5 — OpenAI-kompatibel) ===
 
     def call_nvidia(
         self, model_key: str, system: str, messages: list,
-        tools: Optional[list] = None, max_tokens: int = 16000,
+        tools: Optional[list] = None, max_tokens: int = 32000,
     ) -> dict:
-        """Ruft Kimi K2.5 ueber NVIDIA API auf — OpenAI-kompatibel."""
+        """Ruft Modelle ueber NVIDIA NIM auf — OpenAI-kompatibel (Gemma 4, Kimi K2.5)."""
         if not self.nvidia_key:
             raise ValueError("NVIDIA_API_KEY nicht konfiguriert")
 
@@ -733,12 +763,18 @@ class LLMRouter:
         max_tokens = self._clamp_max_tokens(model_key, max_tokens)
         oai_messages = self._anthropic_to_openai_messages(system, messages)
 
+        # Modell-spezifische Sampling-Parameter (Gemma 4 braucht hoehere Temperatur)
+        _SAMPLING = {
+            "gemma4_31b": {"temperature": 1.0, "top_p": 0.95, "top_k": 64},
+            "kimi_k25": {"temperature": 0.6, "top_p": 0.9},
+        }
+        sampling = _SAMPLING.get(model_key, {"temperature": 0.6, "top_p": 0.9})
+
         body = {
             "model": model_id,
             "messages": oai_messages,
             "max_tokens": max_tokens,
-            "temperature": 0.6,  # Konsistente Tool-Calls, aber kreativ genug
-            "top_p": 0.9,
+            **sampling,
         }
 
         if tools:
@@ -789,7 +825,7 @@ class LLMRouter:
 
     def call_openai(
         self, model_key: str, system: str, messages: list,
-        tools: Optional[list] = None, max_tokens: int = 16000,
+        tools: Optional[list] = None, max_tokens: int = 32000,
     ) -> dict:
         """Ruft OpenAI API auf — GPT-4.1-mini fuer Dream/Goal-Planning."""
         if not self.openai_key:

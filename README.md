@@ -1,17 +1,19 @@
 # Lyra — Autonomous Intelligence Engine
 
 Eine autonome KI-Engine die eigenständig arbeitet, lernt und wächst.
-Dual-LLM-Architektur: Gemini 3 Flash als schnelles Arbeitstier (80%),
-Claude Opus/Sonnet für Tiefenanalyse, Audits und kreative Aufgaben.
+Multi-LLM-Architektur: Gemma 4 31B als Reasoning-Kraftwerk (80%),
+Claude Opus für Tiefenanalyse, GPT-4.1-mini für JSON-Tasks.
 
 ## LLM-Strategie
 
 | Modell | Aufgabe | Warum |
 |--------|---------|-------|
-| **Gemini 3 Flash** | Hauptarbeit, Tool-Use, Telegram, Code Review | Schnell, günstig, 78% SWE-bench |
-| **Gemini 2.5 Flash** | Fallback wenn Gemini 3 Flash versagt | Stabil, erprobt |
-| **Claude Opus 4.6** | Deep Audit, kritische Selbstanalyse | Höchste Analysetiefe |
-| **Claude Sonnet 4.6** | Dream-System, Tool Foundry, Fallback | Gute Qualität, günstiger als Opus |
+| **Gemma 4 31B** | Hauptarbeit, Reasoning, Coding, Goal-Planning | GPQA 84%, LiveCodeBench 80%, Vision, $0 (NIM) |
+| **Kimi K2.5** | Fallback Stufe 1 | Bewährt, $0, SWE-bench 65.8% |
+| **GPT-4.1-mini** | Dream (Memory-Konsolidierung) | JSON-Garantie, Structured Outputs |
+| **Claude Opus 4.6** | Audit, Result-Validation | Höchste Analysetiefe, keine Abstriche |
+| **DeepSeek V3** | Fallback Stufe 2 | Günstig, solide |
+| **Sonnet 4.6** | Letzter Fallback | Stabil, erprobt |
 
 Routing in `engine/llm_router.py` — automatische Modellwahl nach Aufgabentyp.
 
@@ -20,13 +22,13 @@ Routing in `engine/llm_router.py` — automatische Modellwahl nach Aufgabentyp.
 ```
 engine/              ← Die Intelligenz (Code)
   consciousness.py     — Agentic Loop mit Tool-Use
-  llm_router.py        — Multi-LLM Router (Gemini/Claude/Opus)
+  llm_router.py        — Multi-LLM Router (Gemma/Claude/Kimi)
   intelligence.py      — Semantische Memory, Skill-Tracking, Strategien
   dream.py             — Memory-Konsolidierung (Autodream)
   competence.py        — Kompetenz-Matrix + Selbst-Audit
   evolution.py         — Multi-Ebenen-Evolution, Tool Foundry
   quantum.py           — Failure-Memory, Critic-Agent, Prompt-Mutation
-  code_review.py       — Dual Code-Review (Opus + Gemini parallel)
+  code_review.py       — Dual Code-Review (Opus + Primary parallel)
   security.py          — Security-Gateway mit Pfad-, AST- und Review-Schichten
   actions.py           — Aktions-Engine (Dateisystem)
   toolchain.py         — Self-Improving Toolchain

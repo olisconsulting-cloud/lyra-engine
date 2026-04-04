@@ -33,7 +33,7 @@ THIN = "-" * 60
 
 def _get_optimize_api():
     """Holt API-Config fuer Prompt-Optimierung aus dem Router."""
-    model_key = TASK_MODEL_MAP.get("main_work", "kimi_k25")
+    model_key = TASK_MODEL_MAP.get("main_work", "gemma4_31b")
     config = MODELS.get(model_key, {})
     provider = config.get("provider", "")
     model_id = config.get("model_id", "")
@@ -516,8 +516,8 @@ def main():
             "# Anthropic API Key - Claude fuer Tiefenanalyse, Audits, Fallback\n"
             "ANTHROPIC_API_KEY=sk-ant-...\n"
             "\n"
-            "# Google AI API Key - Gemini fuer Hauptarbeit (80% der Aufgaben)\n"
-            "GOOGLE_AI_API_KEY=...\n"
+            "# NVIDIA API Key - Gemma 4 31B Hauptarbeit (80%), Kimi K2.5 Fallback\n"
+            "NVIDIA_API_KEY=nvapi-...\n"
             "\n"
             "# === OPTIONAL ===\n"
             "\n"

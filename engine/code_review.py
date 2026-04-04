@@ -2,13 +2,13 @@
 Dual Code-Review System — Zwei unabhaengige Pruefinstanzen.
 
 Schleife:
-1. Kimi K2.5 schreibt Code (Haupt-Arbeit)
+1. Primary-Modell schreibt Code (Haupt-Arbeit, aktuell Gemma 4 31B)
 2. Lyra schreibt die Fixes (mit Backup)
 3. REVIEW (Opus 4.6): Prueft ob Fixes korrekt sind (unabhaengiger Reviewer)
 4. Opus OK → Fix bleibt | Opus NEIN → Rollback
 5. Ergebnis wird geloggt
 
-Kimi = Haupt-Arbeit, schreibt den Code
+Primary = Haupt-Arbeit, schreibt den Code (via TASK_MODEL_MAP)
 Opus = Unabhaengige Gegenpruefung, tiefste Analyse-Qualitaet
 """
 
@@ -30,7 +30,7 @@ class CodeReviewer:
     """
     Code-Reviewer — nutzt Opus 4.6 als unabhaengigen Reviewer.
 
-    Kimi schreibt den Code, Opus prueft ihn — echtes Dual-Review
+    Primary-Modell schreibt den Code, Opus prueft ihn — echtes Dual-Review
     mit zwei verschiedenen Modellen/Providern.
     """
 
@@ -222,7 +222,7 @@ class DualReviewSystem:
     """
     Komplette Pruefschleife mit zwei Instanzen.
 
-    Kimi (Code schreiben) → Backup → Syntax-Check → Opus (Review) → Accept/Rollback
+    Primary (Code schreiben) → Backup → Syntax-Check → Opus (Review) → Accept/Rollback
     """
 
     def __init__(self, root_path: Path):

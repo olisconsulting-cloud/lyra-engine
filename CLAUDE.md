@@ -10,7 +10,7 @@ subsymbolische LLMs — der vielversprechendste AGI-Ansatz (Kersting, Hassabis, 
 ```
 engine/                    Code (Git-tracked)
   consciousness.py           Agentic Loop — Perception → LLM → Tools → State
-  llm_router.py              Multi-Provider: Kimi 80%, Fallback-Kette 4-stufig
+  llm_router.py              Multi-Provider: Gemma 4 80%, Fallback-Kette 4-stufig
   goal_stack.py              Hierarchische Goals + Sub-Goals + Spin-Erkennung
   intelligence.py            SemanticMemory (TF-IDF), Skills, Strategies
   evolution.py               AdaptiveRhythm, ToolFoundry, MetaCognition
@@ -43,25 +43,26 @@ python review_phi.py         # Regressions-Gate (14 Checks)
 ```
 
 ## LLM-Aufstellung
-- **Kimi K2.5** (NVIDIA): 80% — Hauptarbeit, Tool-Use, Coding ($0)
-- **GPT-4.1-mini**: Dream, Goal-Planning — JSON-Garantie ($0.40/$1.60)
-- **DeepSeek V3**: Fallback Stufe 1 ($0.28/$0.42)
-- **Sonnet 4.6**: Code-Review + letzter Fallback
+- **Gemma 4 31B** (Google AI Studio): 80% — Hauptarbeit, Reasoning, Coding, Vision ($0.14/$0.40)
+- **Kimi K2.5** (NVIDIA): Fallback Stufe 1 — bewaehrt ($0)
+- **GPT-4.1-mini**: Dream — JSON-Garantie ($0.40/$1.60)
+- **DeepSeek V3**: Fallback Stufe 2 ($0.28/$0.42)
+- **Sonnet 4.6**: Letzter Fallback
 - **Opus 4.6**: Audit, Result-Validation — keine Abstriche
-- Fallback-Kette: NVIDIA → DeepSeek → GPT-4.1-mini → Sonnet
+- Fallback-Kette: Kimi → DeepSeek → GPT-4.1-mini → Sonnet
 - `TASK_MODEL_MAP` in `llm_router.py` = EINZIGE Stelle fuer Modell-Zuordnung
 
 ## AGI-Kern: 5 Saeulen
 1. **Hybride Intelligenz** — Symbolische Goals + subsymbolische LLMs + Phi-Mathematik
 2. **Multi-Memory** — Semantisch (TF-IDF) + Episodisch + Failure + Skills + Strategies
-3. **Selbstverbesserung** — Code lesen/aendern mit DualReview (Opus+Kimi), Rollback
+3. **Selbstverbesserung** — Code lesen/aendern mit DualReview (Opus+Gemma), Rollback
 4. **Dream-Konsolidierung** — Beliefs, Strategies, Skills periodisch verdichten
 5. **Anti-Loop (3 Ebenen)** — Progress-Pulse + Subgoal-Stuck + Tool-Blocker
 
 ## Sicherheit (3 Schichten)
 - **Path**: `.env`, `genesis.json` = GESCHUETZT, Engine = DualReview
 - **AST**: Hard-Block auf `shutil.rmtree`, `os.system`, `shell=True`, direkte HTTP
-- **Review**: Engine-Aenderungen → Opus + Kimi parallel, beide muessen approven
+- **Review**: Engine-Aenderungen → Opus + Gemma parallel, beide muessen approven
 
 ## Kritische Regeln
 - **Code > Prompts**: Phi-Verhalten im Code erzwingen, nicht per Prompt bitten

@@ -69,7 +69,7 @@ from .config import safe_json_write, safe_json_read
 
 logger = logging.getLogger(__name__)
 
-MAX_STEPS_PER_SEQUENCE = 40          # Von Oliver auf 40 erhoeht (vorher 15)
+MAX_STEPS_PER_SEQUENCE = 60          # Von Oliver auf 60 erhoeht (Gemma 4: 256K Kontext, 200K Input-Limit)
 MAX_INPUT_TOKENS_PER_SEQUENCE = 200_000  # Gemma 4 = 256k, 78% Nutzung mit Sicherheitsmarge
 MAX_TOKENS = 32000                    # Max Output-Tokens pro LLM-Call (Gemma kann 131k, Default fuer alle Tasks)
 
@@ -2763,6 +2763,7 @@ Antworte als JSON:
 
         # Sequenz-Intelligence: State reset + Prompt-Fragmente
         focus = self.goal_stack.get_current_focus()
+        self.seq_intel.set_current_sequence(self.sequences_total)
         init = self.seq_intel.init_sequence(focus)
         self.sequence_input_tokens = 0
         self.sequence_output_tokens = 0
@@ -3053,7 +3054,7 @@ Antworte als JSON:
 
                         # Ebene 3: Tool-Blocker — 3x gleicher Fehler → nicht ausfuehren
                         is_error = False  # Reset — verhindert stale state vom vorherigen Loop
-                        pre_check = self.seq_intel.check_blocked(block.name, block.input)
+                        pre_check = self.seq_intel.check_blocked(block.name, block.input, goal_context=focus)
                         if pre_check.blocked:
                             result_str = pre_check.guidance
                             is_error = True
@@ -3077,7 +3078,7 @@ Antworte als JSON:
                                 or result_str.startswith("ROLLBACK")
                             )
                             # Stuck-Detection + Metriken nur bei echten Tool-Calls
-                            atr = self.seq_intel.after_tool(block.name, block.input, result_str, is_error)
+                            atr = self.seq_intel.after_tool(block.name, block.input, result_str, is_error, goal_context=focus)
                             if atr.guidance:
                                 result_str += atr.guidance
 

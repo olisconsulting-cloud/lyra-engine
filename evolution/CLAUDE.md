@@ -18,6 +18,7 @@ Jedes Projekt hier veraendert nicht WAS Phi tut, sondern WIE Phi denkt, lernt un
 | [telos/](telos/) | Hybride Intelligenz | Phase 1 teilweise | Zweck-geleitete Goals |
 | [unified-memory/](unified-memory/) | Multi-Memory | Baselines gemessen | 5 Systeme vereinen |
 | [competitive-intel/](competitive-intel/) | Alle Saeulen | **Neu** | Best Practices aus Hermes + OpenClaw |
+| [policy-engine/](policy-engine/) | Selbstverbesserung | **Aktiv** | #1 AGI-Hebel: Lernen → Verhaltensaenderung |
 
 ## Abhaengigkeiten
 

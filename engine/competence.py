@@ -348,7 +348,7 @@ Sei STRENG aber FAIR. Finde echte Probleme, keine Stilfragen."""
             return {"findings": [], "overall_quality": 0, "summary": f"Opus-Fehler: {e}"}
 
     def _audit_gemini(self, code_context: str) -> dict:
-        """Zweites Modell Audit (Kimi/Gemini/DeepSeek)."""
+        """Zweites Modell Audit (Gemma/Kimi/DeepSeek via TASK_MODEL_MAP)."""
         if not self.secondary_key:
             return {"findings": [], "overall_quality": 0, "summary": "Secondary Auditor nicht konfiguriert"}
 
