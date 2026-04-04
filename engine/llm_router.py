@@ -36,11 +36,11 @@ from anthropic import Anthropic
 
 MODELS = {
     "gemma4_31b": {
-        "provider": "google",
-        "model_id": "gemma-4-31b-it",
-        "input_cost": 0.14,  # Google AI Studio — guenstigstes Reasoning-Modell
-        "output_cost": 0.40,
-        "max_output_tokens": 65536,  # 64K — Modell kann 131K
+        "provider": "nvidia",
+        "model_id": "google/gemma-4-31b-it",
+        "input_cost": 0.0,   # Kostenlos ueber NVIDIA NIM
+        "output_cost": 0.0,
+        "max_output_tokens": 32768,  # 32K Output-Limit
         "use_for": "Haupt-Arbeit, Reasoning, Coding, Goal-Planning, Vision",
     },
     "kimi_k25": {
@@ -74,6 +74,14 @@ MODELS = {
         "output_cost": 0.42,
         "max_output_tokens": 8192,
         "use_for": "Tool-Foundry, Fallback",
+    },
+    "gemma4_google": {
+        "provider": "google",
+        "model_id": "gemma-4-31b-it",
+        "input_cost": 0.14,
+        "output_cost": 0.40,
+        "max_output_tokens": 32768,
+        "use_for": "Fallback fuer Gemma 4 wenn NVIDIA ausfaellt (16K TPM Limit!)",
     },
     "gemini_flash": {
         "provider": "google",
@@ -111,7 +119,7 @@ TASK_MODEL_MAP = {
 
 # Fallback-Kette: Wenn Primary ausfaellt, diese Reihenfolge versuchen
 # Kimi als erstes (bewaehrt + $0), dann DeepSeek, GPT, Sonnet als letzter
-FALLBACK_CHAIN = ["kimi_k25", "deepseek_v3", "gpt4_1_mini", "claude_sonnet"]
+FALLBACK_CHAIN = ["kimi_k25", "gemma4_google", "deepseek_v3", "gpt4_1_mini", "claude_sonnet"]
 
 
 class ProviderHealth:
@@ -310,7 +318,7 @@ class LLMRouter:
         # Getrennte Pools: Primary-Timeout blockiert nicht den Fallback-Pool
         _timeout = httpx.Timeout(
             connect=10.0,   # Verbindung aufbauen: 10s reicht
-            read=45.0,      # Antwort abwarten: 45s (war 90s — zu lang fuer tote Provider)
+            read=120.0,     # Antwort abwarten: 120s (Gemma 4 braucht bei 23K+ Input bis zu 90s)
             write=15.0,     # Request senden: 15s
             pool=10.0,      # Connection-Pool: 10s
         )
@@ -666,10 +674,13 @@ class LLMRouter:
 
         if resp is None:
             raise ValueError("Gemini API: Kein Response erhalten")
-        if resp.status_code == 429:
-            # Rate-Limit: Retry-After Header parsen oder 3s Default
-            retry_after = int(resp.headers.get("Retry-After", "3"))
-            logger.warning("Gemini Rate-Limit 429 — warte %ds", retry_after)
+
+        # Rate-Limit: Exponentieller Backoff (5s, 10s, 20s — Google AI Studio braucht Geduld)
+        for retry in range(3):
+            if resp.status_code != 429:
+                break
+            retry_after = int(resp.headers.get("Retry-After", str(5 * (2 ** retry))))
+            logger.warning("Gemini Rate-Limit 429 — warte %ds (Retry %d/3)", retry_after, retry + 1)
             time.sleep(retry_after)
             try:
                 resp = self.http_fallback.post(
@@ -678,9 +689,10 @@ class LLMRouter:
                     json=body,
                 )
             except (httpx.TimeoutException, httpx.ConnectError) as e:
-                raise ValueError("Gemini API Timeout nach 429-Retry") from e
-            if resp.status_code == 429:
-                raise ValueError(f"Gemini API Rate-Limit 429 nach Retry: {resp.text[:200]}")
+                raise ValueError(f"Gemini API Timeout nach 429-Retry {retry + 1}") from e
+
+        if resp.status_code == 429:
+            raise ValueError(f"Gemini API Rate-Limit 429 nach 3 Retries: {resp.text[:200]}")
         if resp.status_code != 200:
             raise ValueError(f"Gemini API Fehler {resp.status_code}: {resp.text[:200]}")
 
