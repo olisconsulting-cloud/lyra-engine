@@ -16,6 +16,7 @@ Alle Module importieren von hier — keine hardcodierten Modell-IDs.
 Kosten: ~$5-8/Tag statt $50-100 mit Opus-only
 """
 
+import copy
 import json
 import logging
 import os
@@ -38,6 +39,7 @@ MODELS = {
         "model_id": "moonshotai/kimi-k2-instruct",
         "input_cost": 0.0,  # Kostenlos ueber NVIDIA API
         "output_cost": 0.0,
+        "max_output_tokens": 16384,
         "use_for": "Haupt-Arbeit, Tool-Use, Coding, Telegram, Code-Review",
     },
     "claude_opus": {
@@ -45,6 +47,7 @@ MODELS = {
         "model_id": "claude-opus-4-6",
         "input_cost": 5.00,
         "output_cost": 25.00,
+        "max_output_tokens": 16384,
         "use_for": "Kritische Selbstverbesserung, Audit",
     },
     "claude_sonnet": {
@@ -52,6 +55,7 @@ MODELS = {
         "model_id": "claude-sonnet-4-6",
         "input_cost": 3.00,
         "output_cost": 15.00,
+        "max_output_tokens": 16384,
         "use_for": "Code-Review — praezises Diff-Verstaendnis, nativer Tool-Use",
     },
     "deepseek_v3": {
@@ -59,6 +63,7 @@ MODELS = {
         "model_id": "deepseek-chat",
         "input_cost": 0.28,
         "output_cost": 0.42,
+        "max_output_tokens": 8192,
         "use_for": "Tool-Foundry, Fallback",
     },
     "gemini_flash": {
@@ -66,6 +71,7 @@ MODELS = {
         "model_id": "gemini-2.5-flash",
         "input_cost": 0.10,
         "output_cost": 0.40,
+        "max_output_tokens": 65536,
         "use_for": "Nicht in Fallback-Kette — nur fuer explizite Gemini-Tasks",
     },
     "gpt4_1_mini": {
@@ -73,6 +79,7 @@ MODELS = {
         "model_id": "gpt-4.1-mini",
         "input_cost": 0.40,
         "output_cost": 1.60,
+        "max_output_tokens": 16384,
         "use_for": "Dream, Goal-Planning — guenstig mit JSON-Garantie",
     },
 }
@@ -144,6 +151,13 @@ class LLMRouter:
         """Gibt den Modell-Key fuer eine Aufgabe zurueck."""
         return TASK_MODEL_MAP.get(task, "kimi_k25")
 
+    def _clamp_max_tokens(self, model_key: str, max_tokens: int) -> int:
+        """Clampt max_tokens gegen das API-Limit des Modells."""
+        limit = MODELS.get(model_key, {}).get("max_output_tokens", 16384)
+        if max_tokens > limit:
+            logger.debug("max_tokens %d → %d (Limit %s)", max_tokens, limit, model_key)
+        return min(max_tokens, limit)
+
     # === Anthropic (Claude) ===
 
     def call_anthropic(
@@ -157,6 +171,7 @@ class LLMRouter:
             {"content": list, "stop_reason": str, "usage": dict, "model": str}
         """
         model_id = MODELS[model_key]["model_id"]
+        max_tokens = self._clamp_max_tokens(model_key, max_tokens)
 
         # System-Prompt als cacheable Content-Block (spart Tokens bei wiederholten Calls)
         kwargs = {
@@ -166,7 +181,6 @@ class LLMRouter:
             "messages": messages,
         }
         if tools:
-            import copy
             cached_tools = copy.deepcopy(tools)
             cached_tools[-1]["cache_control"] = {"type": "ephemeral"}
             kwargs["tools"] = cached_tools
@@ -206,6 +220,7 @@ class LLMRouter:
             raise ValueError("GOOGLE_AI_API_KEY nicht konfiguriert")
 
         model_id = MODELS[model_key]["model_id"]
+        max_tokens = self._clamp_max_tokens(model_key, max_tokens)
 
         # Anthropic Messages → Gemini Contents konvertieren
         contents = self._anthropic_to_gemini_messages(messages)
@@ -269,9 +284,7 @@ class LLMRouter:
             raise ValueError("DEEPSEEK_API_KEY nicht konfiguriert")
 
         model_id = MODELS[model_key]["model_id"]
-
-        # DeepSeek erlaubt max 8192 Tokens
-        max_tokens = min(max_tokens, 8192)
+        max_tokens = self._clamp_max_tokens(model_key, max_tokens)
 
         # Anthropic Messages → OpenAI Messages konvertieren
         oai_messages = self._anthropic_to_openai_messages(system, messages)
@@ -327,6 +340,7 @@ class LLMRouter:
             raise ValueError("NVIDIA_API_KEY nicht konfiguriert")
 
         model_id = MODELS[model_key]["model_id"]
+        max_tokens = self._clamp_max_tokens(model_key, max_tokens)
         oai_messages = self._anthropic_to_openai_messages(system, messages)
 
         body = {
@@ -392,6 +406,7 @@ class LLMRouter:
             raise ValueError("OPENAI_API_KEY nicht konfiguriert")
 
         model_id = MODELS[model_key]["model_id"]
+        max_tokens = self._clamp_max_tokens(model_key, max_tokens)
         oai_messages = self._anthropic_to_openai_messages(system, messages)
 
         body = {
@@ -666,7 +681,6 @@ class LLMRouter:
 
     def _fix_gemini_schema(self, schema: dict) -> dict:
         """Bereinigt JSON-Schema fuer Gemini: array-Properties brauchen explizites items-Feld."""
-        import copy
         schema = copy.deepcopy(schema)
 
         def fix_properties(props: dict):
