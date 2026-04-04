@@ -1140,6 +1140,34 @@ SEQUENZ-PLANUNG: Nutze write_sequence_plan am Anfang — plane dein Ziel, Exit-K
 
     # === Goal-Kontext-Anker ===
 
+    @staticmethod
+    def _safe_goal_id(goal: dict) -> str:
+        """Erzeugt einen dateisystem-sicheren Goal-Identifier.
+
+        Verhindert Path Traversal: Goal-Titel wie '../../engine' werden
+        zu '__engine' normalisiert. Nur Alphanumerisch + Unterstrich + Bindestrich.
+        """
+        raw_id = goal.get("id", goal.get("title", "unknown")[:30])
+        safe = re.sub(r'[^a-zA-Z0-9_-]', '_', raw_id)[:50]
+        return safe or "unknown"
+
+    def _find_focus_goal(self, focus: str) -> dict | None:
+        """Findet das aktive Goal das zum Focus-String gehoert.
+
+        Nutzt exakten Praefix-Match statt Substring, da Titel-Substrings
+        bei aehnlichen Goals kollidieren koennen.
+        """
+        active = self.goal_stack.goals.get("active", [])
+        # Primaer: Exakter Praefix-Match (Focus beginnt mit "FOKUS: {title}")
+        for goal in active:
+            if focus.startswith(f"FOKUS: {goal['title']}"):
+                return goal
+        # Fallback: Substring (abwaertskompatibel)
+        for goal in active:
+            if goal["title"] in focus:
+                return goal
+        return None
+
     def _save_goal_context(self, summary: str, tool_input: dict):
         """Speichert pro aktivem Goal einen Kontext-Anker fuer die naechste Sequenz.
 
@@ -1154,17 +1182,11 @@ SEQUENZ-PLANUNG: Nutze write_sequence_plan am Anfang — plane dein Ziel, Exit-K
         active = self.goal_stack.goals.get("active", [])
         m = self.seq_intel.metrics
 
-        # Aktuelles Focus-Goal finden
-        focus_goal = None
-        for goal in active:
-            if goal["title"] in focus:
-                focus_goal = goal
-                break
-
+        focus_goal = self._find_focus_goal(focus)
         if not focus_goal:
             return
 
-        goal_id = focus_goal.get("id", focus_goal["title"][:30])
+        goal_id = self._safe_goal_id(focus_goal)
         anchor_path = ctx_dir / f"{goal_id}.json"
 
         # Bestehenden Anker laden (akkumuliert Dateien ueber Sequenzen)
@@ -1180,7 +1202,6 @@ SEQUENZ-PLANUNG: Nutze write_sequence_plan am Anfang — plane dein Ziel, Exit-K
         try:
             projects_path = self.actions.projects_path
             if projects_path.exists():
-                # Projekt-Name aus geschriebenen Dateien ableiten
                 for p in m.written_paths:
                     if "projects/" in p.replace("\\", "/"):
                         parts = p.replace("\\", "/").split("projects/")
@@ -1190,15 +1211,14 @@ SEQUENZ-PLANUNG: Nutze write_sequence_plan am Anfang — plane dein Ziel, Exit-K
         except Exception:
             pass
 
-        # Naechstes Sub-Goal bestimmen
+        # Naechstes Sub-Goal bestimmen (jeweils erstes Match)
         next_step = ""
         current_subgoal = ""
         for sg in focus_goal.get("sub_goals", []):
-            if sg["status"] == "in_progress":
+            if sg["status"] == "in_progress" and not current_subgoal:
                 current_subgoal = sg["title"]
-            if sg["status"] in ("pending",):
-                if not next_step:
-                    next_step = sg["title"]
+            if sg["status"] == "pending" and not next_step:
+                next_step = sg["title"]
 
         # Sub-Goal-Fortschritt kompakt
         sgs = focus_goal.get("sub_goals", [])
@@ -1224,14 +1244,16 @@ SEQUENZ-PLANUNG: Nutze write_sequence_plan am Anfang — plane dein Ziel, Exit-K
         except Exception as e:
             logger.warning("Goal-Kontext-Anker nicht gespeichert: %s", e)
 
-        # Verwaiste Anker aufraeumen (Goals die nicht mehr aktiv sind)
-        try:
-            active_ids = {g.get("id", g["title"][:30]) for g in active}
-            for f in ctx_dir.iterdir():
-                if f.suffix == ".json" and f.stem not in active_ids:
-                    f.unlink()
-        except Exception:
-            pass
+        # Verwaiste Anker aufraeumen — nur wenn Goals aktiv sind,
+        # sonst wuerde ein kurzzeitig leerer Goal-Stack alle Anker loeschen
+        if active:
+            try:
+                active_ids = {self._safe_goal_id(g) for g in active}
+                for f in ctx_dir.iterdir():
+                    if f.suffix == ".json" and f.stem not in active_ids:
+                        f.unlink()
+            except Exception as e:
+                logger.debug("Goal-Kontext Cleanup: %s", e)
 
     def _load_goal_context(self, focus: str) -> str:
         """Laedt den Kontext-Anker fuer das aktuelle Focus-Goal.
@@ -1243,18 +1265,11 @@ SEQUENZ-PLANUNG: Nutze write_sequence_plan am Anfang — plane dein Ziel, Exit-K
         if not ctx_dir.exists():
             return ""
 
-        # Goal-ID aus Focus-String oder aktiven Goals matchen
-        active = self.goal_stack.goals.get("active", [])
-        focus_goal = None
-        for goal in active:
-            if goal["title"] in focus:
-                focus_goal = goal
-                break
-
+        focus_goal = self._find_focus_goal(focus)
         if not focus_goal:
             return ""
 
-        goal_id = focus_goal.get("id", focus_goal["title"][:30])
+        goal_id = self._safe_goal_id(focus_goal)
         anchor_path = ctx_dir / f"{goal_id}.json"
 
         if not anchor_path.exists():
@@ -1267,33 +1282,30 @@ SEQUENZ-PLANUNG: Nutze write_sequence_plan am Anfang — plane dein Ziel, Exit-K
 
             lines = [f"GOAL-KONTEXT (Seq {anchor.get('last_sequence', '?')}):"]
 
-            # Was zuletzt passiert ist
             if anchor.get("last_summary"):
                 lines.append(f"  Letzter Stand: {anchor['last_summary'][:200]}")
 
-            # Welche Dateien existieren
             files = anchor.get("accumulated_files", [])
             if files:
                 lines.append(f"  Existierende Dateien: {', '.join(files[:10])}")
 
-            # Zugehoeriges Projekt
             if anchor.get("project_name"):
                 lines.append(f"  Projekt: projects/{anchor['project_name']}/")
 
-            # Aktuelles Sub-Goal
             if anchor.get("current_subgoal"):
                 lines.append(f"  Aktuell: {anchor['current_subgoal']}")
 
-            # Naechster Schritt
             if anchor.get("next_step"):
                 lines.append(f"  Danach: {anchor['next_step']}")
 
-            # Fortschritt
             if anchor.get("subgoal_progress"):
                 lines.append(f"  Fortschritt: {anchor['subgoal_progress']} Sub-Goals erledigt")
 
-            # Fehler-Warnung
-            errors = anchor.get("errors_last_seq", 0)
+            # Fehler-Warnung (typ-sicher)
+            try:
+                errors = int(anchor.get("errors_last_seq", 0))
+            except (ValueError, TypeError):
+                errors = 0
             if errors > 0:
                 lines.append(f"  ACHTUNG: {errors} Fehler in letzter Sequenz")
                 if anchor.get("bottleneck"):
@@ -2519,14 +2531,15 @@ Antworte als JSON:
                         # Skill → Tool Bridge: Reife Skills zu Tools
                         mature_skills = self.skill_library.find_promotion_candidates()
                         for skill in mature_skills[:1]:  # Max 1 pro Zyklus
-                            spec = self.skill_library.build_tool_spec(skill)
                             try:
-                                tool_id = self.foundry.generate_tool(
+                                spec = self.skill_library.build_tool_spec(skill)
+                                gen_result = self.foundry.generate_tool(
                                     name=spec["name"],
                                     description=spec["description"],
                                     toolchain=self.toolchain,
                                 )
-                                if tool_id:
+                                # generate_tool gibt Fehler-String bei Misserfolg
+                                if gen_result and not gen_result.startswith("FEHLER"):
                                     self.skill_library.mark_as_promoted(
                                         skill["id"], spec["name"],
                                     )
@@ -2542,7 +2555,7 @@ Antworte als JSON:
                                     )
                             except Exception as e:
                                 logger.warning("Skill→Tool fehlgeschlagen: %s — %s",
-                                               spec["name"], e)
+                                               skill.get("id", "?"), e)
                     except Exception as e:
                         logger.warning(f"Tool-Lifecycle im Dream-Zyklus fehlgeschlagen: {e}")
 
@@ -2667,6 +2680,24 @@ Antworte als JSON:
 
     def _run_sequence(self):
         """Fuehrt eine komplette Arbeitssequenz aus."""
+        # Netzwerk-Check: Alle Provider tot → lange Pause statt Spin-Loop
+        if self.llm.all_providers_dead():
+            wait = self.llm.seconds_until_next_recovery()
+            wait = max(wait, 60.0)  # Mindestens 60s warten
+            logger.warning(
+                "ALLE PROVIDER DEAD → Auto-Suspend %.0fs bis naechster Recovery-Probe", wait,
+            )
+            print(f"  🔴 Alle Provider offline. Warte {wait:.0f}s auf Recovery...")
+            # In 10s-Schritten warten (Telegram-Empfang nicht blockieren)
+            for _ in range(int(wait / 10)):
+                if not self.running:
+                    return
+                time.sleep(10)
+                # Frueher aufwachen wenn ein Provider recovered
+                if not self.llm.all_providers_dead():
+                    print("  🟢 Provider wieder verfuegbar!")
+                    break
+
         # Hard-Stop: Bei 5+ unproduktiven Sequenzen kurze Pause erzwingen
         spin_streak = self.silent_failure_detector._get_unproductive_streak()
         if spin_streak >= 5:

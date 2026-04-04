@@ -193,8 +193,6 @@ def handle_complete_project(ctx: ToolContext, tool_input: dict) -> str:
     # Pruefen ob der Projekt-Code tatsaechlich in der Engine verdrahtet ist
     # Isolierte Projekte in data/projects/ sind wertlos wenn sie nie genutzt werden
     integration_warning = _check_engine_integration(project_name)
-    if integration_warning:
-        logger.info("Integration-Gate fuer '%s': %s", project_name, integration_warning)
 
     # Alles OK — Projekt abschliessen
     updated_plan = plan_content
@@ -234,7 +232,13 @@ def _check_engine_integration(project_name: str) -> str:
 
     Isolierte Tools in data/projects/ die nie importiert oder
     genutzt werden sind toter Code. Gibt Warnung zurueck oder ''.
+
+    Nutzt Word-Boundary-Regex statt Substring um False Positives
+    zu vermeiden (z.B. 'api' in Kommentaren, 'fix' in Variablen).
+    Kurze Projektnamen (<4 Zeichen) werden uebersprungen.
     """
+    import re
+
     engine_path = config.ENGINE_PATH
     project_path = config.DATA_PATH / "projects" / project_name
     tools_path = config.DATA_PATH / "tools"
@@ -253,12 +257,18 @@ def _check_engine_integration(project_name: str) -> str:
     if not code_files:
         return ""
 
-    # Normalisierter Projektname fuer Suche (z.B. "two-stage-perception" → "perception")
-    search_terms = [project_name.replace("-", "_")]
-    search_terms.extend(code_files)
+    # Suchterme mit Word-Boundary — filtere zu kurze Terme (<4 Zeichen)
+    # die staendig False Positives erzeugen wuerden
+    raw_terms = [project_name.replace("-", "_")] + code_files
+    search_patterns = []
+    for term in raw_terms:
+        if len(term) >= 4:
+            search_patterns.append(re.compile(r'\b' + re.escape(term) + r'\b'))
+
+    if not search_patterns:
+        return ""  # Alle Terme zu kurz — Pruefung nicht sinnvoll
 
     # In engine/ und tools/ nach Referenzen suchen
-    found_in = []
     search_dirs = [engine_path]
     if tools_path.exists():
         search_dirs.append(tools_path)
@@ -268,17 +278,13 @@ def _check_engine_integration(project_name: str) -> str:
             for py_file in search_dir.rglob("*.py"):
                 try:
                     content = py_file.read_text(encoding="utf-8", errors="ignore")
-                    for term in search_terms:
-                        if term in content:
-                            found_in.append(py_file.name)
-                            break
+                    for pattern in search_patterns:
+                        if pattern.search(content):
+                            return ""  # Referenz gefunden — alles gut
                 except OSError:
                     continue
         except OSError:
             continue
-
-    if found_in:
-        return ""  # Code ist referenziert — alles gut
 
     return (
         f"Der Code in projects/{project_name}/ wird nirgends in engine/ oder tools/ "

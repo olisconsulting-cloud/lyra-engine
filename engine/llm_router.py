@@ -121,13 +121,14 @@ class ProviderHealth:
     BASE_COOLDOWN = 30.0        # 30s erster Cooldown
     MAX_COOLDOWN = 480.0        # 8 Minuten Maximum
     DEAD_THRESHOLD = 5          # Nach 5 konsekutiven Failures → dead
-    PROBE_AFTER_COOLDOWN = True # Nach Cooldown erst kleinen Request testen
+    DEAD_RECOVERY_TIME = 600.0  # 10 Min: Dead → Cooldown (Probe-Versuch)
 
     def __init__(self, provider: str):
         self.provider = provider
         self.state = self.HEALTHY
         self.consecutive_failures = 0
         self.cooldown_until = 0.0  # time.monotonic() Timestamp
+        self.dead_since = 0.0      # time.monotonic() Timestamp — fuer Dead-Recovery
         self.last_error_type = ""  # "timeout", "rate_limit", "auth", "server"
         self.total_failures = 0
         self.total_successes = 0
@@ -146,6 +147,12 @@ class ProviderHealth:
         self.last_error_type = ""
         self.total_successes += 1
         self._session_calls += 1
+        # Timeout-Reset: Nach 5 aufeinanderfolgenden Erfolgen ist der
+        # Provider stabil genug fuer Repromotion (lange Sessions)
+        self._consecutive_successes = getattr(self, "_consecutive_successes", 0) + 1
+        if self._consecutive_successes >= 5 and self._session_timeouts > 0:
+            self._session_timeouts = 0
+            logger.info("Provider %s: 5 Erfolge in Folge → Timeout-Zaehler zurueckgesetzt", self.provider)
 
     def record_failure(self, status_code: int = 0, error_type: str = "unknown"):
         """Provider hat versagt — State + Cooldown aktualisieren."""
@@ -153,21 +160,24 @@ class ProviderHealth:
         self.total_failures += 1
         self.last_error_type = error_type
         self._session_calls += 1
+        self._consecutive_successes = 0  # Erfolgs-Streak unterbrochen
         if error_type == "timeout":
             self._session_timeouts += 1
 
-        # Auth-Fehler → sofort dead (Retry sinnlos)
+        # Auth-Fehler → sofort dead (Retry sinnlos, kein Recovery)
         if status_code == 401 or status_code == 403:
             self.state = self.DEAD
-            logger.warning("Provider %s: Auth-Fehler %d → DEAD", self.provider, status_code)
+            self.dead_since = 0.0  # Kein Recovery bei Auth-Fehlern
+            logger.warning("Provider %s: Auth-Fehler %d → DEAD (permanent)", self.provider, status_code)
             return
 
-        # Genug Failures → dead
+        # Genug Failures → dead (mit Recovery-Timer)
         if self.consecutive_failures >= self.DEAD_THRESHOLD:
             self.state = self.DEAD
+            self.dead_since = time.monotonic()
             logger.warning(
-                "Provider %s: %d konsekutive Failures → DEAD",
-                self.provider, self.consecutive_failures,
+                "Provider %s: %d konsekutive Failures → DEAD (Recovery in %.0fs)",
+                self.provider, self.consecutive_failures, self.DEAD_RECOVERY_TIME,
             )
             return
 
@@ -192,6 +202,14 @@ class ProviderHealth:
         if self.state == self.HEALTHY:
             return True
         if self.state == self.DEAD:
+            # Dead-Recovery: Nach DEAD_RECOVERY_TIME wieder probieren
+            # Auth-Fehler (dead_since=0) bleiben permanent dead
+            if self.dead_since > 0 and time.monotonic() >= self.dead_since + self.DEAD_RECOVERY_TIME:
+                self.state = self.COOLDOWN
+                self.cooldown_until = 0.0  # Sofort probieren
+                logger.info("Provider %s: Dead-Recovery nach %.0fs → COOLDOWN (Probe)",
+                            self.provider, self.DEAD_RECOVERY_TIME)
+                return True
             return False
         # COOLDOWN: Abgelaufen?
         if self.state == self.COOLDOWN and time.monotonic() >= self.cooldown_until:
@@ -216,14 +234,17 @@ class ProviderHealth:
         return self.total_successes / total
 
     def to_dict(self) -> dict:
-        """Fuer State-Persistence."""
+        """Fuer State-Persistence.
+
+        session_timeouts wird NICHT persistiert — bei Neustart bekommt
+        jeder Provider eine frische Chance (analog zu Cooldown → healthy).
+        """
         return {
             "state": self.state,
             "consecutive_failures": self.consecutive_failures,
             "last_error_type": self.last_error_type,
             "total_failures": self.total_failures,
             "total_successes": self.total_successes,
-            "session_timeouts": self._session_timeouts,
         }
 
     @classmethod
@@ -235,6 +256,7 @@ class ProviderHealth:
         health.total_failures = data.get("total_failures", 0)
         health.total_successes = data.get("total_successes", 0)
         # State: Dead bleibt dead, Cooldown wird zu healthy (Neustart = frischer Versuch)
+        # session_timeouts: Reset auf 0 (frische Session, frische Chance)
         saved_state = data.get("state", cls.HEALTHY)
         health.state = cls.DEAD if saved_state == cls.DEAD else cls.HEALTHY
         return health
@@ -479,6 +501,28 @@ class LLMRouter:
         msg = str(error)
         match = re.search(r'(?:Fehler|Error|HTTP)\s*(\d{3})', msg)
         return int(match.group(1)) if match else 0
+
+    def all_providers_dead(self) -> bool:
+        """True wenn kein einziger Provider verfuegbar ist (Netzwerk-Totalausfall)."""
+        return not any(h.is_available() for h in self.provider_health.values())
+
+    def seconds_until_next_recovery(self) -> float:
+        """Sekunden bis der naechste Dead-Provider seinen Recovery-Probe bekommt.
+
+        Nuetzlich fuer Auto-Suspend: Phi kann so lange schlafen statt zu loopen.
+        Returns 0 wenn ein Provider schon verfuegbar ist.
+        """
+        now = time.monotonic()
+        next_recovery = float("inf")
+        for h in self.provider_health.values():
+            if h.is_available():
+                return 0.0
+            if h.state == h.DEAD and h.dead_since > 0:
+                recovery_at = h.dead_since + h.DEAD_RECOVERY_TIME
+                next_recovery = min(next_recovery, recovery_at - now)
+            elif h.state == h.COOLDOWN:
+                next_recovery = min(next_recovery, h.cooldown_until - now)
+        return max(next_recovery, 0.0) if next_recovery != float("inf") else 300.0
 
     # === Provider-Health Persistence ===
 
