@@ -70,7 +70,7 @@ from .config import safe_json_write, safe_json_read
 logger = logging.getLogger(__name__)
 
 MAX_STEPS_PER_SEQUENCE = 40          # Von Oliver auf 40 erhoeht (vorher 15)
-MAX_INPUT_TOKENS_PER_SEQUENCE = 120_000  # Kimi K2.5 Context Window = 128k, Sicherheitsmarge
+MAX_INPUT_TOKENS_PER_SEQUENCE = 120_000  # Gemma 4 = 256k, konservativ bei 120k fuer NIM-Kompatibilitaet
 MAX_TOKENS = 16000                    # Max Output-Tokens pro LLM-Call
 
 def _normalize_spin_key(tool_name: str, raw_name: str) -> str:
@@ -2285,7 +2285,7 @@ SEQUENZ-PLANUNG: Nutze write_sequence_plan am Anfang — plane dein Ziel, Exit-K
 
         Statt mechanischer Metadata-Zusammensetzung bekommt Sonnet den Kontext
         und schreibt eine reflektierte Summary mit Bottleneck-Analyse.
-        Separater Call — belastet Kimis Context Window nicht.
+        Separater Call — belastet das Primary-Modell Context Window nicht.
         """
         last_thought = self._extract_last_llm_thought(messages)
         focus = self.goal_stack.get_current_focus()
@@ -2929,7 +2929,7 @@ Antworte als JSON:
                         break  # Nicht retrybar
 
                     # Cascade-Failure: Alle Provider tot → sofort Sequenz beenden
-                    if "Alle Fallbacks fehlgeschlagen" in error_msg:
+                    if "Alle Provider fehlgeschlagen" in error_msg:
                         self._cascade_failures = cascade_count + 1
                         if self._cascade_failures >= 2:
                             self.narrator.emergency(

@@ -96,7 +96,8 @@ class UnifiedMemory:
         return hits[:top_k]
 
     def get_context_for(self, focus: str, task_type: str = "standard",
-                        max_tokens: int = 800) -> str:
+                        max_tokens: int = 800,
+                        sources: list[str] = None) -> str:
         """
         Baut einen kompakten Memory-Kontext fuer die Perception.
 
@@ -104,8 +105,11 @@ class UnifiedMemory:
         - memory.retrieve_relevant()
         - failure_memory.check()
         - semantic_memory.search()
+
+        Args:
+            sources: Nur diese Quellen abfragen (None = alle).
         """
-        hits = self.query(focus, top_k=8)
+        hits = self.query(focus, top_k=8, sources=sources)
         if not hits:
             return ""
 
@@ -114,7 +118,7 @@ class UnifiedMemory:
         for hit in hits:
             line = f"  - [{hit.source}|{hit.score:.2f}] {hit.content[:200]}"
             line_tokens = len(line) // 4  # Grobe Schaetzung
-            if used_tokens + line_tokens > max_tokens // 4:
+            if used_tokens + line_tokens > max_tokens:
                 break
             parts.append(line)
             used_tokens += line_tokens
