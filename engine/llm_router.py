@@ -2,14 +2,14 @@
 Multi-LLM Router — Waehlt das optimale Modell je nach Aufgabe.
 
 Aufstellung:
-- Gemma 4 31B (NVIDIA): Haupt-Arbeit (80%) — Reasoning, Coding, Vision ($0 NIM)
-- Kimi K2.5 (NVIDIA): Fallback-Stufe 1 — bewaehrtes Tool-Use ($0)
+- Kimi K2.5 (NVIDIA): Haupt-Arbeit (80%) — bewaehrtes Tool-Use ($0)
+- Gemma 4 31B: Wartet auf Self-Hosting (Cloud ueberall Tool-Use-Limits)
 - Claude Sonnet 4.6: Letzter Fallback — nativer Tool-Use
 - Claude Opus 4.6: Audit, Result-Validation — Tiefenanalyse
 - GPT-4.1-mini (OpenAI): Dream — JSON-Garantie
 - DeepSeek V3.2: Fallback-Stufe 2 (~35x guenstiger als Sonnet)
 
-Fallback-Kette: Kimi → DeepSeek → GPT-4.1-mini → Sonnet 4.6
+Fallback-Kette: DeepSeek → Gemma 4 (Google) → GPT-4.1-mini → Sonnet 4.6
 
 TASK_MODEL_MAP ist die EINZIGE Stelle fuer Modell-Zuordnung.
 Alle Module importieren von hier — keine hardcodierten Modell-IDs.
@@ -38,10 +38,10 @@ MODELS = {
     "gemma4_31b": {
         "provider": "openrouter",
         "model_id": "google/gemma-4-31b-it",
-        "input_cost": 0.14,  # OpenRouter: $0.14/$0.40 pro 1M Tokens
+        "input_cost": 0.14,  # OpenRouter — aktuell nur ohne Tool-Use nutzbar (AkashML 429)
         "output_cost": 0.40,
         "max_output_tokens": 32768,
-        "use_for": "Haupt-Arbeit, Reasoning, Coding, Goal-Planning, Vision",
+        "use_for": "Wartet auf RTX 5090 Self-Hosting — Cloud hat ueberall Tool-Use-Limits",
     },
     "kimi_k25": {
         "provider": "nvidia",
@@ -103,23 +103,23 @@ MODELS = {
 
 # Welches Modell fuer welche Aufgabe — EINZIGE Stelle fuer Modell-Zuordnung
 TASK_MODEL_MAP = {
-    "main_work": "gemma4_31b",             # Gemma 4 31B — Hauptarbeit, Tool-Use, Coding ($0 NIM, GPQA 84%, LiveCodeBench 80%)
-    "code_review": "gemma4_31b",           # Gemma 4 — Code-Review (GPQA 84% > Sonnet ~67%, 37x guenstiger)
+    "main_work": "kimi_k25",               # Kimi K2.5 — Hauptarbeit ($0, stabiles Tool-Use)
+    "code_review": "kimi_k25",             # Kimi — Code-Review ($0)
     "audit_primary": "claude_opus",        # Opus 4.6 — Tiefenanalyse (hier keine Abstriche)
-    "audit_secondary": "gemma4_31b",       # Gemma 4 — Gegenpruefung ($0, staerker als Kimi)
-    "telegram_reply": "gemma4_31b",        # Gemma 4 — Sofort-Antwort ($0, 140+ Sprachen)
-    "dream": "gpt4_1_mini",                # GPT-4.1-mini — Memory-Konsolidierung (JSON-Garantie, Structured Outputs)
-    "tool_generation": "gemma4_31b",       # Gemma 4 — LiveCodeBench 80% vs Kimi 53.7%
-    "goal_planning": "gemma4_31b",         # Gemma 4 — AIME 89% vs GPT-4.1-mini ~50% (4x guenstiger, 2x staerker)
-    "result_validation": "claude_opus",    # Opus 4.6 — Ergebnis-Pruefung (kritisch, hier keine Abstriche)
-    "graceful_finish": "gemma4_31b",       # Gemma 4 — Sequenz-Zusammenfassungen ($0)
-    "fallback": "kimi_k25",               # Kimi K2.5 — Fallback Stufe 1 (bewaehrt, $0)
+    "audit_secondary": "kimi_k25",         # Kimi — Gegenpruefung ($0)
+    "telegram_reply": "kimi_k25",          # Kimi — Sofort-Antwort ($0)
+    "dream": "gpt4_1_mini",                # GPT-4.1-mini — Memory-Konsolidierung (JSON-Garantie)
+    "tool_generation": "kimi_k25",         # Kimi — Tool-Generierung ($0)
+    "goal_planning": "kimi_k25",           # Kimi — Goal-Planning ($0)
+    "result_validation": "claude_opus",    # Opus 4.6 — Ergebnis-Pruefung (kritisch)
+    "graceful_finish": "kimi_k25",         # Kimi — Sequenz-Zusammenfassungen ($0)
+    "fallback": "deepseek_v3",             # DeepSeek V3 — Fallback Stufe 1
 }
 
 
 # Fallback-Kette: Wenn Primary ausfaellt, diese Reihenfolge versuchen
 # Kimi als erstes (bewaehrt + $0), dann DeepSeek, GPT, Sonnet als letzter
-FALLBACK_CHAIN = ["kimi_k25", "gemma4_google", "deepseek_v3", "gpt4_1_mini", "claude_sonnet"]
+FALLBACK_CHAIN = ["deepseek_v3", "gemma4_google", "gpt4_1_mini", "claude_sonnet"]
 
 
 class ProviderHealth:
