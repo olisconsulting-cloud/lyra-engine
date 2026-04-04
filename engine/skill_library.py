@@ -14,6 +14,7 @@ Zwei Abstraktionsstufen (MemP-Pattern):
 
 import json
 import logging
+from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -32,6 +33,7 @@ class SkillLibrary:
         self.index_path = self.skills_path / "index.json"
         self.index = self._load_index()
         self._migrate_v2()
+        self._migrate_v3()
 
     def _load_index(self) -> dict:
         return safe_json_read(self.index_path, default={
@@ -82,6 +84,51 @@ class SkillLibrary:
             self._save_index()
             logger.info("Skill-Migration v2: %d Skills reklassifiziert", migrated)
 
+    def _migrate_v3(self):
+        """Einmalig: Duplikat-IDs bereinigen (Counter-Bug Fix).
+
+        Problem: skill_id nutzte len(skills) statt globalen Counter,
+        daher entstanden bei Limit 30 immer IDs mit Suffix _30.
+        """
+        if self.index.get("schema_version", 0) >= 3:
+            return
+
+        skills = self.index.get("skills", [])
+        id_counts = Counter(s["id"] for s in skills)
+        dupes = {k for k, v in id_counts.items() if v > 1}
+
+        removed = 0
+        if dupes:
+            # Pro Duplikat-Gruppe: besten behalten, Rest entfernen
+            to_remove: list[int] = []
+            for dup_id in dupes:
+                group = [(i, s) for i, s in enumerate(skills)
+                         if s["id"] == dup_id]
+                group.sort(
+                    key=lambda x: (x[1].get("avg_score", 0)
+                                   * x[1].get("success_count", 1)),
+                    reverse=True,
+                )
+                for idx, _ in group[1:]:
+                    to_remove.append(idx)
+
+            for idx in sorted(to_remove, reverse=True):
+                skills.pop(idx)
+            removed = len(to_remove)
+
+            # Verbliebene Skills mit _30-Suffix umbenennen
+            counter = self.index.get("total_extracted", len(skills))
+            for skill in skills:
+                if skill["id"].endswith("_30"):
+                    skill["id"] = f"skill_{skill['goal_type']}_{counter}"
+                    counter += 1
+            self.index["total_extracted"] = counter
+
+        self.index["schema_version"] = 3
+        self._save_index()
+        if removed:
+            logger.info("Skill-Migration v3: %d Duplikate entfernt", removed)
+
     # === Skill-Extraktion ===
 
     def extract_from_sequence(self, plan_goal: str, plan_score: int,
@@ -125,8 +172,8 @@ class SkillLibrary:
                             plan_goal[:50], skill.get("plan_goal", "")[:50])
                 return self._update_skill(skill["id"], plan_score, rating)
 
-        # Neuen Skill erstellen
-        skill_id = f"skill_{goal_type}_{len(self.index['skills'])}"
+        # Neuen Skill erstellen (total_extracted als globaler Counter — nie Duplikate)
+        skill_id = f"skill_{goal_type}_{self.index.get('total_extracted', 0)}"
         skill = {
             "id": skill_id,
             "created": datetime.now(timezone.utc).isoformat(),
@@ -146,12 +193,14 @@ class SkillLibrary:
         self.index["skills"].append(skill)
         self.index["total_extracted"] = self.index.get("total_extracted", 0) + 1
 
-        # Max 30 Skills behalten (aelteste mit niedrigstem Score loeschen)
+        # Max 30 Skills behalten (schwache archivieren statt loeschen)
         if len(self.index["skills"]) > 30:
             self.index["skills"].sort(
                 key=lambda s: s.get("avg_score", 0) * s.get("success_count", 1),
                 reverse=True
             )
+            removed = self.index["skills"][30:]
+            self._archive_skills(removed)
             self.index["skills"] = self.index["skills"][:30]
 
         self._save_index()
@@ -175,6 +224,23 @@ class SkillLibrary:
                 self._save_index()
                 return skill_id
         return skill_id
+
+    def _archive_skills(self, skills: list):
+        """Archiviert entfernte Skills fuer spaetere Analyse."""
+        archive_path = self.skills_path / "archive.json"
+        archive = safe_json_read(
+            archive_path, default={"archived": [], "total_archived": 0},
+        )
+        now = datetime.now(timezone.utc).isoformat()
+        for skill in skills:
+            skill["archived_at"] = now
+            archive["archived"].append(skill)
+        # Max 100 archivierte Skills
+        if len(archive["archived"]) > 100:
+            archive["archived"] = archive["archived"][-100:]
+        archive["total_archived"] = len(archive["archived"])
+        safe_json_write(archive_path, archive)
+        logger.info("Skill-Archiv: %d Skills archiviert", len(skills))
 
     @staticmethod
     def _abstract_steps(tool_names: list) -> list:

@@ -231,6 +231,24 @@ class SemanticMemory:
         if any(k in fl for k in ("abschliess", "vervollstaendig", "fertigstell")):
             return "project_work"
 
+        # Konfiguration / Setup
+        if any(k in fl for k in ("config", "konfigur", "setup", "einricht", "install")):
+            return "project_work"
+
+        # Kommunikation / Nachrichten
+        if any(k in fl for k in ("nachricht", "telegram", "mail", "benachrichtig",
+                                  "sende", "message")):
+            return "process_management"
+
+        # Daten / Dateien verarbeiten
+        if any(k in fl for k in ("datei", "daten", "json", "csv", "parse",
+                                  "konvert", "migrat")):
+            return "project_work"
+
+        # Lernen / Erkunden
+        if any(k in fl for k in ("lern", "versteh", "erkund", "explor")):
+            return "self_improvement"
+
         return "sonstiges"
 
     def store(self, content: str, metadata: Optional[dict] = None) -> str:

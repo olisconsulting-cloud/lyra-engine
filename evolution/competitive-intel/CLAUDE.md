@@ -22,14 +22,14 @@ identifiziert, die Phis Kern staerken.
 
 ## Die 6 Integrations-Kandidaten
 
-| # | Kandidat | Quelle | Ziel-Saeule | Phase |
-|---|----------|--------|-------------|-------|
-| CI-1 | **Memory-Backend: SQLite + Vektor + FTS** | OpenClaw | Multi-Memory | 1 |
-| CI-2 | **Session-Compaction** (4-Phasen-Kompression) | OpenClaw | Token-Effizienz | 1 |
-| CI-3 | **Cooldown-Tracking + Provider-Probing** | OpenClaw | LLM-Router | 2 |
-| CI-4 | **Smart Dangerous-Command-Approval** | Hermes | Sicherheit | 2 |
-| CI-5 | **Skill-Security-Scanner** fuer ToolFoundry | OpenClaw | Sicherheit | 3 |
-| CI-6 | **Trajectory-Learning (RL-Pipeline)** | Hermes | Selbstverbesserung | 3 |
+| Rang | Kandidat | Quelle | Ziel-Saeule | Schwierigkeit |
+|------|----------|--------|-------------|---------------|
+| 1 | **CI-3: Cooldown-Tracking + Provider-Probing** | OpenClaw | LLM-Router | MEDIUM |
+| 2 | **CI-4: Smart Dangerous-Command-Approval** | Hermes | Sicherheit | EASY |
+| 3 | **CI-2: Session-Compaction** (4-Phasen-Kompression) | OpenClaw | Token-Effizienz | MEDIUM |
+| 4 | **CI-1: Memory-Backend: SQLite + Vektor + FTS** | OpenClaw | Multi-Memory | HARD |
+| 5 | **CI-5: Skill-Security-Scanner** fuer ToolFoundry | OpenClaw | Sicherheit | MEDIUM |
+| 6 | **CI-6: Trajectory-Learning (RL-Pipeline)** | Hermes | Selbstverbesserung | HARD |
 
 ## Detailbeschreibung
 
@@ -94,16 +94,17 @@ dieses Wissen geht verloren (nur implizit in Memory/Skills).
 
 ## Phasen
 
-### Phase 1: Quick Wins (CI-1, CI-2)
-Memory-Backend und Token-Kompression — direkte, messbare Verbesserungen.
-Beide haben Synergien mit laufenden Projekten (Unified-Memory, Perception).
+### Phase 1: Stabilitaet + Quick Wins (CI-3, CI-4)
+Provider-Stabilisierung und Security-Upgrade — sofortiger ROI, niedriges Risiko.
+CI-3 behebt NVIDIA-Instabilitaet (groesster Flaschenhals). CI-4 ist ~120 Zeilen.
 
-### Phase 2: Robustheit (CI-3, CI-4)
-Provider-Stabilisierung und Security-Upgrade — Phi wird zuverlaessiger.
+### Phase 2: Effizienz (CI-2, CI-1)
+Token-Kompression und Memory-Backend — direkte, messbare Verbesserungen.
+CI-2 auf Kern-KPI (Tok/Seq). CI-1 zusammen mit Unified-Memory-Projekt.
 
 ### Phase 3: Frontier (CI-5, CI-6)
 Security-Scanner fuer generierte Tools und Trajectory-Learning —
-das sind die AGI-relevanten Upgrades.
+das sind die AGI-relevanten Upgrades. Setzen Phase 1+2 voraus.
 
 ## Prinzipien
 1. **Adaptieren, nicht kopieren** — Phis Architektur fuehrt, externe Ideen ergaenzen
