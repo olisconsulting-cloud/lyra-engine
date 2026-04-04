@@ -189,6 +189,13 @@ def handle_complete_project(ctx: ToolContext, tool_input: dict) -> str:
                 f"Behebe die Issues und versuche es erneut."
             )
 
+    # === INTEGRATION-GATE (Warnung, kein Block) ===
+    # Pruefen ob der Projekt-Code tatsaechlich in der Engine verdrahtet ist
+    # Isolierte Projekte in data/projects/ sind wertlos wenn sie nie genutzt werden
+    integration_warning = _check_engine_integration(project_name)
+    if integration_warning:
+        logger.info("Integration-Gate fuer '%s': %s", project_name, integration_warning)
+
     # Alles OK — Projekt abschliessen
     updated_plan = plan_content
     for criterion in required_criteria:
@@ -216,4 +223,65 @@ def handle_complete_project(ctx: ToolContext, tool_input: dict) -> str:
         f"Projekt '{project_name}' ABGESCHLOSSEN (evidence-based): {tool_input.get('summary', '')}",
         ctx.sequences_total,
     )
-    return f"Projekt '{project_name}' erfolgreich abgeschlossen! {len(required_criteria)} Kriterien erfuellt, Tests bestanden."
+    result = f"Projekt '{project_name}' erfolgreich abgeschlossen! {len(required_criteria)} Kriterien erfuellt, Tests bestanden."
+    if integration_warning:
+        result += f"\n\nINTEGRATIONS-HINWEIS: {integration_warning}"
+    return result
+
+
+def _check_engine_integration(project_name: str) -> str:
+    """Prueft ob Projekt-Code in der Engine referenziert wird.
+
+    Isolierte Tools in data/projects/ die nie importiert oder
+    genutzt werden sind toter Code. Gibt Warnung zurueck oder ''.
+    """
+    engine_path = config.ENGINE_PATH
+    project_path = config.DATA_PATH / "projects" / project_name
+    tools_path = config.DATA_PATH / "tools"
+
+    if not engine_path.exists():
+        return ""
+
+    # Sammle relevante Dateinamen aus dem Projekt (ohne tests.py, PLAN.md etc.)
+    code_files = []
+    if project_path.exists():
+        code_files = [
+            f.stem for f in project_path.iterdir()
+            if f.suffix == ".py" and f.name not in ("tests.py", "__init__.py")
+        ]
+
+    if not code_files:
+        return ""
+
+    # Normalisierter Projektname fuer Suche (z.B. "two-stage-perception" → "perception")
+    search_terms = [project_name.replace("-", "_")]
+    search_terms.extend(code_files)
+
+    # In engine/ und tools/ nach Referenzen suchen
+    found_in = []
+    search_dirs = [engine_path]
+    if tools_path.exists():
+        search_dirs.append(tools_path)
+
+    for search_dir in search_dirs:
+        try:
+            for py_file in search_dir.rglob("*.py"):
+                try:
+                    content = py_file.read_text(encoding="utf-8", errors="ignore")
+                    for term in search_terms:
+                        if term in content:
+                            found_in.append(py_file.name)
+                            break
+                except OSError:
+                    continue
+        except OSError:
+            continue
+
+    if found_in:
+        return ""  # Code ist referenziert — alles gut
+
+    return (
+        f"Der Code in projects/{project_name}/ wird nirgends in engine/ oder tools/ "
+        f"importiert oder referenziert. Damit das Projekt Wirkung hat, muss es in die "
+        f"Engine integriert werden (z.B. als Tool registrieren oder in consciousness.py einbinden)."
+    )

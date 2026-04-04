@@ -131,6 +131,12 @@ class ProviderHealth:
         self.last_error_type = ""  # "timeout", "rate_limit", "auth", "server"
         self.total_failures = 0
         self.total_successes = 0
+        # Proaktiver Timeout-Tracker: Zaehlt Timeouts ueber die Session
+        # Wird NICHT bei Erfolg zurueckgesetzt (DeepSeek-Problem: gelegentlicher
+        # Erfolg zwischen Timeouts reicht nicht fuer stabile Nutzung)
+        self._session_timeouts = 0
+        self._session_calls = 0
+        self._TIMEOUT_PRONE_THRESHOLD = 3  # Ab 3 Timeouts gilt Provider als instabil
 
     def record_success(self):
         """Provider hat erfolgreich geantwortet."""
@@ -139,12 +145,16 @@ class ProviderHealth:
         self.cooldown_until = 0.0
         self.last_error_type = ""
         self.total_successes += 1
+        self._session_calls += 1
 
     def record_failure(self, status_code: int = 0, error_type: str = "unknown"):
         """Provider hat versagt — State + Cooldown aktualisieren."""
         self.consecutive_failures += 1
         self.total_failures += 1
         self.last_error_type = error_type
+        self._session_calls += 1
+        if error_type == "timeout":
+            self._session_timeouts += 1
 
         # Auth-Fehler → sofort dead (Retry sinnlos)
         if status_code == 401 or status_code == 403:
@@ -189,6 +199,15 @@ class ProviderHealth:
             return True
         return False
 
+    def is_timeout_prone(self) -> bool:
+        """Ist der Provider in dieser Session timeout-anfaellig?
+
+        True wenn >= 3 Timeouts in der Session aufgetreten sind.
+        Wird NICHT bei Erfolg zurueckgesetzt — ein gelegentlicher Erfolg
+        zwischen vielen Timeouts reicht nicht fuer stabile Nutzung.
+        """
+        return self._session_timeouts >= self._TIMEOUT_PRONE_THRESHOLD
+
     def success_rate(self) -> float:
         """Erfolgsquote (0.0-1.0). Nuetzlich fuer Monitoring."""
         total = self.total_successes + self.total_failures
@@ -204,6 +223,7 @@ class ProviderHealth:
             "last_error_type": self.last_error_type,
             "total_failures": self.total_failures,
             "total_successes": self.total_successes,
+            "session_timeouts": self._session_timeouts,
         }
 
     @classmethod
@@ -306,6 +326,7 @@ class LLMRouter:
     def call(
         self, task: str, system: str, messages: list,
         tools: Optional[list] = None, max_tokens: int = 16000,
+        on_fallback: Optional[callable] = None,
     ) -> dict:
         """
         Zentraler Entry-Point: Task → Modell → Provider → Call mit Health-Tracking.
@@ -314,6 +335,9 @@ class LLMRouter:
         2. Prueft Provider-Health (Cooldown/Dead → Fallback)
         3. Ruft Provider auf, trackt Erfolg/Fehler
         4. Bei Failure: Fallback-Kette mit Health-Tracking
+
+        Args:
+            on_fallback: Callback(from_provider, to_model_key) fuer UI-Events (z.B. Narrator)
 
         Returns:
             {"content": list, "stop_reason": str, "usage": dict, "model": str}
@@ -331,6 +355,7 @@ class LLMRouter:
             return self._fallback_call(
                 system, messages, tools, max_tokens,
                 skip_provider=provider, original_task=task,
+                on_fallback=on_fallback,
             )
 
         # Primaerer Call
@@ -356,6 +381,7 @@ class LLMRouter:
                 return self._fallback_call(
                     system, messages, tools, max_tokens,
                     skip_provider=provider, original_task=task,
+                    on_fallback=on_fallback,
                 )
             except Exception:
                 raise primary_error  # Originalen Fehler werfen wenn alles scheitert
@@ -382,9 +408,26 @@ class LLMRouter:
     def _fallback_call(
         self, system: str, messages: list, tools: Optional[list],
         max_tokens: int, skip_provider: str, original_task: str,
+        on_fallback: Optional[callable] = None,
     ) -> dict:
-        """Versucht Fallback-Kette mit Health-Tracking pro Provider."""
-        for fb_key in FALLBACK_CHAIN:
+        """Versucht Fallback-Kette mit Health-Tracking pro Provider.
+
+        Proaktiver Provider-Switch: Timeout-anfaellige Provider werden
+        ans Ende der Kette verschoben statt uebersprungen — so bleiben
+        sie als letzter Ausweg, blockieren aber nicht die schnelleren.
+        """
+        # Kette sortieren: Timeout-anfaellige Provider nach hinten
+        sorted_chain = sorted(
+            FALLBACK_CHAIN,
+            key=lambda k: (
+                self.provider_health.get(
+                    MODELS.get(k, {}).get("provider", ""),
+                    ProviderHealth(k),
+                ).is_timeout_prone()
+            ),
+        )
+
+        for fb_key in sorted_chain:
             fb_provider = MODELS.get(fb_key, {}).get("provider", "")
             if fb_provider == skip_provider:
                 continue
@@ -393,6 +436,19 @@ class LLMRouter:
             if fb_health and not fb_health.is_available():
                 logger.debug("Fallback %s uebersprungen (nicht verfuegbar)", fb_key)
                 continue
+
+            if fb_health and fb_health.is_timeout_prone():
+                logger.info(
+                    "Fallback %s ist timeout-anfaellig (%d Timeouts) → deprioritisiert",
+                    fb_key, fb_health._session_timeouts,
+                )
+
+            # Narrator/UI ueber Fallback informieren
+            if on_fallback:
+                try:
+                    on_fallback(skip_provider, fb_key)
+                except Exception:
+                    pass  # UI-Callback darf nie den Call blockieren
 
             try:
                 result = self._dispatch_call(fb_key, system, messages, tools, max_tokens)
@@ -412,10 +468,16 @@ class LLMRouter:
 
     @staticmethod
     def _extract_status_code(error: Exception) -> int:
-        """Extrahiert HTTP-Status-Code aus Fehlermeldung (wenn vorhanden)."""
+        """Extrahiert HTTP-Status-Code aus Exception (Attribut oder Fehlermeldung)."""
+        # Anthropic SDK: APIError, RateLimitError etc. haben .status_code
+        if hasattr(error, 'status_code') and isinstance(error.status_code, int):
+            return error.status_code
+        # httpx Responses in Exceptions
+        if hasattr(error, 'response') and hasattr(error.response, 'status_code'):
+            return error.response.status_code
+        # Fallback: Aus Fehlermeldung parsen (unsere eigenen ValueError-Messages)
         msg = str(error)
-        # Pattern: "API Fehler 429: ..." oder "Rate-Limit 429"
-        match = re.search(r'\b([45]\d{2})\b', msg)
+        match = re.search(r'(?:Fehler|Error|HTTP)\s*(\d{3})', msg)
         return int(match.group(1)) if match else 0
 
     # === Provider-Health Persistence ===
@@ -435,8 +497,11 @@ class LLMRouter:
         parts = []
         for provider, health in sorted(self.provider_health.items()):
             icon = {"healthy": "+", "cooldown": "~", "dead": "X"}[health.state]
+            if health.is_timeout_prone():
+                icon = "⏱"  # Timeout-anfaellig
             rate = f"{health.success_rate():.0%}"
-            parts.append(f"[{icon}] {provider}: {rate}")
+            extra = f" T:{health._session_timeouts}" if health._session_timeouts > 0 else ""
+            parts.append(f"[{icon}] {provider}: {rate}{extra}")
         return " | ".join(parts)
 
     # === Anthropic (Claude) ===

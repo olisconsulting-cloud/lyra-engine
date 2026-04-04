@@ -248,3 +248,184 @@ class PromotionEngine:
             parts.append(f"Abgelehnt: {rejected}")
 
         return "TOOL-PROMOTIONS: " + " | ".join(parts)
+
+    # === Autonome Promotion (mit 3-Stufen-Sicherheit) ===
+
+    def evaluate_auto_candidates(self) -> list[dict]:
+        """Findet Tools die die strengeren Auto-Promotion-Kriterien erfuellen.
+
+        Strengere Schwellen als Nomination:
+        Health >= 9.0, Uses >= 25, Success >= 90%, Alter >= 14 Tage.
+        """
+        now = datetime.now(timezone.utc)
+        registry = self.toolchain.registry.get("tools", {})
+        already = set(
+            p["name"] for p in
+            self.promotions.get("promoted", [])
+            + self.promotions.get("rejected", [])
+        )
+
+        candidates = []
+        for name, info in registry.items():
+            if info.get("status") == "archived" or name in already:
+                continue
+
+            metric = self.metrics.metrics.get(name, {})
+            health = metric.get("health_score", 0.0)
+            uses = metric.get("total_calls", 0)
+            sr = metric.get("success_rate", 0.0)
+
+            created = info.get("created", "")
+            age_days = 0.0
+            if created:
+                try:
+                    age_days = (now - datetime.fromisoformat(created)
+                                ).total_seconds() / 86400
+                except (ValueError, TypeError):
+                    pass
+
+            if (health >= AUTO_MIN_HEALTH
+                    and uses >= AUTO_MIN_USES
+                    and sr >= AUTO_MIN_SUCCESS_RATE
+                    and age_days >= AUTO_MIN_AGE_DAYS):
+                candidates.append({
+                    "name": name,
+                    "health_score": health,
+                    "uses": uses,
+                    "success_rate": sr,
+                    "age_days": round(age_days, 1),
+                    "suggested_target": self.suggest_target_module(name),
+                })
+
+        return sorted(candidates, key=lambda x: x["health_score"], reverse=True)
+
+    def auto_promote(
+        self,
+        dual_review: "DualReviewSystem",
+        communication: Optional["CommunicationEngine"] = None,
+    ) -> str:
+        """Autonome Promotion: DualReview-Gate + Telegram-Info.
+
+        3-Stufen-Sicherheit:
+        1. Strengere Kriterien (Health 9+, Uses 25+, Success 90%+, 14+ Tage)
+        2. DualReview prueft den Tool-Code (Opus, fail-closed)
+        3. Oliver wird via Telegram informiert
+
+        Max 1 Promotion pro Dream-Zyklus.
+
+        Returns:
+            Zusammenfassung oder leerer String.
+        """
+        candidates = self.evaluate_auto_candidates()
+        if not candidates:
+            return ""
+
+        candidate = candidates[0]  # Nur den besten pro Zyklus
+        tool_name = candidate["name"]
+        target_module = candidate["suggested_target"]
+
+        # Tool-Code lesen
+        tool_info = self.toolchain.registry.get("tools", {}).get(tool_name, {})
+        tool_file = self.toolchain.tools_path / tool_info.get("file", "")
+        if not tool_file.exists():
+            logger.warning("Auto-Promote: Tool-Datei nicht gefunden: %s", tool_file)
+            return ""
+
+        tool_code = tool_file.read_text(encoding="utf-8")
+
+        # Ziel-Datei lesen und Tool-Code als neue Funktion anhaengen
+        target_path = Path(target_module)
+        root = self.toolchain.tools_path.parent.parent  # engine/ -> project root
+        target_full = root / target_path
+        if not target_full.exists():
+            logger.warning("Auto-Promote: Ziel-Modul nicht gefunden: %s", target_full)
+            return ""
+
+        existing_code = target_full.read_text(encoding="utf-8")
+
+        # Integration: Tool-Code als Funktion am Ende anhaengen
+        integration_block = self._build_integration_block(
+            tool_name, tool_code, tool_info.get("description", ""),
+        )
+        new_content = existing_code.rstrip() + "\n\n" + integration_block + "\n"
+
+        # === STUFE 2: DualReview (fail-closed) ===
+        reason = (
+            f"Auto-Promotion: Tool '{tool_name}' hat sich bewaehrt "
+            f"(Health {candidate['health_score']}/10, "
+            f"{candidate['uses']}x genutzt, "
+            f"{candidate['success_rate']:.0%} Erfolg, "
+            f"{candidate['age_days']:.0f} Tage alt). "
+            f"Integration in {target_module}."
+        )
+
+        review = dual_review.review_and_apply_fix(
+            file_path=target_module,
+            new_content=new_content,
+            reason=reason,
+        )
+
+        if not review.get("accepted"):
+            # Review abgelehnt — als rejected markieren
+            self.promotions.setdefault("rejected", []).append({
+                "name": tool_name,
+                "reason": f"DualReview abgelehnt: {review.get('reason', '?')}",
+                "rejected_at": datetime.now(timezone.utc).isoformat(),
+            })
+            self._save()
+            logger.info("Auto-Promote abgelehnt: %s — %s",
+                        tool_name, review.get("reason"))
+            return f"Promotion abgelehnt (DualReview): {tool_name}"
+
+        # === STUFE 3: Erfolg — Markieren + Telegram ===
+        self.promotions.setdefault("promoted", []).append({
+            "name": tool_name,
+            "target_module": target_module,
+            "reason": reason,
+            "promoted_at": datetime.now(timezone.utc).isoformat(),
+            "review": review.get("reviews", {}),
+        })
+        # Aus pending entfernen falls dort
+        self.promotions["pending"] = [
+            p for p in self.promotions.get("pending", [])
+            if p["name"] != tool_name
+        ]
+        self._save()
+
+        # Telegram-Benachrichtigung
+        msg = (
+            f"TOOL PROMOTED: '{tool_name}' ist jetzt Teil von {target_module}. "
+            f"Health {candidate['health_score']}/10, "
+            f"{candidate['uses']}x genutzt, "
+            f"{candidate['success_rate']:.0%} Erfolg. "
+            f"DualReview: bestanden."
+        )
+        if communication:
+            channel = ("telegram" if communication.telegram_active
+                       else "outbox")
+            communication.send_message(msg, channel=channel)
+
+        logger.info("AUTO-PROMOTE ERFOLGREICH: %s → %s", tool_name, target_module)
+        return f"PROMOTED: {tool_name} → {target_module}"
+
+    @staticmethod
+    def _build_integration_block(
+        tool_name: str, tool_code: str, description: str,
+    ) -> str:
+        """Baut einen integrierbaren Code-Block aus einem Tool.
+
+        Wrappet den Tool-Code in eine benannte Funktion mit Docstring.
+        """
+        # Tool-Funktionsnamen aus dem Code extrahieren
+        safe_name = tool_name.replace("-", "_").replace(" ", "_")
+        lines = [
+            f"# === Auto-Promoted: {tool_name} ===",
+            f"# Ursprung: data/tools/{tool_name}.py",
+            f"# Promotion: {datetime.now(timezone.utc).isoformat()[:10]}",
+            "",
+        ]
+        # Tool-Code einbetten (bereits als def run(**kwargs) strukturiert)
+        for line in tool_code.split("\n"):
+            lines.append(line)
+
+        return "\n".join(lines)

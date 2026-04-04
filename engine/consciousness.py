@@ -884,6 +884,9 @@ class ConsciousnessEngine:
         health_state = self.state.get("provider_health", {})
         if health_state:
             self.llm.load_health_state(health_state)
+        # Migration: Alte Circuit-Breaker-Keys bereinigen (ersetzt durch provider_health)
+        self.state.pop("provider_failures", None)
+        self.state.pop("provider_cooldown", None)
         self.preferences = self._load_preferences()
 
     def _save_all(self):
@@ -1135,6 +1138,174 @@ SEQUENZ-PLANUNG: Nutze write_sequence_plan am Anfang — plane dein Ziel, Exit-K
         except Exception as e:
             print(f"  [WARNUNG] Sequence-Memory nicht gespeichert: {e}")
 
+    # === Goal-Kontext-Anker ===
+
+    def _save_goal_context(self, summary: str, tool_input: dict):
+        """Speichert pro aktivem Goal einen Kontext-Anker fuer die naechste Sequenz.
+
+        Verhindert, dass Phi 5-8 Steps mit Orientierung verschwendet wenn ein
+        Goal ueber mehrere Sequenzen laeuft. Der Anker enthaelt: letzten Stand,
+        geschriebene Dateien, Fehler, naechsten Schritt.
+        """
+        ctx_dir = self.consciousness_path / "goal_context"
+        ctx_dir.mkdir(exist_ok=True)
+
+        focus = self.goal_stack.get_current_focus()
+        active = self.goal_stack.goals.get("active", [])
+        m = self.seq_intel.metrics
+
+        # Aktuelles Focus-Goal finden
+        focus_goal = None
+        for goal in active:
+            if goal["title"] in focus:
+                focus_goal = goal
+                break
+
+        if not focus_goal:
+            return
+
+        goal_id = focus_goal.get("id", focus_goal["title"][:30])
+        anchor_path = ctx_dir / f"{goal_id}.json"
+
+        # Bestehenden Anker laden (akkumuliert Dateien ueber Sequenzen)
+        existing = safe_json_read(anchor_path, default={})
+        old_files = existing.get("accumulated_files", [])
+
+        # Neue Dateien hinzufuegen (dedupliziert)
+        new_files = [Path(p).name for p in m.written_paths]
+        all_files = list(dict.fromkeys(old_files + new_files))[-20:]  # Max 20
+
+        # Zugehoeriges Projekt finden
+        project_name = ""
+        try:
+            projects_path = self.actions.projects_path
+            if projects_path.exists():
+                # Projekt-Name aus geschriebenen Dateien ableiten
+                for p in m.written_paths:
+                    if "projects/" in p.replace("\\", "/"):
+                        parts = p.replace("\\", "/").split("projects/")
+                        if len(parts) > 1:
+                            project_name = parts[1].split("/")[0]
+                            break
+        except Exception:
+            pass
+
+        # Naechstes Sub-Goal bestimmen
+        next_step = ""
+        current_subgoal = ""
+        for sg in focus_goal.get("sub_goals", []):
+            if sg["status"] == "in_progress":
+                current_subgoal = sg["title"]
+            if sg["status"] in ("pending",):
+                if not next_step:
+                    next_step = sg["title"]
+
+        # Sub-Goal-Fortschritt kompakt
+        sgs = focus_goal.get("sub_goals", [])
+        done_count = sum(1 for s in sgs if s["status"] == "done")
+        total_count = len(sgs)
+
+        anchor = {
+            "goal_id": goal_id,
+            "goal_title": focus_goal["title"],
+            "last_sequence": self.sequences_total,
+            "last_summary": summary[:300],
+            "accumulated_files": all_files,
+            "project_name": project_name,
+            "current_subgoal": current_subgoal,
+            "next_step": next_step,
+            "subgoal_progress": f"{done_count}/{total_count}",
+            "errors_last_seq": m.errors,
+            "bottleneck": tool_input.get("bottleneck", ""),
+        }
+
+        try:
+            safe_json_write(anchor_path, anchor)
+        except Exception as e:
+            logger.warning("Goal-Kontext-Anker nicht gespeichert: %s", e)
+
+        # Verwaiste Anker aufraeumen (Goals die nicht mehr aktiv sind)
+        try:
+            active_ids = {g.get("id", g["title"][:30]) for g in active}
+            for f in ctx_dir.iterdir():
+                if f.suffix == ".json" and f.stem not in active_ids:
+                    f.unlink()
+        except Exception:
+            pass
+
+    def _load_goal_context(self, focus: str) -> str:
+        """Laedt den Kontext-Anker fuer das aktuelle Focus-Goal.
+
+        Gibt einen kompakten Briefing-String zurueck, der Phi sofort
+        sagt wo sie steht und was als naechstes zu tun ist.
+        """
+        ctx_dir = self.consciousness_path / "goal_context"
+        if not ctx_dir.exists():
+            return ""
+
+        # Goal-ID aus Focus-String oder aktiven Goals matchen
+        active = self.goal_stack.goals.get("active", [])
+        focus_goal = None
+        for goal in active:
+            if goal["title"] in focus:
+                focus_goal = goal
+                break
+
+        if not focus_goal:
+            return ""
+
+        goal_id = focus_goal.get("id", focus_goal["title"][:30])
+        anchor_path = ctx_dir / f"{goal_id}.json"
+
+        if not anchor_path.exists():
+            return ""
+
+        try:
+            anchor = safe_json_read(anchor_path, default={})
+            if not anchor:
+                return ""
+
+            lines = [f"GOAL-KONTEXT (Seq {anchor.get('last_sequence', '?')}):"]
+
+            # Was zuletzt passiert ist
+            if anchor.get("last_summary"):
+                lines.append(f"  Letzter Stand: {anchor['last_summary'][:200]}")
+
+            # Welche Dateien existieren
+            files = anchor.get("accumulated_files", [])
+            if files:
+                lines.append(f"  Existierende Dateien: {', '.join(files[:10])}")
+
+            # Zugehoeriges Projekt
+            if anchor.get("project_name"):
+                lines.append(f"  Projekt: projects/{anchor['project_name']}/")
+
+            # Aktuelles Sub-Goal
+            if anchor.get("current_subgoal"):
+                lines.append(f"  Aktuell: {anchor['current_subgoal']}")
+
+            # Naechster Schritt
+            if anchor.get("next_step"):
+                lines.append(f"  Danach: {anchor['next_step']}")
+
+            # Fortschritt
+            if anchor.get("subgoal_progress"):
+                lines.append(f"  Fortschritt: {anchor['subgoal_progress']} Sub-Goals erledigt")
+
+            # Fehler-Warnung
+            errors = anchor.get("errors_last_seq", 0)
+            if errors > 0:
+                lines.append(f"  ACHTUNG: {errors} Fehler in letzter Sequenz")
+                if anchor.get("bottleneck"):
+                    lines.append(f"  Engpass: {anchor['bottleneck'][:100]}")
+
+            lines.append("  → Starte DIREKT mit der Arbeit, nicht mit Orientierung!")
+
+            return "\n".join(lines)
+        except Exception as e:
+            logger.warning("Goal-Kontext laden fehlgeschlagen: %s", e)
+            return ""
+
     # === Working Memory ===
 
     def _load_working_memory(self) -> str:
@@ -1303,6 +1474,12 @@ SEQUENZ-PLANUNG: Nutze write_sequence_plan am Anfang — plane dein Ziel, Exit-K
         self.goal_stack.start_next_subgoal()
         focus = self.goal_stack.get_current_focus()
         parts.append(chr(10) + focus)
+
+        # Goal-Kontext-Anker: Wo stand Phi zuletzt bei diesem Goal?
+        # Spart 5-8 Orientierungs-Steps pro Sequenz bei Multi-Sequenz-Goals
+        goal_context = self._load_goal_context(focus)
+        if goal_context:
+            parts.append(goal_context)
 
         # Skill-Vorschlag: Bewaehrtes Vorgehen fuer diesen Goal-Typ
         goal_type = self.semantic_memory.classify_goal_type(focus)
@@ -2015,7 +2192,10 @@ SEQUENZ-PLANUNG: Nutze write_sequence_plan am Anfang — plane dein Ziel, Exit-K
         Returns:
             {"content": list, "stop_reason": str, "usage": dict, "model": str}
         """
-        return self.llm.call(task, system, messages, tools, max_tokens)
+        return self.llm.call(
+            task, system, messages, tools, max_tokens,
+            on_fallback=self.narrator.fallback if hasattr(self, 'narrator') else None,
+        )
 
     def _graceful_finish(self, messages: list, step_count: int) -> dict:
         """
@@ -2327,6 +2507,42 @@ Antworte als JSON:
                         promo_result = self.tool_promotion.auto_nominate()
                         if promo_result:
                             result += f" | {promo_result}"
+
+                        # Auto-Promotion: DualReview-Gate + Telegram
+                        promote_result = self.tool_promotion.auto_promote(
+                            dual_review=self.code_review,
+                            communication=self.communication,
+                        )
+                        if promote_result:
+                            result += f" | {promote_result}"
+
+                        # Skill → Tool Bridge: Reife Skills zu Tools
+                        mature_skills = self.skill_library.find_promotion_candidates()
+                        for skill in mature_skills[:1]:  # Max 1 pro Zyklus
+                            spec = self.skill_library.build_tool_spec(skill)
+                            try:
+                                tool_id = self.foundry.generate_tool(
+                                    name=spec["name"],
+                                    description=spec["description"],
+                                    toolchain=self.toolchain,
+                                )
+                                if tool_id:
+                                    self.skill_library.mark_as_promoted(
+                                        skill["id"], spec["name"],
+                                    )
+                                    result += f" | Skill→Tool: {spec['name']}"
+                                    self.communication.send_message(
+                                        f"SKILL→TOOL: '{spec['name']}' generiert aus "
+                                        f"Skill {skill['id']} "
+                                        f"({skill.get('success_count', 0)} Erfolge, "
+                                        f"Score {skill.get('avg_score', 0)}/10).",
+                                        channel=("telegram"
+                                                 if self.communication.telegram_active
+                                                 else "outbox"),
+                                    )
+                            except Exception as e:
+                                logger.warning("Skill→Tool fehlgeschlagen: %s — %s",
+                                               spec["name"], e)
                     except Exception as e:
                         logger.warning(f"Tool-Lifecycle im Dream-Zyklus fehlgeschlagen: {e}")
 
