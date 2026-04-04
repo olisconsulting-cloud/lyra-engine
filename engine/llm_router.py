@@ -725,6 +725,7 @@ class LLMRouter:
             "max_tokens": max_tokens,
             "temperature": 1.0,
             "top_p": 0.95,
+            "route": "fallback",  # Automatisch naechsten Provider bei 429
         }
 
         if tools:
@@ -732,29 +733,25 @@ class LLMRouter:
             if oai_tools:
                 body["tools"] = oai_tools
 
+        _headers = {
+            "Authorization": f"Bearer {self.openrouter_key}",
+            "HTTP-Referer": "https://github.com/lyra-phi",
+            "X-Title": "Lyra Phi AGI",
+        }
+
         resp = self.http_primary.post(
             "https://openrouter.ai/api/v1/chat/completions",
-            headers={
-                "Authorization": f"Bearer {self.openrouter_key}",
-                "HTTP-Referer": "https://github.com/lyra-phi",
-                "X-Title": "Lyra Phi AGI",
-            },
-            json=body,
+            headers=_headers, json=body,
         )
 
-        # Rate-Limit Retry (analog zu Gemini)
+        # Rate-Limit Retry (falls alle Upstream-Provider voll)
         if resp.status_code == 429:
-            retry_after = int(resp.headers.get("Retry-After", "5"))
+            retry_after = int(resp.headers.get("Retry-After", "10"))
             logger.warning("OpenRouter Rate-Limit 429 — warte %ds", retry_after)
             time.sleep(retry_after)
             resp = self.http_primary.post(
                 "https://openrouter.ai/api/v1/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {self.openrouter_key}",
-                    "HTTP-Referer": "https://github.com/lyra-phi",
-                    "X-Title": "Lyra Phi AGI",
-                },
-                json=body,
+                headers=_headers, json=body,
             )
 
         if resp.status_code != 200:
