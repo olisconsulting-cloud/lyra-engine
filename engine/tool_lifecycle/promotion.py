@@ -1,9 +1,13 @@
 """
-Promotion Engine — Befoerdert exzellente Tools zu Engine-Code-Kandidaten.
+Promotion Engine — Befoerdert exzellente Tools zu Engine-Code.
 
 Der hoechste Reifegrad im Tool-Lifecycle: Ein Tool das sich als so
-wertvoll erwiesen hat, dass es Teil der permanenten Infrastruktur
-werden sollte. Die Engine nominiert Kandidaten — Oliver entscheidet.
+wertvoll erwiesen hat, dass es Teil der permanenten Infrastruktur wird.
+
+Autonome Promotion mit 3-Stufen-Sicherheit:
+1. Kriterien-Gate (Health >= 9.0, Uses >= 25, Success >= 90%, Alter >= 14 Tage)
+2. DualReview (Opus prueft den Code — fail-closed)
+3. Telegram-Benachrichtigung an Oliver
 """
 
 import json
@@ -15,14 +19,22 @@ from typing import TYPE_CHECKING, Optional
 if TYPE_CHECKING:
     from engine.toolchain import Toolchain
     from engine.tool_lifecycle.metrics import ToolMetrics
+    from engine.code_review import DualReviewSystem
+    from engine.communication import CommunicationEngine
 
 logger = logging.getLogger(__name__)
 
-# Promotion-Kriterien
+# Nomination-Kriterien (Vorschlag an Oliver)
 MIN_HEALTH_SCORE = 8.0
 MIN_USES = 20
 MIN_SUCCESS_RATE = 0.85
 MIN_AGE_DAYS = 7
+
+# Auto-Promotion-Kriterien (strengere Schwelle fuer autonome Integration)
+AUTO_MIN_HEALTH = 9.0
+AUTO_MIN_USES = 25
+AUTO_MIN_SUCCESS_RATE = 0.90
+AUTO_MIN_AGE_DAYS = 14
 
 # Heuristik: Tool-Keywords → Ziel-Modul
 TARGET_MODULE_MAP = {

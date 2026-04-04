@@ -325,15 +325,78 @@ class SkillLibrary:
             f"  Dies ist ein VORSCHLAG — passe ihn an die aktuelle Aufgabe an."
         )
 
+    # === Skill → Tool Bridge ===
+
+    def find_promotion_candidates(self, min_successes: int = 7) -> list[dict]:
+        """Findet reife Skills die als Tool generiert werden sollten.
+
+        Kriterien:
+        - success_count >= min_successes
+        - avg_score >= 8.0
+        - Noch nicht promoted (kein 'promoted_to_tool' Flag)
+
+        Returns:
+            Liste von Skill-Dicts die reif fuer Tool-Generierung sind.
+        """
+        candidates = []
+        for skill in self.index.get("skills", []):
+            if skill.get("promoted_to_tool"):
+                continue
+            if (skill.get("success_count", 0) >= min_successes
+                    and skill.get("avg_score", 0) >= 8.0):
+                candidates.append(skill)
+        return sorted(
+            candidates,
+            key=lambda s: s.get("avg_score", 0) * s.get("success_count", 1),
+            reverse=True,
+        )
+
+    def build_tool_spec(self, skill: dict) -> dict:
+        """Baut eine Tool-Spezifikation aus einem reifen Skill.
+
+        Returns:
+            {"name": str, "description": str, "steps": list}
+        """
+        goal_type = skill.get("goal_type", "general")
+        steps = skill.get("abstract_steps", [])
+        tools = skill.get("tool_sequence", [])
+
+        name = f"auto_{goal_type}_{skill['id'].rsplit('_', 1)[-1]}"
+        description = (
+            f"Automatisiert: {skill.get('plan_goal', '')[:120]}. "
+            f"Bewaehrtes Muster aus {skill.get('success_count', 0)} Erfolgen "
+            f"(Score: {skill.get('avg_score', 0)}/10)."
+        )
+        return {
+            "name": name,
+            "description": description,
+            "abstract_steps": steps,
+            "tool_sequence": tools,
+            "source_skill_id": skill["id"],
+        }
+
+    def mark_as_promoted(self, skill_id: str, tool_name: str):
+        """Markiert einen Skill als zu Tool promoted."""
+        for skill in self.index.get("skills", []):
+            if skill["id"] == skill_id:
+                skill["promoted_to_tool"] = tool_name
+                skill["promoted_at"] = datetime.now(timezone.utc).isoformat()
+                self._save_index()
+                return
+
     def get_stats(self) -> dict:
         """Statistiken ueber die Skill-Library."""
         skills = self.index.get("skills", [])
         types = {}
+        promoted = 0
         for s in skills:
             t = s.get("goal_type", "?")
             types[t] = types.get(t, 0) + 1
+            if s.get("promoted_to_tool"):
+                promoted += 1
         return {
             "total_skills": len(skills),
             "total_extracted": self.index.get("total_extracted", 0),
+            "promoted_to_tools": promoted,
             "by_type": types,
         }

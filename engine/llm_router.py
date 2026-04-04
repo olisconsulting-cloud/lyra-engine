@@ -100,15 +100,152 @@ TASK_MODEL_MAP = {
 }
 
 
+# Fallback-Kette: Wenn Primary ausfaellt, diese Reihenfolge versuchen
+FALLBACK_CHAIN = ["deepseek_v3", "gpt4_1_mini", "claude_sonnet"]
+
+
+class ProviderHealth:
+    """
+    State-Machine pro Provider: healthy → cooldown → dead.
+
+    Zeitbasiert statt sequenzbasiert — unabhaengig von Phi-Laufzeit.
+    Exponentieller Backoff: 30s → 60s → 120s → 240s → 480s (max).
+    """
+
+    # Zustaende
+    HEALTHY = "healthy"
+    COOLDOWN = "cooldown"
+    DEAD = "dead"
+
+    # Konfiguration
+    BASE_COOLDOWN = 30.0        # 30s erster Cooldown
+    MAX_COOLDOWN = 480.0        # 8 Minuten Maximum
+    DEAD_THRESHOLD = 5          # Nach 5 konsekutiven Failures → dead
+    PROBE_AFTER_COOLDOWN = True # Nach Cooldown erst kleinen Request testen
+
+    def __init__(self, provider: str):
+        self.provider = provider
+        self.state = self.HEALTHY
+        self.consecutive_failures = 0
+        self.cooldown_until = 0.0  # time.monotonic() Timestamp
+        self.last_error_type = ""  # "timeout", "rate_limit", "auth", "server"
+        self.total_failures = 0
+        self.total_successes = 0
+
+    def record_success(self):
+        """Provider hat erfolgreich geantwortet."""
+        self.consecutive_failures = 0
+        self.state = self.HEALTHY
+        self.cooldown_until = 0.0
+        self.last_error_type = ""
+        self.total_successes += 1
+
+    def record_failure(self, status_code: int = 0, error_type: str = "unknown"):
+        """Provider hat versagt — State + Cooldown aktualisieren."""
+        self.consecutive_failures += 1
+        self.total_failures += 1
+        self.last_error_type = error_type
+
+        # Auth-Fehler → sofort dead (Retry sinnlos)
+        if status_code == 401 or status_code == 403:
+            self.state = self.DEAD
+            logger.warning("Provider %s: Auth-Fehler %d → DEAD", self.provider, status_code)
+            return
+
+        # Genug Failures → dead
+        if self.consecutive_failures >= self.DEAD_THRESHOLD:
+            self.state = self.DEAD
+            logger.warning(
+                "Provider %s: %d konsekutive Failures → DEAD",
+                self.provider, self.consecutive_failures,
+            )
+            return
+
+        # Exponentieller Backoff: 30s, 60s, 120s, 240s, 480s
+        backoff = min(
+            self.BASE_COOLDOWN * (2 ** (self.consecutive_failures - 1)),
+            self.MAX_COOLDOWN,
+        )
+        # Rate-Limit → laengerer Cooldown (API braucht mehr Zeit)
+        if status_code == 429:
+            backoff *= 2
+
+        self.cooldown_until = time.monotonic() + backoff
+        self.state = self.COOLDOWN
+        logger.info(
+            "Provider %s: Failure %d → COOLDOWN %.0fs (Fehler: %s)",
+            self.provider, self.consecutive_failures, backoff, error_type,
+        )
+
+    def is_available(self) -> bool:
+        """Ist der Provider jetzt verfuegbar?"""
+        if self.state == self.HEALTHY:
+            return True
+        if self.state == self.DEAD:
+            return False
+        # COOLDOWN: Abgelaufen?
+        if self.state == self.COOLDOWN and time.monotonic() >= self.cooldown_until:
+            # Cooldown abgelaufen → probieren (bleibt COOLDOWN bis Erfolg)
+            return True
+        return False
+
+    def success_rate(self) -> float:
+        """Erfolgsquote (0.0-1.0). Nuetzlich fuer Monitoring."""
+        total = self.total_successes + self.total_failures
+        if total == 0:
+            return 1.0
+        return self.total_successes / total
+
+    def to_dict(self) -> dict:
+        """Fuer State-Persistence."""
+        return {
+            "state": self.state,
+            "consecutive_failures": self.consecutive_failures,
+            "last_error_type": self.last_error_type,
+            "total_failures": self.total_failures,
+            "total_successes": self.total_successes,
+        }
+
+    @classmethod
+    def from_dict(cls, provider: str, data: dict) -> "ProviderHealth":
+        """Aus gespeichertem State wiederherstellen."""
+        health = cls(provider)
+        health.consecutive_failures = data.get("consecutive_failures", 0)
+        health.last_error_type = data.get("last_error_type", "")
+        health.total_failures = data.get("total_failures", 0)
+        health.total_successes = data.get("total_successes", 0)
+        # State: Dead bleibt dead, Cooldown wird zu healthy (Neustart = frischer Versuch)
+        saved_state = data.get("state", cls.HEALTHY)
+        health.state = cls.DEAD if saved_state == cls.DEAD else cls.HEALTHY
+        return health
+
+
+def _classify_error(error: Exception, status_code: int = 0) -> str:
+    """Klassifiziert Fehler fuer differenziertes Cooldown-Verhalten."""
+    if status_code == 429:
+        return "rate_limit"
+    if status_code in (401, 403):
+        return "auth"
+    if status_code >= 500:
+        return "server"
+    if isinstance(error, (httpx.TimeoutException, TimeoutError)):
+        return "timeout"
+    if isinstance(error, (httpx.ConnectError, ConnectionError, OSError)):
+        return "connection"
+    return "unknown"
+
+
 class LLMRouter:
     """
-    Routet Anfragen an das optimale Modell.
+    Routet Anfragen an das optimale Modell mit Provider-Health-Tracking.
 
     Anthropic: Tool-Use ueber native API (Sonnet, Opus)
     OpenAI: REST API (GPT-4.1-mini)
     NVIDIA: OpenAI-kompatible REST API (Kimi K2.5)
     Google: Tool-Use ueber REST API (Gemini Flash)
     DeepSeek: OpenAI-kompatible REST API (Fallback)
+
+    Provider-Health: Automatisches Cooldown + Fallback bei Ausfaellen.
     """
 
     def __init__(self):
@@ -127,6 +264,12 @@ class LLMRouter:
         self.http_primary = httpx.Client(timeout=_timeout)   # NVIDIA/Kimi
         self.http_fallback = httpx.Client(timeout=_timeout)  # DeepSeek, OpenAI (Sonnet nutzt eigenen Anthropic-Client)
         self._http_owned = True  # Marker fuer Cleanup
+
+        # Provider-Health-Tracking
+        providers = {m["provider"] for m in MODELS.values()}
+        self.provider_health: dict[str, ProviderHealth] = {
+            p: ProviderHealth(p) for p in providers
+        }
 
         # Kosten-Tracking (thread-safe)
         self._cost_lock = threading.Lock()
@@ -157,6 +300,144 @@ class LLMRouter:
         if max_tokens > limit:
             logger.debug("max_tokens %d → %d (Limit %s)", max_tokens, limit, model_key)
         return min(max_tokens, limit)
+
+    # === Zentraler Call mit Fallback + Health-Tracking ===
+
+    def call(
+        self, task: str, system: str, messages: list,
+        tools: Optional[list] = None, max_tokens: int = 16000,
+    ) -> dict:
+        """
+        Zentraler Entry-Point: Task → Modell → Provider → Call mit Health-Tracking.
+
+        1. Waehlt Modell fuer Task via TASK_MODEL_MAP
+        2. Prueft Provider-Health (Cooldown/Dead → Fallback)
+        3. Ruft Provider auf, trackt Erfolg/Fehler
+        4. Bei Failure: Fallback-Kette mit Health-Tracking
+
+        Returns:
+            {"content": list, "stop_reason": str, "usage": dict, "model": str}
+        """
+        model_key = self.get_model_for_task(task)
+        provider = MODELS.get(model_key, {}).get("provider", "")
+        health = self.provider_health.get(provider)
+
+        # Provider im Cooldown oder Dead? → Direkt Fallback
+        if health and not health.is_available():
+            logger.info(
+                "Provider %s nicht verfuegbar (%s) → Fallback-Kette",
+                provider, health.state,
+            )
+            return self._fallback_call(
+                system, messages, tools, max_tokens,
+                skip_provider=provider, original_task=task,
+            )
+
+        # Primaerer Call
+        try:
+            result = self._dispatch_call(model_key, system, messages, tools, max_tokens)
+            if health:
+                health.record_success()
+            return result
+        except Exception as primary_error:
+            # Fehler klassifizieren + Health aktualisieren
+            status_code = self._extract_status_code(primary_error)
+            error_type = _classify_error(primary_error, status_code)
+            if health:
+                health.record_failure(status_code, error_type)
+
+            logger.warning(
+                "Provider %s fehlgeschlagen (%s, HTTP %d) → Fallback-Kette",
+                provider, error_type, status_code,
+            )
+
+            # Fallback-Kette versuchen
+            try:
+                return self._fallback_call(
+                    system, messages, tools, max_tokens,
+                    skip_provider=provider, original_task=task,
+                )
+            except Exception:
+                raise primary_error  # Originalen Fehler werfen wenn alles scheitert
+
+    def _dispatch_call(
+        self, model_key: str, system: str, messages: list,
+        tools: Optional[list], max_tokens: int,
+    ) -> dict:
+        """Ruft den richtigen Provider fuer ein Modell auf (ohne Fallback)."""
+        provider = MODELS.get(model_key, {}).get("provider", "")
+        if provider == "anthropic":
+            return self.call_anthropic(model_key, system, messages, tools, max_tokens)
+        elif provider == "nvidia":
+            return self.call_nvidia(model_key, system, messages, tools, max_tokens)
+        elif provider == "deepseek":
+            return self.call_deepseek(model_key, system, messages, tools, max_tokens)
+        elif provider == "openai":
+            return self.call_openai(model_key, system, messages, tools, max_tokens)
+        elif provider == "google":
+            return self.call_gemini(model_key, system, messages, tools, max_tokens)
+        else:
+            raise ValueError(f"Unbekannter Provider: {provider}")
+
+    def _fallback_call(
+        self, system: str, messages: list, tools: Optional[list],
+        max_tokens: int, skip_provider: str, original_task: str,
+    ) -> dict:
+        """Versucht Fallback-Kette mit Health-Tracking pro Provider."""
+        for fb_key in FALLBACK_CHAIN:
+            fb_provider = MODELS.get(fb_key, {}).get("provider", "")
+            if fb_provider == skip_provider:
+                continue
+
+            fb_health = self.provider_health.get(fb_provider)
+            if fb_health and not fb_health.is_available():
+                logger.debug("Fallback %s uebersprungen (nicht verfuegbar)", fb_key)
+                continue
+
+            try:
+                result = self._dispatch_call(fb_key, system, messages, tools, max_tokens)
+                if fb_health:
+                    fb_health.record_success()
+                logger.info("Fallback %s erfolgreich (Task: %s)", fb_key, original_task)
+                return result
+            except Exception as fb_error:
+                status_code = self._extract_status_code(fb_error)
+                error_type = _classify_error(fb_error, status_code)
+                if fb_health:
+                    fb_health.record_failure(status_code, error_type)
+                logger.warning("Fallback %s fehlgeschlagen: %s", fb_key, fb_error)
+                continue
+
+        raise ValueError(f"Alle Provider fehlgeschlagen (Primary: {skip_provider})")
+
+    @staticmethod
+    def _extract_status_code(error: Exception) -> int:
+        """Extrahiert HTTP-Status-Code aus Fehlermeldung (wenn vorhanden)."""
+        msg = str(error)
+        # Pattern: "API Fehler 429: ..." oder "Rate-Limit 429"
+        match = re.search(r'\b([45]\d{2})\b', msg)
+        return int(match.group(1)) if match else 0
+
+    # === Provider-Health Persistence ===
+
+    def get_health_state(self) -> dict:
+        """Health-State fuer Persistence (consciousness.py speichert in state.json)."""
+        return {p: h.to_dict() for p, h in self.provider_health.items()}
+
+    def load_health_state(self, data: dict):
+        """Health-State aus gespeichertem State laden."""
+        for provider, health_data in data.items():
+            if provider in self.provider_health:
+                self.provider_health[provider] = ProviderHealth.from_dict(provider, health_data)
+
+    def get_health_summary(self) -> str:
+        """Kompakte Health-Uebersicht fuer Logging/Narrator."""
+        parts = []
+        for provider, health in sorted(self.provider_health.items()):
+            icon = {"healthy": "+", "cooldown": "~", "dead": "X"}[health.state]
+            rate = f"{health.success_rate():.0%}"
+            parts.append(f"[{icon}] {provider}: {rate}")
+        return " | ".join(parts)
 
     # === Anthropic (Claude) ===
 

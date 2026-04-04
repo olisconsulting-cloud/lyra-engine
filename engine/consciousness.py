@@ -649,9 +649,7 @@ class ConsciousnessEngine:
         self._sequences_since_audit = 0
         self._sequences_since_benchmark = 0
 
-        # Circuit Breaker: Wird in load_state() aus state.json geladen
-        self._provider_failures = {}
-        self._provider_cooldown = {}
+        # Provider-Health: Wird in load_state() aus Router geladen/gespeichert
 
         # Laufzeit
         self.running = False
@@ -882,14 +880,10 @@ class ConsciousnessEngine:
         self.sequences_total = self.state.get("sequences_total", 0)
         self._installed_packages = set(self.state.get("installed_packages", []))
         self._approved_packages = set(self.state.get("approved_packages", []))
-        # Circuit Breaker: Aus State laden (ueberlebt Neustarts)
-        self._provider_failures = self.state.get("provider_failures", {})
-        raw_cooldown = self.state.get("provider_cooldown", {})
-        # Validierung: Abgelaufene Cooldowns bereinigen, korrupte Werte entfernen
-        self._provider_cooldown = {
-            k: v for k, v in raw_cooldown.items()
-            if isinstance(v, (int, float)) and v >= self.sequences_total
-        }
+        # Provider-Health aus State laden (ueberlebt Neustarts)
+        health_state = self.state.get("provider_health", {})
+        if health_state:
+            self.llm.load_health_state(health_state)
         self.preferences = self._load_preferences()
 
     def _save_all(self):
@@ -897,9 +891,8 @@ class ConsciousnessEngine:
         # Installierte/genehmigte Pakete im State persistieren
         self.state["installed_packages"] = sorted(self._installed_packages)
         self.state["approved_packages"] = sorted(self._approved_packages)
-        # Circuit Breaker persistent speichern
-        self.state["provider_failures"] = self._provider_failures
-        self.state["provider_cooldown"] = self._provider_cooldown
+        # Provider-Health persistent speichern
+        self.state["provider_health"] = self.llm.get_health_state()
         for path, data in [
             (self.state_path, self.state),
             (self.beliefs_path, self.beliefs),
@@ -1874,6 +1867,10 @@ SEQUENZ-PLANUNG: Nutze write_sequence_plan am Anfang — plane dein Ziel, Exit-K
         # Sequenz-Memory speichern
         self._save_sequence_memory(summary)
 
+        # Goal-Kontext-Anker: Pro aktivem Goal den Stand speichern
+        # Spart 5-8 Orientierungs-Steps in der naechsten Sequenz
+        self._save_goal_context(summary, tool_input)
+
         # Telegram-Bericht nach jeder Sequenz — narrativ mit Selbstreflexion
         if self.communication.telegram_active:
             try:
@@ -2006,12 +2003,7 @@ SEQUENZ-PLANUNG: Nutze write_sequence_plan am Anfang — plane dein Ziel, Exit-K
     def _call_llm(self, task: str, system: str, messages: list,
                   tools: Optional[list] = None, max_tokens: int = MAX_TOKENS) -> dict:
         """
-        Zentraler LLM-Call mit automatischem Fallback + Circuit Breaker.
-
-        Wenn der primaere Provider fehlschlaegt:
-        1. Retry im Provider selbst (Timeout, 429)
-        2. Fallback-Kette: DeepSeek → GPT-4.1-mini → Sonnet 4.6
-        3. Circuit Breaker: Nach 2 Fails → 5 Sequenzen Cooldown
+        Zentraler LLM-Call — delegiert an Router mit Health-Tracking + Fallback.
 
         Args:
             task: Aufgaben-Typ (main_work, code_review, audit_primary, etc.)
@@ -2023,91 +2015,7 @@ SEQUENZ-PLANUNG: Nutze write_sequence_plan am Anfang — plane dein Ziel, Exit-K
         Returns:
             {"content": list, "stop_reason": str, "usage": dict, "model": str}
         """
-        from .llm_router import MODELS
-        model_key = self.llm.get_model_for_task(task)
-        provider = MODELS.get(model_key, {}).get("provider", "google")
-
-        # Circuit Breaker: Provider im Cooldown? → Fallback-Kette
-        cooldown_until = self._provider_cooldown.get(provider, 0)
-        if cooldown_until >= self.sequences_total:
-            remaining = cooldown_until - self.sequences_total
-            logger.info("Circuit Breaker: %s im Cooldown (%d Seq uebrig) → Fallback", provider, remaining)
-            for fb_key in ("deepseek_v3", "gpt4_1_mini", "claude_sonnet"):
-                fb_prov = MODELS.get(fb_key, {}).get("provider", "")
-                if fb_prov == provider:
-                    continue
-                try:
-                    return self._call_provider(fb_key, system, messages, tools, max_tokens)
-                except Exception as cb_err:
-                    logger.warning("Circuit-Breaker Fallback %s fehlgeschlagen: %s", fb_key, cb_err)
-                    continue
-            raise ValueError(f"Alle Fallbacks fehlgeschlagen (Circuit Breaker: {provider})")
-
-        # Primaerer Call (nur API-Fehler abfangen — Programmierfehler sollen laut scheitern)
-        try:
-            result = self._call_provider(model_key, system, messages, tools, max_tokens)
-            # Erfolg → Failure-Counter UND Cooldown zuruecksetzen
-            self._provider_failures[provider] = 0
-            self._provider_cooldown.pop(provider, None)
-            return result
-        except (ValueError, httpx.HTTPError, TimeoutError, ConnectionError, OSError) as primary_error:
-            # Failure tracken
-            failures = self._provider_failures.get(provider, 0) + 1
-            self._provider_failures[provider] = failures
-            logger.warning(
-                "LLM-Fehler %s (Versuch %d): %s", provider, failures, primary_error
-            )
-
-            # Circuit Breaker: Sofort nach 1 Failure → Cooldown fuer 5 Sequenzen
-            # (NVIDIA hat intern schon 2 Retries, ein _call_llm-Failure = Provider tot)
-            if failures >= 1:
-                self._provider_cooldown[provider] = self.sequences_total + 5
-                logger.warning(
-                    "Circuit Breaker AKTIV: %s gesperrt fuer 5 Sequenzen → Fallback-Kette",
-                    provider,
-                )
-
-            # Fallback-Kette: DeepSeek → GPT-4.1-mini → Sonnet 4.6
-            fallback_chain = [
-                ("deepseek_v3", "DeepSeek V3"),
-                ("gpt4_1_mini", "GPT-4.1-mini"),
-                ("claude_sonnet", "Sonnet 4.6"),
-            ]
-
-            for fb_key, fb_name in fallback_chain:
-                fb_provider = MODELS.get(fb_key, {}).get("provider", "")
-                if fb_provider == provider:
-                    continue  # Nicht auf sich selbst fallen
-                try:
-                    logger.info("Fallback: %s → %s", provider, fb_name)
-                    self.narrator.fallback(provider, fb_name)
-                    return self._call_provider(
-                        fb_key, system, messages, tools, max_tokens
-                    )
-                except Exception as fb_error:
-                    logger.warning("Fallback %s fehlgeschlagen: %s", fb_name, fb_error)
-                    self.narrator.api_failed(f"Fallback {fb_name}: {fb_error}")
-                    continue  # Naechsten Fallback versuchen
-
-            # Alle Fallbacks gescheitert
-            raise primary_error
-
-    def _call_provider(self, model_key: str, system: str, messages: list,
-                       tools: Optional[list], max_tokens: int) -> dict:
-        """Ruft einen spezifischen Provider auf (ohne Fallback-Logik)."""
-        from .llm_router import MODELS
-        provider = MODELS.get(model_key, {}).get("provider", "google")
-
-        if provider == "anthropic":
-            return self.llm.call_anthropic(model_key, system, messages, tools, max_tokens)
-        elif provider == "deepseek":
-            return self.llm.call_deepseek(model_key, system, messages, tools, max_tokens)
-        elif provider == "nvidia":
-            return self.llm.call_nvidia(model_key, system, messages, tools, max_tokens)
-        elif provider == "openai":
-            return self.llm.call_openai(model_key, system, messages, tools, max_tokens)
-        else:
-            return self.llm.call_gemini(model_key, system, messages, tools, max_tokens)
+        return self.llm.call(task, system, messages, tools, max_tokens)
 
     def _graceful_finish(self, messages: list, step_count: int) -> dict:
         """
