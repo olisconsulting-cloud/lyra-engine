@@ -155,7 +155,7 @@ class ProviderHealth:
         # Erfolg zwischen Timeouts reicht nicht fuer stabile Nutzung)
         self._session_timeouts = 0
         self._session_calls = 0
-        self._TIMEOUT_PRONE_THRESHOLD = 1  # Ab 1 Timeout → Skip (spart 2x90s pro Sequenz)
+        self._TIMEOUT_PRONE_THRESHOLD = 3  # Ab 3 Timeouts → Skip (1 reicht nicht — NIM hat gelegentliche Timeouts)
 
     def record_success(self):
         """Provider hat erfolgreich geantwortet."""
@@ -1215,7 +1215,7 @@ class LLMRouter:
                     "model_dump": lambda self=None, t=fallback_text: {"type": "text", "text": t},
                 })()],
                 "stop_reason": "end_turn",
-                "usage": {"input_tokens": 0, "output_tokens": 0},
+                "usage": {"input_tokens": 0, "output_tokens": len(fallback_text) // 4},
                 "model": model_key,
             }
 

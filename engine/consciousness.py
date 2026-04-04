@@ -2671,6 +2671,7 @@ Antworte als JSON:
         self.running = True
         self._api_dead_streak = 0  # Circuit-Breaker: konsekutive Sequenzen ohne API-Antwort
         self._last_seq_output_tokens = 0  # Wird vor Reset gespeichert (fuer Circuit-Breaker)
+        self._cascade_failures = 0  # Cascade-Counter: konsekutive "alle Provider tot"-Fehler
         name = self.genesis.get("name", "Lyra")
 
         self.narrator.loop_start(name)
@@ -3087,7 +3088,6 @@ Antworte als JSON:
             # Step-Level Retry: API-Fehler duerfen einzelne Steps wiederholen,
             # nicht sofort die ganze Sequenz toeten (H6)
             response = None
-            cascade_count = getattr(self, '_cascade_failures', 0)
             for _retry in range(3):
                 try:
                     response = self._call_llm(
@@ -3098,12 +3098,13 @@ Antworte als JSON:
                 except (ValueError, httpx.HTTPError, TimeoutError, ConnectionError, OSError) as e:
                     error_msg = str(e)
                     if "tool_result" in error_msg or "tool_use" in error_msg:
+                        logger.error("Message sync lost: %s", error_msg)
                         self.narrator.emergency("Nachrichten-Sync verloren — starte neue Sequenz")
                         break  # Nicht retrybar
 
                     # Cascade-Failure: Alle Provider tot → sofort Sequenz beenden
                     if "Alle Provider fehlgeschlagen" in error_msg:
-                        self._cascade_failures = cascade_count + 1
+                        self._cascade_failures += 1
                         if self._cascade_failures >= 2:
                             self.narrator.emergency(
                                 f"API-Kaskade {self._cascade_failures}x gescheitert — Sequenz beendet"

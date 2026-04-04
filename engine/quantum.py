@@ -224,16 +224,21 @@ class CriticAgent:
         model_config = MODELS[model_key]
         self.provider = model_config["provider"]
         self.model = model_config["model_id"]
-        # API-Key je nach Provider
+        # API-Key und URL je nach Provider — explizite Cases, kein impliziter Fallback
         if self.provider == "nvidia":
             self.api_key = os.getenv("NVIDIA_API_KEY", "").strip()
             self.api_url = "https://integrate.api.nvidia.com/v1/chat/completions"
         elif self.provider == "google":
             self.api_key = os.getenv("GOOGLE_AI_API_KEY", "").strip()
             self.api_url = f"https://generativelanguage.googleapis.com/v1beta/models/{self.model}:generateContent"
-        else:
+        elif self.provider == "deepseek":
             self.api_key = os.getenv("DEEPSEEK_API_KEY", "").strip()
             self.api_url = "https://api.deepseek.com/chat/completions"
+        elif self.provider == "openai":
+            self.api_key = os.getenv("OPENAI_API_KEY", "").strip()
+            self.api_url = "https://api.openai.com/v1/chat/completions"
+        else:
+            raise ValueError(f"CriticAgent: Unbekannter Provider '{self.provider}' fuer Modell '{self.model}'")
 
     def _call_api(self, prompt: str, max_tokens: int = 500) -> str:
         """Ruft die konfigurierte API auf und gibt den Text zurueck."""
@@ -339,15 +344,21 @@ class PromptMutator:
         model_config = MODELS[model_key]
         self.provider = model_config["provider"]
         self.model = model_config["model_id"]
+        # API-Key und URL je nach Provider — explizite Cases, kein impliziter Fallback
         if self.provider == "nvidia":
             self.api_key = os.getenv("NVIDIA_API_KEY", "").strip()
             self.api_url = "https://integrate.api.nvidia.com/v1/chat/completions"
         elif self.provider == "google":
             self.api_key = os.getenv("GOOGLE_AI_API_KEY", "").strip()
             self.api_url = f"https://generativelanguage.googleapis.com/v1beta/models/{self.model}:generateContent"
-        else:
+        elif self.provider == "deepseek":
             self.api_key = os.getenv("DEEPSEEK_API_KEY", "").strip()
             self.api_url = "https://api.deepseek.com/chat/completions"
+        elif self.provider == "openai":
+            self.api_key = os.getenv("OPENAI_API_KEY", "").strip()
+            self.api_url = "https://api.openai.com/v1/chat/completions"
+        else:
+            raise ValueError(f"PromptMutator: Unbekannter Provider '{self.provider}' fuer Modell '{self.model}'")
 
     def _call_api(self, prompt: str, max_tokens: int = 500) -> str:
         """Ruft die konfigurierte API auf und gibt den Text zurueck."""

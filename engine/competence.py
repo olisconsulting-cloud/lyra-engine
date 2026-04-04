@@ -263,15 +263,21 @@ Sei STRENG aber FAIR. Finde echte Probleme, keine Stilfragen."""
         audit_config = MODELS[audit_key]
         self.secondary_provider = audit_config["provider"]
         self.secondary_model = audit_config["model_id"]
+        # API-Key und URL je nach Provider — explizite Cases, kein impliziter Fallback
         if self.secondary_provider == "nvidia":
             self.secondary_key = os.getenv("NVIDIA_API_KEY", "").strip()
             self.secondary_url = "https://integrate.api.nvidia.com/v1/chat/completions"
         elif self.secondary_provider == "google":
             self.secondary_key = os.getenv("GOOGLE_AI_API_KEY", "").strip()
             self.secondary_url = f"https://generativelanguage.googleapis.com/v1beta/models/{self.secondary_model}:generateContent"
-        else:
+        elif self.secondary_provider == "deepseek":
             self.secondary_key = os.getenv("DEEPSEEK_API_KEY", "").strip()
             self.secondary_url = "https://api.deepseek.com/chat/completions"
+        elif self.secondary_provider == "openai":
+            self.secondary_key = os.getenv("OPENAI_API_KEY", "").strip()
+            self.secondary_url = "https://api.openai.com/v1/chat/completions"
+        else:
+            raise ValueError(f"SelfAudit: Unbekannter Provider '{self.secondary_provider}' fuer Modell '{self.secondary_model}'")
 
     def should_audit(self, sequences_since_last: int) -> bool:
         return sequences_since_last >= 15
