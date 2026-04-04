@@ -2670,6 +2670,7 @@ Antworte als JSON:
         """
         self.running = True
         self._api_dead_streak = 0  # Circuit-Breaker: konsekutive Sequenzen ohne API-Antwort
+        self._last_seq_output_tokens = 0  # Wird vor Reset gespeichert (fuer Circuit-Breaker)
         name = self.genesis.get("name", "Lyra")
 
         self.narrator.loop_start(name)
@@ -2682,7 +2683,17 @@ Antworte als JSON:
                 self._run_sequence()
 
                 # Circuit-Breaker: Wenn kein einziger API-Call geantwortet hat
-                if self.sequence_output_tokens == 0:
+                # Hinweis: sequence_output_tokens wird am Ende von _run_sequence()
+                # auf 0 zurueckgesetzt — daher _last_seq_output_tokens nutzen
+                # Robuster Check: Auch Tool-Calls und Files zaehlen als Lebenszeichen
+                # (manche Provider melden output_tokens=0 obwohl Antwort kam)
+                m = self.seq_intel.metrics
+                seq_had_activity = (
+                    self._last_seq_output_tokens > 0
+                    or m.tool_calls > 0
+                    or m.files_written > 0
+                )
+                if not seq_had_activity:
                     self._api_dead_streak += 1
                     if self._api_dead_streak >= 5:
                         logger.error(
@@ -3407,5 +3418,7 @@ Antworte als JSON:
             for w in silent_warnings:
                 self.narrator.silent_warning(w)
 
+        # Fuer Circuit-Breaker: Wert VOR Reset speichern
+        self._last_seq_output_tokens = self.sequence_output_tokens
         self.sequence_input_tokens = 0
         self.sequence_output_tokens = 0
