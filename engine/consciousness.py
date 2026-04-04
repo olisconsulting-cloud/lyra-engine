@@ -59,8 +59,8 @@ from .tool_lifecycle import (
 )
 from .perception_pipeline import PerceptionPipeline
 from .unified_memory import (
-    UnifiedMemory, semantic_adapter, experience_adapter,
-    failure_adapter, skill_adapter, strategy_adapter,
+    UnifiedMemory, MemoryHit, semantic_adapter, experience_adapter,
+    failure_adapter, strategy_adapter,
 )
 from .sequence_runner import SequenceRunner
 # SequenceFinisher entfernt — Logik bleibt in _handle_finish_sequence
@@ -702,7 +702,16 @@ class ConsciousnessEngine:
         self.unified_memory.register_source("semantic", self.semantic_memory, adapter=semantic_adapter)
         self.unified_memory.register_source("experience", self.memory, adapter=experience_adapter)
         self.unified_memory.register_source("failure", self.failure_memory, adapter=failure_adapter)
-        self.unified_memory.register_source("skill", self.skill_library, adapter=skill_adapter)
+        # Skill-Adapter als Closure: classify_goal_type wandelt Focus→Kategorie
+        # (der Modul-Adapter uebergibt focus direkt — findet nie Skills)
+        _sem = self.semantic_memory
+        def _skill_adapter_with_classify(skill_lib, query, top_k):
+            goal_type = _sem.classify_goal_type(query)
+            prompt = skill_lib.build_skill_prompt(goal_type)
+            if prompt and prompt.strip():
+                return [MemoryHit(source="skill", content=prompt[:400], score=0.7)]
+            return []
+        self.unified_memory.register_source("skill", self.skill_library, adapter=_skill_adapter_with_classify)
         self.unified_memory.register_source("strategy", self.strategies, adapter=strategy_adapter)
 
         # Perception-Pipeline — gewichtete Wahrnehmung (bereit fuer Feature-Flag)
@@ -1493,12 +1502,10 @@ SEQUENZ-PLANUNG: Nutze write_sequence_plan am Anfang — plane dein Ziel, Exit-K
         if goal_context:
             parts.append(goal_context)
 
-        # Skill-Vorschlag: Bewaehrtes Vorgehen fuer diesen Goal-Typ
+        # Goal-Typ klassifizieren (fuer ProactiveLearner + Baseline-Tracking)
         goal_type = self.semantic_memory.classify_goal_type(focus)
+        # Baseline-Tracking: Skill-Hit (Skill-Injektion laeuft jetzt ueber UnifiedMemory)
         skill_prompt = self.skill_library.build_skill_prompt(goal_type)
-        if skill_prompt:
-            parts.append(skill_prompt)
-        # Baseline-Tracking: Skill-Hit pro Sequenz (fuer Unified Memory Metriken)
         self._track_baseline("skill_hit", 1 if skill_prompt else 0, goal_type)
 
         # Proaktives Lernen: Intern-first, Internet-Fallback
@@ -1585,14 +1592,13 @@ SEQUENZ-PLANUNG: Nutze write_sequence_plan am Anfang — plane dein Ziel, Exit-K
         if next_task:
             parts.append(f"\nNAECHSTE AUFGABE: {next_task['description']} [{next_task.get('priority', 'normal')}]")
 
-        # Unified Memory: Ein Query ueber Experience + Failure + Semantic
-        # Ersetzt 3 separate Abfragen durch einen gewichteten, gerankten Block
+        # Unified Memory: Ein Query ueber ALLE 5 Quellen — gerankt nach Score
+        # Semantic + Experience + Failure + Skill + Strategy in einem Block
         focus_cache_key = focus.split("[")[0].strip() if focus else ""
         _mem_cache = getattr(self, "_memory_cache", {})
         if _mem_cache.get("key") != focus_cache_key or not _mem_cache.get("result"):
             unified_context = self.unified_memory.get_context_for(
-                focus, max_tokens=800,
-                sources=["semantic", "experience", "failure"],
+                focus, max_tokens=1000,
             )
             self._memory_cache = {"key": focus_cache_key, "result": unified_context}
         else:
