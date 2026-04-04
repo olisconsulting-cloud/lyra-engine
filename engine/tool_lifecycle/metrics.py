@@ -265,6 +265,7 @@ class ToolMetrics:
         """
         if not self.metrics:
             return {"total_tools": 0, "avg_health": 0.0,
+                    "total_uses": 0, "total_successes": 0, "total_failures": 0,
                     "top_tools": [], "unhealthy_tools": [], "stale_tools": []}
 
         scores = [e.get("health_score", 0.0) for e in self.metrics.values()]

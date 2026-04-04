@@ -70,8 +70,8 @@ from .config import safe_json_write, safe_json_read
 logger = logging.getLogger(__name__)
 
 MAX_STEPS_PER_SEQUENCE = 40          # Von Oliver auf 40 erhoeht (vorher 15)
-MAX_INPUT_TOKENS_PER_SEQUENCE = 120_000  # Gemma 4 = 256k, konservativ bei 120k fuer NIM-Kompatibilitaet
-MAX_TOKENS = 16000                    # Max Output-Tokens pro LLM-Call
+MAX_INPUT_TOKENS_PER_SEQUENCE = 200_000  # Gemma 4 = 256k, 78% Nutzung mit Sicherheitsmarge
+MAX_TOKENS = 32000                    # Max Output-Tokens pro LLM-Call (Gemma kann 131k, Default fuer alle Tasks)
 
 def _normalize_spin_key(tool_name: str, raw_name: str) -> str:
     """Erzeugt einen normalisierten Spin-Key aus sortierten Inhaltswörtern.
@@ -2528,6 +2528,7 @@ Antworte als JSON:
         Zwischen Sequenzen: 1s Pause (Rate-Limit) oder sofort bei Telegram.
         """
         self.running = True
+        self._api_dead_streak = 0  # Circuit-Breaker: konsekutive Sequenzen ohne API-Antwort
         name = self.genesis.get("name", "Lyra")
 
         self.narrator.loop_start(name)
@@ -2538,6 +2539,25 @@ Antworte als JSON:
                 self._send_daily_briefing()
 
                 self._run_sequence()
+
+                # Circuit-Breaker: Wenn kein einziger API-Call geantwortet hat
+                if self.sequence_output_tokens == 0:
+                    self._api_dead_streak += 1
+                    if self._api_dead_streak >= 5:
+                        logger.error(
+                            "CIRCUIT-BREAKER: %d Sequenzen ohne API-Antwort → Session wird pausiert",
+                            self._api_dead_streak,
+                        )
+                        print(
+                            f"\n  🔴 CIRCUIT-BREAKER: {self._api_dead_streak} Sequenzen ohne API-Antwort."
+                            f"\n     Alle Provider scheinen offline. Session wird pausiert."
+                            f"\n     Neustart mit 'python run.py' wenn Netzwerk wieder da.\n"
+                        )
+                        self.running = False
+                        break
+                else:
+                    self._api_dead_streak = 0
+
                 self._sequences_since_dream += 1
                 self._sequences_since_audit += 1
 
@@ -3145,7 +3165,7 @@ Antworte als JSON:
                 # Abgeschnittene Assistant-Message entfernen (koennte halbes JSON enthalten)
                 if messages and messages[-1].get("role") == "assistant":
                     messages.pop()
-                # Saubere Warnung einfuegen damit Kimi weiss was passiert ist
+                # Saubere Warnung einfuegen damit das LLM weiss was passiert ist
                 messages.append({
                     "role": "user",
                     "content": (
