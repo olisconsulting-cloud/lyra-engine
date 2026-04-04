@@ -116,31 +116,43 @@ class ToolMetaPatterns:
             )
 
     def check_orphan_creation(self, tool_name: str,
-                               uses_since_creation: int,
-                               sequences_since_creation: int) -> None:
+                               uses: int,
+                               created_iso: str) -> None:
         """Erkennt Orphan-Erstellungen: Tools ohne Nutzung nach Erstellung.
 
         Wird periodisch geprueft (z.B. im Dream-Zyklus).
 
         Args:
             tool_name: Name des Tools
-            uses_since_creation: Nutzungszaehler seit Erstellung
-            sequences_since_creation: Sequenzen seit Erstellung
+            uses: Nutzungszaehler des Tools
+            created_iso: ISO-Timestamp der Erstellung
         """
-        if uses_since_creation > 0:
+        if uses > 0:
             return
 
-        if sequences_since_creation >= ORPHAN_SEQUENCES:
+        if not created_iso:
+            return
+
+        # Alter in Tagen berechnen
+        from datetime import datetime, timezone
+        try:
+            created_dt = datetime.fromisoformat(created_iso)
+            age_days = (datetime.now(timezone.utc) - created_dt).total_seconds() / 86400
+        except (ValueError, TypeError):
+            return
+
+        # Mindestens 3 Tage alt und 0 Nutzungen → Orphan
+        if age_days >= 3:
             self.meta_rules.record_pattern(
                 "tool_orphan_creation",
-                f"Tool '{tool_name}' wurde vor {sequences_since_creation} Sequenzen "
+                f"Tool '{tool_name}' wurde vor {age_days:.0f} Tagen "
                 f"erstellt aber nie benutzt. "
                 f"ERSTELLE TOOLS NUR MIT KONKRETEM NUTZUNGSPLAN. "
-                f"Jedes Tool muss innerhalb von 5 Sequenzen mindestens 1x genutzt werden."
+                f"Jedes Tool muss innerhalb weniger Tage mindestens 1x genutzt werden."
             )
             logger.info(
                 f"Orphan-Tool erkannt: {tool_name} "
-                f"(0 Nutzungen nach {sequences_since_creation} Seq)"
+                f"(0 Nutzungen nach {age_days:.0f} Tagen)"
             )
 
     @staticmethod

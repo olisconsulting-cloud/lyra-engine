@@ -141,6 +141,7 @@ class ToolConsolidator:
                     logger.warning(f"Archivierung von {old_name} fehlgeschlagen: {e}")
                     # Rollback: Alias entfernen wenn Archive fehlschlaegt
                     self.toolchain.registry.get("aliases", {}).pop(old_name, None)
+                    self.toolchain._save_registry()
 
             # Metriken transferieren (akkumuliertes Wissen bewahren)
             self._transfer_metrics(basis, other, new_name)

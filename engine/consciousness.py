@@ -2407,7 +2407,7 @@ Antworte als JSON:
                             self.tool_meta_patterns.check_orphan_creation(
                                 tool_name,
                                 info.get("uses", 0),
-                                self._sequences_since_dream + self.sequences_total,
+                                info.get("created", ""),
                             )
 
                         prune_result = self.tool_pruner.auto_prune()
