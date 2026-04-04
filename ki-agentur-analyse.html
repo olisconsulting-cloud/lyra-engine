@@ -1,0 +1,986 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>KI-Agentur Analyse — LLM Benchmarks, Hardware & Business</title>
+  <style>
+    :root {
+      --bg: #0a0e17;
+      --surface: #111827;
+      --surface2: #1a2332;
+      --border: #1e2d3d;
+      --text: #e2e8f0;
+      --text-dim: #94a3b8;
+      --accent: #3b82f6;
+      --accent2: #8b5cf6;
+      --green: #10b981;
+      --yellow: #f59e0b;
+      --red: #ef4444;
+      --orange: #f97316;
+    }
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      font-family: 'Segoe UI', -apple-system, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.6;
+    }
+
+    .container { max-width: 1200px; margin: 0 auto; padding: 2rem 1.5rem; }
+
+    /* Header */
+    header {
+      text-align: center;
+      padding: 3rem 0 2rem;
+      border-bottom: 1px solid var(--border);
+      margin-bottom: 2rem;
+    }
+    header h1 {
+      font-size: 2.2rem;
+      background: linear-gradient(135deg, var(--accent), var(--accent2));
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      margin-bottom: 0.5rem;
+    }
+    header p { color: var(--text-dim); font-size: 1.1rem; }
+    .date-badge {
+      display: inline-block;
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 20px;
+      padding: 0.3rem 1rem;
+      font-size: 0.85rem;
+      color: var(--text-dim);
+      margin-top: 1rem;
+    }
+
+    /* Navigation */
+    nav {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 1.2rem 1.5rem;
+      margin-bottom: 2.5rem;
+      position: sticky;
+      top: 0.5rem;
+      z-index: 100;
+      backdrop-filter: blur(12px);
+    }
+    nav ul {
+      list-style: none;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.5rem;
+      justify-content: center;
+    }
+    nav a {
+      color: var(--text-dim);
+      text-decoration: none;
+      padding: 0.4rem 1rem;
+      border-radius: 8px;
+      font-size: 0.9rem;
+      transition: all 0.2s;
+    }
+    nav a:hover, nav a:focus {
+      background: var(--surface2);
+      color: var(--accent);
+    }
+
+    /* Sections */
+    section {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 2rem;
+      margin-bottom: 2rem;
+    }
+
+    h2 {
+      font-size: 1.5rem;
+      margin-bottom: 1.2rem;
+      padding-bottom: 0.6rem;
+      border-bottom: 2px solid var(--border);
+      display: flex;
+      align-items: center;
+      gap: 0.6rem;
+    }
+    h2 .num {
+      background: linear-gradient(135deg, var(--accent), var(--accent2));
+      color: #fff;
+      width: 36px;
+      height: 36px;
+      border-radius: 10px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 1rem;
+      flex-shrink: 0;
+    }
+
+    h3 {
+      font-size: 1.15rem;
+      margin: 1.5rem 0 0.8rem;
+      color: var(--accent);
+    }
+
+    h4 {
+      font-size: 1rem;
+      margin: 1.2rem 0 0.6rem;
+      color: var(--text);
+    }
+
+    p { margin-bottom: 0.8rem; color: var(--text-dim); }
+
+    /* Tables */
+    .table-wrap {
+      overflow-x: auto;
+      margin: 1rem 0;
+      border-radius: 10px;
+      border: 1px solid var(--border);
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.88rem;
+    }
+    thead { background: var(--surface2); }
+    th {
+      text-align: left;
+      padding: 0.7rem 0.8rem;
+      font-weight: 600;
+      color: var(--text);
+      white-space: nowrap;
+    }
+    td {
+      padding: 0.6rem 0.8rem;
+      border-top: 1px solid var(--border);
+      color: var(--text-dim);
+    }
+    tr:hover td { background: rgba(59, 130, 246, 0.04); }
+
+    /* Badges */
+    .badge {
+      display: inline-block;
+      padding: 0.15rem 0.55rem;
+      border-radius: 6px;
+      font-size: 0.78rem;
+      font-weight: 600;
+    }
+    .badge-green { background: rgba(16, 185, 129, 0.15); color: var(--green); }
+    .badge-yellow { background: rgba(245, 158, 11, 0.15); color: var(--yellow); }
+    .badge-red { background: rgba(239, 68, 68, 0.15); color: var(--red); }
+    .badge-blue { background: rgba(59, 130, 246, 0.15); color: var(--accent); }
+    .badge-purple { background: rgba(139, 92, 246, 0.15); color: var(--accent2); }
+
+    /* Callout boxes */
+    .callout {
+      border-radius: 10px;
+      padding: 1rem 1.2rem;
+      margin: 1rem 0;
+      border-left: 4px solid;
+    }
+    .callout-blue {
+      background: rgba(59, 130, 246, 0.08);
+      border-color: var(--accent);
+    }
+    .callout-green {
+      background: rgba(16, 185, 129, 0.08);
+      border-color: var(--green);
+    }
+    .callout-yellow {
+      background: rgba(245, 158, 11, 0.08);
+      border-color: var(--yellow);
+    }
+    .callout-red {
+      background: rgba(239, 68, 68, 0.08);
+      border-color: var(--red);
+    }
+    .callout-purple {
+      background: rgba(139, 92, 246, 0.08);
+      border-color: var(--accent2);
+    }
+    .callout strong { color: var(--text); }
+    .callout p { margin-bottom: 0.3rem; }
+
+    /* Cards grid */
+    .card-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 1rem;
+      margin: 1rem 0;
+    }
+    .card {
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 1.2rem;
+    }
+    .card h4 {
+      margin: 0 0 0.5rem;
+      color: var(--text);
+      font-size: 0.95rem;
+    }
+    .card p { font-size: 0.88rem; margin-bottom: 0.4rem; }
+
+    /* Phase timeline */
+    .timeline {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 1rem;
+      margin: 1rem 0;
+    }
+    .timeline-item {
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 1.2rem;
+      position: relative;
+      border-top: 3px solid var(--accent);
+    }
+    .timeline-item:nth-child(2) { border-top-color: var(--green); }
+    .timeline-item:nth-child(3) { border-top-color: var(--yellow); }
+    .timeline-item:nth-child(4) { border-top-color: var(--accent2); }
+    .timeline-item .phase-label {
+      font-size: 0.78rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--accent);
+      margin-bottom: 0.3rem;
+    }
+    .timeline-item:nth-child(2) .phase-label { color: var(--green); }
+    .timeline-item:nth-child(3) .phase-label { color: var(--yellow); }
+    .timeline-item:nth-child(4) .phase-label { color: var(--accent2); }
+
+    /* Bar chart */
+    .bar-chart { margin: 1rem 0; }
+    .bar-row {
+      display: flex;
+      align-items: center;
+      margin-bottom: 0.5rem;
+      gap: 0.8rem;
+    }
+    .bar-label {
+      width: 140px;
+      font-size: 0.85rem;
+      color: var(--text-dim);
+      text-align: right;
+      flex-shrink: 0;
+    }
+    .bar-track {
+      flex: 1;
+      height: 26px;
+      background: var(--surface2);
+      border-radius: 6px;
+      overflow: hidden;
+      position: relative;
+    }
+    .bar-fill {
+      height: 100%;
+      border-radius: 6px;
+      display: flex;
+      align-items: center;
+      padding-left: 0.6rem;
+      font-size: 0.78rem;
+      font-weight: 600;
+      color: #fff;
+      transition: width 0.8s ease;
+    }
+
+    /* Comparison boxes */
+    .vs-grid {
+      display: grid;
+      grid-template-columns: 1fr auto 1fr;
+      gap: 1rem;
+      align-items: start;
+      margin: 1rem 0;
+    }
+    .vs-box {
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 1.5rem;
+    }
+    .vs-divider {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 1.5rem;
+      font-weight: 700;
+      color: var(--text-dim);
+      padding-top: 2rem;
+    }
+
+    /* Flywheel */
+    .flywheel {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: center;
+      gap: 0.5rem;
+      margin: 1rem 0;
+      font-size: 0.95rem;
+    }
+    .flywheel-step {
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 0.5rem 1rem;
+      color: var(--text);
+    }
+    .flywheel-arrow { color: var(--accent); font-weight: 700; display: flex; align-items: center; }
+
+    /* Stats row */
+    .stats-row {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+      gap: 1rem;
+      margin: 1rem 0;
+    }
+    .stat-box {
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 1rem;
+      text-align: center;
+    }
+    .stat-num {
+      font-size: 1.8rem;
+      font-weight: 700;
+      background: linear-gradient(135deg, var(--accent), var(--accent2));
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+    .stat-label { font-size: 0.82rem; color: var(--text-dim); margin-top: 0.2rem; }
+
+    /* Footer */
+    footer {
+      text-align: center;
+      padding: 2rem 0;
+      color: var(--text-dim);
+      font-size: 0.85rem;
+      border-top: 1px solid var(--border);
+      margin-top: 2rem;
+    }
+
+    /* Responsive */
+    @media (max-width: 768px) {
+      .container { padding: 1rem; }
+      section { padding: 1.2rem; }
+      header h1 { font-size: 1.6rem; }
+      .vs-grid { grid-template-columns: 1fr; }
+      .vs-divider { padding: 0; font-size: 1.2rem; }
+      nav ul { gap: 0.3rem; }
+      nav a { font-size: 0.8rem; padding: 0.3rem 0.6rem; }
+      .bar-label { width: 90px; font-size: 0.75rem; }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+
+    <!-- Header -->
+    <header>
+      <h1>KI-Agentur Analyse</h1>
+      <p>LLM Benchmarks &middot; Hardware-Setup &middot; DSGVO-Business-Strategie</p>
+      <div class="date-badge">Stand: April 2026</div>
+    </header>
+
+    <!-- Navigation -->
+    <nav>
+      <ul>
+        <li><a href="#benchmarks">Benchmarks</a></li>
+        <li><a href="#hardware-picks">Hardware-Picks</a></li>
+        <li><a href="#closed">Closed-Modelle</a></li>
+        <li><a href="#gpu">GPU-Vergleich</a></li>
+        <li><a href="#server">Server-Setup</a></li>
+        <li><a href="#performance">Performance</a></li>
+        <li><a href="#business">Business</a></li>
+        <li><a href="#zielgruppen">Zielgruppen</a></li>
+        <li><a href="#mvp">MVP-Plan</a></li>
+        <li><a href="#preise">Preise</a></li>
+        <li><a href="#phasen">Phasenplan</a></li>
+      </ul>
+    </nav>
+
+    <!-- Section 1: VRAM Basics -->
+    <section id="benchmarks">
+      <h2><span class="num">1</span> Open-Weight LLMs — Was auf deiner Hardware laeuft</h2>
+
+      <h3>VRAM-Faustregel</h3>
+      <div class="callout callout-blue">
+        <p><strong>VRAM (GB) &asymp; Parameter (Mrd.) &times; Bytes_pro_Param &times; 1.2</strong></p>
+      </div>
+
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>Quantisierung</th><th>Bytes/Param</th><th>32B Modell</th><th>70B Modell</th><th>Qualitaetsverlust</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>FP16 (voll)</td><td>2.0</td><td>~77 GB</td><td>~168 GB</td><td><span class="badge badge-green">Keiner</span></td></tr>
+            <tr><td>Q8</td><td>1.0</td><td>~38 GB</td><td>~84 GB</td><td><span class="badge badge-green">Minimal</span></td></tr>
+            <tr><td>Q4 (Standard)</td><td>0.55</td><td>~21 GB</td><td>~46 GB</td><td><span class="badge badge-yellow">Leicht</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>Frontier-Modelle (passen NICHT auf Consumer-GPUs)</h3>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>Modell</th><th>Params (Total/Aktiv)</th><th>Architektur</th><th>Arena Elo</th><th>AIME 2025</th><th>Min. VRAM</th><th>Lizenz</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><strong>GLM-5</strong></td><td>744B / 40B</td><td>MoE</td><td>1451</td><td>&mdash;</td><td>~241 GB</td><td>MIT</td></tr>
+            <tr><td><strong>Kimi K2.5</strong></td><td>1T / 32B</td><td>MoE</td><td>1447</td><td>96.1%</td><td>~240 GB</td><td>MIT</td></tr>
+            <tr><td><strong>Qwen 3.5-397B</strong></td><td>397B / 17B</td><td>MoE</td><td>~1430</td><td>91.3%</td><td>~214 GB</td><td>Apache 2.0</td></tr>
+            <tr><td><strong>DeepSeek V3.2</strong></td><td>671B / 37B</td><td>MoE</td><td>1421</td><td>89.3%</td><td>~300 GB</td><td>MIT</td></tr>
+            <tr><td><strong>Mistral Large 3</strong></td><td>675B / 40B</td><td>MoE</td><td>~1420</td><td>&mdash;</td><td>~300 GB</td><td>Apache 2.0</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="callout callout-red">
+        <p><strong>Fazit:</strong> Die besten Open-Weight-Modelle brauchen 8&times;H100. Auf Consumer-Hardware ist <strong>Gemma 4 31B</strong> der Sweet-Spot.</p>
+      </div>
+    </section>
+
+    <!-- Section 2: Hardware-Picks -->
+    <section id="hardware-picks">
+      <h2><span class="num">2</span> Top-Picks nach Hardware</h2>
+
+      <div class="vs-grid">
+        <div class="vs-box">
+          <h3 style="margin-top:0;">2&times; RTX 4090 (48 GB)</h3>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr><th>#</th><th>Modell</th><th>Quant</th><th>VRAM</th><th>Staerke</th></tr>
+              </thead>
+              <tbody>
+                <tr><td>1</td><td><strong>Gemma 4 31B</strong></td><td>Q8</td><td>~34 GB</td><td>Bestes Allround, MMLU 92.4%</td></tr>
+                <tr><td>2</td><td><strong>Qwen 3.5-27B</strong></td><td>Q8</td><td>~33 GB</td><td>Starkes Coding + Reasoning</td></tr>
+                <tr><td>3</td><td><strong>DS R1-Distill-32B</strong></td><td>Q8</td><td>~38 GB</td><td>Bestes Reasoning der Klasse</td></tr>
+                <tr><td>4</td><td><strong>Gemma 4 26B-A4B</strong></td><td>Q8</td><td>~28 GB</td><td>162 tok/s, extrem schnell</td></tr>
+                <tr><td>5</td><td><strong>DS R1-Distill-70B</strong></td><td>Q4</td><td>~46 GB</td><td>Max. Intelligenz, knapp</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="vs-divider">vs</div>
+
+        <div class="vs-box">
+          <h3 style="margin-top:0;">2&times; RTX 5090 (64 GB)</h3>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr><th>#</th><th>Modell</th><th>Quant</th><th>VRAM</th><th>Staerke</th></tr>
+              </thead>
+              <tbody>
+                <tr><td>1</td><td><strong>DS R1-Distill-70B</strong></td><td>Q4</td><td>~46 GB</td><td>Staerkstes Reasoning</td></tr>
+                <tr><td>2</td><td><strong>Gemma 4 31B</strong></td><td>FP16</td><td>~62 GB</td><td>Volle Praezision!</td></tr>
+                <tr><td>3</td><td><strong>Llama 4 Scout</strong></td><td>Q4</td><td>~61 GB</td><td>10M Kontext, 109B MoE</td></tr>
+                <tr><td>4</td><td><strong>Llama 3.3 70B</strong></td><td>Q4</td><td>~46 GB</td><td>Solides Allround</td></tr>
+                <tr><td>5</td><td><strong>Qwen 3.5-27B</strong></td><td>FP16</td><td>~54 GB</td><td>Volle Praezision, Coding</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <h3>Benchmark-Vergleich der Top-Modelle (MMLU)</h3>
+      <div class="bar-chart">
+        <div class="bar-row">
+          <span class="bar-label">Gemma 4 31B</span>
+          <div class="bar-track"><div class="bar-fill" style="width:92.4%;background:linear-gradient(90deg,var(--accent),var(--accent2))">92.4%</div></div>
+        </div>
+        <div class="bar-row">
+          <span class="bar-label">DS R1-Distill-70B</span>
+          <div class="bar-track"><div class="bar-fill" style="width:90.8%;background:linear-gradient(90deg,var(--green),#059669)">90.8%</div></div>
+        </div>
+        <div class="bar-row">
+          <span class="bar-label">Llama 3.3 70B</span>
+          <div class="bar-track"><div class="bar-fill" style="width:86%;background:linear-gradient(90deg,var(--yellow),var(--orange))">86.0%</div></div>
+        </div>
+        <div class="bar-row">
+          <span class="bar-label">Qwen 3.5-27B</span>
+          <div class="bar-track"><div class="bar-fill" style="width:83%;background:linear-gradient(90deg,#06b6d4,var(--accent))">~83%</div></div>
+        </div>
+        <div class="bar-row">
+          <span class="bar-label">Qwen 3.5-9B</span>
+          <div class="bar-track"><div class="bar-fill" style="width:82.5%;background:linear-gradient(90deg,#06b6d4,var(--accent))">82.5%</div></div>
+        </div>
+        <div class="bar-row">
+          <span class="bar-label">Llama 4 Scout</span>
+          <div class="bar-track"><div class="bar-fill" style="width:79.6%;background:linear-gradient(90deg,var(--orange),var(--red))">79.6%</div></div>
+        </div>
+        <div class="bar-row">
+          <span class="bar-label">Phi-4 14B</span>
+          <div class="bar-track"><div class="bar-fill" style="width:78%;background:linear-gradient(90deg,#8b5cf6,#a855f7)">~78%</div></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Section 3: Closed Models -->
+    <section id="closed">
+      <h2><span class="num">3</span> Closed-Modelle als Referenz</h2>
+
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>Modell</th><th>Arena Elo</th><th>SWE-bench</th><th>AIME</th><th>GPQA-D</th><th>Preis (In/Out /1M Tok)</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><strong>Claude Opus 4.6</strong></td><td>~1530</td><td>80.8%</td><td>93.3%</td><td>91.3%</td><td>$15 / $75</td></tr>
+            <tr><td><strong>Gemini 3.1 Pro</strong></td><td>~1520</td><td>80.6%</td><td>&mdash;</td><td>94.3%</td><td>$2 / $12</td></tr>
+            <tr><td><strong>Claude Sonnet 4.6</strong></td><td>~1510</td><td>79.6%</td><td>&mdash;</td><td>~89%</td><td>$3 / $15</td></tr>
+            <tr><td><strong>GPT-4.1</strong></td><td>~1480</td><td>&mdash;</td><td>&mdash;</td><td>&mdash;</td><td>$2 / $8</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="callout callout-yellow">
+        <p><strong>Luecke Open &rarr; Closed:</strong> ~10-15% auf Consumer-Hardware. Gemma 4 31B schlaegt die alte GPT-4o-Generation, liegt aber hinter aktuellem Opus/Gemini. Fuer die meisten Business-Use-Cases (Dokumentenanalyse, Chat, Zusammenfassungen) ist das ausreichend.</p>
+      </div>
+    </section>
+
+    <!-- Section 4: GPU Comparison -->
+    <section id="gpu">
+      <h2><span class="num">4</span> GPU-Vergleich: RTX 4090 vs 5090</h2>
+
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>Spezifikation</th><th>RTX 4090</th><th>RTX 5090</th><th>Differenz</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><strong>VRAM</strong></td><td>24 GB GDDR6X</td><td>32 GB GDDR7</td><td><span class="badge badge-green">+33%</span></td></tr>
+            <tr><td><strong>Speicherbandbreite</strong></td><td>1.008 TB/s</td><td>1.79 TB/s</td><td><span class="badge badge-green">+78%</span></td></tr>
+            <tr><td><strong>FP16 Tensor</strong></td><td>661 TFLOPS</td><td>1.676 TFLOPS</td><td><span class="badge badge-green">+154%</span></td></tr>
+            <tr><td><strong>INT8 Tensor</strong></td><td>1.321 TOPS</td><td>3.352 TOPS</td><td><span class="badge badge-green">+154%</span></td></tr>
+            <tr><td><strong>TDP</strong></td><td>450W</td><td>575W</td><td><span class="badge badge-yellow">+28%</span></td></tr>
+            <tr><td><strong>NVLink</strong></td><td>Nein</td><td>Nein</td><td>&mdash;</td></tr>
+            <tr><td><strong>Preis (real)</strong></td><td>$1.800-2.200 (gebr.)</td><td>$2.900-5.000+ (neu)</td><td><span class="badge badge-red">+60-130%</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="callout callout-blue">
+        <p><strong>Entscheidend:</strong> LLM-Inference ist <strong>bandbreiten-limitiert</strong>, nicht compute-limitiert. Die 78% mehr Bandbreite der 5090 = ~28-50% mehr Tokens/Sekunde. Das ist DER Hebel.</p>
+      </div>
+    </section>
+
+    <!-- Section 5: Server Setup -->
+    <section id="server">
+      <h2><span class="num">5</span> Server-Konfigurationen</h2>
+
+      <div class="vs-grid">
+        <div class="vs-box">
+          <h3 style="margin-top:0">Option A: 2&times; RTX 4090</h3>
+          <div class="table-wrap">
+            <table>
+              <tbody>
+                <tr><td>GPUs</td><td>2&times; RTX 4090 (gebr.)</td><td>~$4.000</td></tr>
+                <tr><td>CPU</td><td>Ryzen 9 9950X</td><td>~$550</td></tr>
+                <tr><td>RAM</td><td>128 GB DDR5-6000</td><td>~$350</td></tr>
+                <tr><td>Mainboard</td><td>X670E, 2&times; PCIe 5.0</td><td>~$425</td></tr>
+                <tr><td>NVMe</td><td>2 TB Gen4</td><td>~$200</td></tr>
+                <tr><td>Netzteil</td><td>1600W Titanium</td><td>~$400</td></tr>
+                <tr><td>Gehaeuse</td><td>Full-Tower, Airflow</td><td>~$175</td></tr>
+                <tr><td colspan="2"><strong>Gesamt</strong></td><td><strong>~$6.100</strong></td></tr>
+              </tbody>
+            </table>
+          </div>
+          <p style="margin-top:0.8rem"><strong>48 GB VRAM</strong> &mdash; 32B-Modelle komfortabel, 70B Q4 knapp</p>
+        </div>
+
+        <div class="vs-divider">vs</div>
+
+        <div class="vs-box">
+          <h3 style="margin-top:0">Option B: 2&times; RTX 5090</h3>
+          <div class="table-wrap">
+            <table>
+              <tbody>
+                <tr><td>GPUs</td><td>2&times; RTX 5090 (neu)</td><td>~$6.500</td></tr>
+                <tr><td>CPU</td><td>Ryzen 9 9950X</td><td>~$550</td></tr>
+                <tr><td>RAM</td><td>128 GB DDR5-6000</td><td>~$350</td></tr>
+                <tr><td>Mainboard</td><td>X870E, 2&times; PCIe 5.0</td><td>~$475</td></tr>
+                <tr><td>NVMe</td><td>4 TB Gen5</td><td>~$350</td></tr>
+                <tr><td>Netzteil</td><td>2000W Titanium</td><td>~$550</td></tr>
+                <tr><td>Gehaeuse</td><td>Full-Tower, max. Airflow</td><td>~$250</td></tr>
+                <tr><td colspan="2"><strong>Gesamt</strong></td><td><strong>~$9.025</strong></td></tr>
+              </tbody>
+            </table>
+          </div>
+          <p style="margin-top:0.8rem"><strong>64 GB VRAM</strong> &mdash; 70B komfortabel, Gemma 4 in FP16 moeglich</p>
+        </div>
+      </div>
+
+      <h3>Software-Stack Empfehlung</h3>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>Framework</th><th>Staerke</th><th>Multi-GPU</th><th>Best fuer</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><strong>vLLM</strong></td><td>Hoechster Throughput, PagedAttention</td><td><span class="badge badge-green">Exzellent</span></td><td>Business-Service (Empfehlung)</td></tr>
+            <tr><td><strong>SGLang</strong></td><td>KV-aware Routing</td><td><span class="badge badge-green">Sehr gut</span></td><td>Modernste Optimierungen</td></tr>
+            <tr><td><strong>Ollama</strong></td><td>Einfachste Einrichtung</td><td><span class="badge badge-yellow">Basisch</span></td><td>Prototyping, kleine Teams</td></tr>
+            <tr><td><strong>TGI</strong></td><td>Niedrige Latenz</td><td><span class="badge badge-green">Gut</span></td><td>Latenz-sensitiv</td></tr>
+            <tr><td><strong>TensorRT-LLM</strong></td><td>Max Performance (NVIDIA)</td><td><span class="badge badge-green">Exzellent</span></td><td>Max. Throughput</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- Section 6: Performance -->
+    <section id="performance">
+      <h2><span class="num">6</span> Inference-Performance &amp; Skalierung</h2>
+
+      <h3>Tokens pro Sekunde</h3>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>Modell</th><th>2&times; RTX 4090</th><th>2&times; RTX 5090</th><th>Vorteil 5090</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>8B (Q4)</td><td>~128 tok/s</td><td>~213 tok/s</td><td><span class="badge badge-green">+66%</span></td></tr>
+            <tr><td>32B (Q4)</td><td>~35-40 tok/s</td><td>~61 tok/s</td><td><span class="badge badge-green">+55%</span></td></tr>
+            <tr><td>70B (Q4)</td><td>~15-18 tok/s</td><td>~27 tok/s</td><td><span class="badge badge-green">+58%</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>Gleichzeitige Nutzer (mit vLLM)</h3>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>Setup</th><th>32B Modell</th><th>70B Modell</th><th>Token-Kapazitaet/Tag</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><strong>2&times; RTX 4090</strong></td><td>10-20 User</td><td>3-5 User</td><td>~5-8 Mio.</td></tr>
+            <tr><td><strong>2&times; RTX 5090</strong></td><td>15-30 User</td><td>5-10 User</td><td>~10-15 Mio.</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>Kosten pro Tag (24/7 Betrieb, 0.30 &euro;/kWh)</h3>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>Posten</th><th>2&times; 4090</th><th>2&times; 5090</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Hardware (3J Abschreibung)</td><td>~5-6 &euro;/Tag</td><td>~8-9 &euro;/Tag</td></tr>
+            <tr><td>Strom (24/7)</td><td>~6.50 &euro;/Tag</td><td>~8.30 &euro;/Tag</td></tr>
+            <tr><td>Internet/Infra</td><td>~2 &euro;/Tag</td><td>~2 &euro;/Tag</td></tr>
+            <tr><td><strong>Gesamt</strong></td><td><strong>~13-15 &euro;/Tag</strong></td><td><strong>~18-20 &euro;/Tag</strong></td></tr>
+            <tr><td>Pro 1000 Tokens</td><td>~0.003-0.005 &euro;</td><td>~0.002-0.004 &euro;</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="callout callout-green">
+        <p><strong>Vergleich:</strong> GPT-4o kostet $2.50-10/1M Tokens, Claude Sonnet $3-15/1M. Lokale Inference ist bei &gt;2 Mio. Tokens/Tag bis zu <strong>100&times; guenstiger</strong>.</p>
+      </div>
+
+      <div class="callout callout-purple">
+        <p><strong>Empfehlung: 2&times; RTX 5090</strong> &mdash; 64 GB VRAM = 70B-Modelle komfortabel, 27 tok/s bei 70B = H100-Niveau bei 25% der Kosten, zukunftssicher fuer kommende 40-50B Dense-Modelle.</p>
+      </div>
+    </section>
+
+    <!-- Section 7: Business -->
+    <section id="business">
+      <h2><span class="num">7</span> DSGVO-konforme KI-Agentur</h2>
+
+      <h3>Warum lokales Hosting das Problem loest</h3>
+      <div class="card-grid">
+        <div class="card">
+          <h4>Daten bleiben in der EU</h4>
+          <p>Kein Drittlandtransfer, keine Standard Contractual Clauses noetig</p>
+        </div>
+        <div class="card">
+          <h4>Volle Kontrolle</h4>
+          <p>Logging, Loeschfristen, Zugriff — alles in deiner Hand</p>
+        </div>
+        <div class="card">
+          <h4>Kein Training auf Kundendaten</h4>
+          <p>Vertraglich UND technisch garantiert (Open-Source = kein Daten-Upload)</p>
+        </div>
+        <div class="card">
+          <h4>Compliance-Ready</h4>
+          <p>AVV, DSFA, Verarbeitungsverzeichnis — alles kontrollierbar</p>
+        </div>
+      </div>
+
+      <h3>Marktzahlen Deutschland</h3>
+      <div class="stats-row">
+        <div class="stat-box">
+          <div class="stat-num">82%</div>
+          <div class="stat-label">nennen Rechtsunsicherheit als groesste KI-Huerde</div>
+        </div>
+        <div class="stat-box">
+          <div class="stat-num">94%</div>
+          <div class="stat-label">des Mittelstands nicht AI-Act-ready</div>
+        </div>
+        <div class="stat-box">
+          <div class="stat-num">109k</div>
+          <div class="stat-label">unbesetzte IT-Stellen in Deutschland</div>
+        </div>
+        <div class="stat-box">
+          <div class="stat-num">40 Mio.</div>
+          <div class="stat-label">EUR max. Strafe bei AI-Act-Verstoss</div>
+        </div>
+      </div>
+
+      <h3>Regulatorische Anforderungen</h3>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>Anforderung</th><th>Was</th><th>Prioritaet</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><strong>AVV (Art. 28 DSGVO)</strong></td><td>Auftragsverarbeitungsvertrag mit jedem Kunden</td><td><span class="badge badge-red">Pflicht</span></td></tr>
+            <tr><td><strong>DSFA (Art. 35)</strong></td><td>Datenschutz-Folgenabschaetzung bei KI</td><td><span class="badge badge-red">Pflicht</span></td></tr>
+            <tr><td><strong>Verarbeitungsverzeichnis</strong></td><td>Dokumentation aller Datenverarbeitungen</td><td><span class="badge badge-red">Pflicht</span></td></tr>
+            <tr><td><strong>EU AI Act (ab Aug 2026)</strong></td><td>Tech-Dokumentation, Copyright-Policy</td><td><span class="badge badge-yellow">Bald Pflicht</span></td></tr>
+            <tr><td><strong>ISO 27001</strong></td><td>Informationssicherheit</td><td><span class="badge badge-blue">Empfohlen</span></td></tr>
+            <tr><td><strong>BSI C5</strong></td><td>Cloud-Compliance (oeffentl. Sektor)</td><td><span class="badge badge-blue">Spaeter</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>Wettbewerber DACH</h3>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>Anbieter</th><th>Modell</th><th>USP</th><th>Schwaeche</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><strong>Aleph Alpha</strong></td><td>Enterprise-Plattform</td><td>BSI C5, Regierungs-Fokus</td><td>Teuer, eigene Modelle schwaecher</td></tr>
+            <tr><td><strong>WZ-IT</strong></td><td>GPU-Server ab 499&euro;</td><td>Flexibel, monatl. kuendbar</td><td>Reines Hosting, kein Service</td></tr>
+            <tr><td><strong>Kamium</strong></td><td>KI-Plattform</td><td>Multi-Modell, DSGVO</td><td>SaaS-Fokus</td></tr>
+            <tr><td><strong>AI Tuning</strong></td><td>Private LLMs</td><td>DSGVO + Fine-Tuning</td><td>Kleiner Anbieter</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="callout callout-purple">
+        <p><strong>Positionierung:</strong> Nicht &bdquo;wir hosten LLMs&ldquo; &mdash; sondern: <strong>&bdquo;DSGVO-konforme KI fuer Ihre Branche &mdash; fertig konfiguriert, rechtssicher, sofort nutzbar.&ldquo;</strong> Reines Hosting ist Commodity. Der Wert liegt in Branchenloesung + AVV + Schulung + Support.</p>
+      </div>
+    </section>
+
+    <!-- Section 8: Zielgruppen -->
+    <section id="zielgruppen">
+      <h2><span class="num">8</span> Zielgruppen nach Prioritaet</h2>
+
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>Branche</th><th>DSGVO-Schmerz</th><th>Zahlungsbereitschaft</th><th>Einstiegshuerde</th><th>Empfehlung</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><strong>Rechtsanwaelte</strong></td><td><span class="badge badge-red">Hoch</span></td><td>Mittel-Hoch</td><td><span class="badge badge-green">Niedrig</span></td><td><span class="badge badge-green">Start hier</span></td></tr>
+            <tr><td><strong>Steuerberater</strong></td><td><span class="badge badge-red">Hoch</span></td><td>Mittel</td><td><span class="badge badge-green">Niedrig</span></td><td><span class="badge badge-green">Start hier</span></td></tr>
+            <tr><td><strong>Gesundheitswesen</strong></td><td><span class="badge badge-red">Extrem</span></td><td>Hoch</td><td><span class="badge badge-red">Hoch</span></td><td><span class="badge badge-yellow">Spaeter</span></td></tr>
+            <tr><td><strong>Finanzsektor</strong></td><td><span class="badge badge-red">Hoch</span></td><td>Sehr hoch</td><td><span class="badge badge-red">Hoch</span></td><td><span class="badge badge-yellow">Spaeter</span></td></tr>
+            <tr><td><strong>Mittelstand/Industrie</strong></td><td><span class="badge badge-yellow">Mittel</span></td><td>Mittel</td><td><span class="badge badge-green">Niedrig</span></td><td><span class="badge badge-blue">Optional</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>Erste Dienstleistungen (nach Hebel)</h3>
+      <div class="card-grid">
+        <div class="card" style="border-top: 3px solid var(--green)">
+          <h4>1. Dokumentenanalyse</h4>
+          <p>Vertraege, Urteile, Steuerunterlagen zusammenfassen. Groesster Schmerzpunkt.</p>
+        </div>
+        <div class="card" style="border-top: 3px solid var(--accent)">
+          <h4>2. RAG — Chat mit Dokumenten</h4>
+          <p>Wissensbasis durchsuchbar machen. Sofort spuerbarer Nutzen.</p>
+        </div>
+        <div class="card" style="border-top: 3px solid var(--accent2)">
+          <h4>3. E-Mail / Textgenerierung</h4>
+          <p>Entwuerfe, Korrespondenz. Niedriger Aufwand, schneller Effekt.</p>
+        </div>
+        <div class="card" style="border-top: 3px solid var(--yellow)">
+          <h4>4. Code-Generierung</h4>
+          <p>Spaeter, fuer technischere Zielgruppen.</p>
+        </div>
+      </div>
+
+      <h3>Kundengewinnung</h3>
+      <div class="card-grid">
+        <div class="card">
+          <h4>Direktansprache</h4>
+          <p>Anwaelte, Steuerberater im eigenen Netzwerk</p>
+        </div>
+        <div class="card">
+          <h4>LinkedIn Content</h4>
+          <p>&bdquo;Warum ChatGPT fuer Ihre Kanzlei ein DSGVO-Risiko ist&ldquo;</p>
+        </div>
+        <div class="card">
+          <h4>Kammer-Events</h4>
+          <p>Vortrag bei Anwalts-/Steuerberaterkammer</p>
+        </div>
+        <div class="card">
+          <h4>Datenschutzberater als Partner</h4>
+          <p>Die haben genau die richtige Zielgruppe</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- Section 9: MVP -->
+    <section id="mvp">
+      <h2><span class="num">9</span> MVP in 4 Wochen</h2>
+
+      <div class="timeline">
+        <div class="timeline-item">
+          <div class="phase-label">Woche 1-2</div>
+          <h4>Infrastruktur</h4>
+          <p>GPU-Server mieten (499-800&euro;/Monat bei dt. Hoster)</p>
+          <p>Gemma 4 31B oder Llama 3.3 70B via vLLM deployen</p>
+          <p>Open WebUI als Frontend, API mit Auth</p>
+        </div>
+        <div class="timeline-item">
+          <div class="phase-label">Woche 3</div>
+          <h4>Compliance</h4>
+          <p>AVV-Template vom Anwalt (~1.000&euro;)</p>
+          <p>Datenschutzerklaerung</p>
+          <p>Verarbeitungsverzeichnis</p>
+        </div>
+        <div class="timeline-item">
+          <div class="phase-label">Woche 4</div>
+          <h4>Erste Kunden</h4>
+          <p>3-5 Pilotkunden aus dem Netzwerk</p>
+          <p>30 Tage kostenlose Testphase</p>
+          <p>Feedback sammeln, Use-Cases dokumentieren</p>
+        </div>
+        <div class="timeline-item">
+          <div class="phase-label">Monat 2+</div>
+          <h4>Iterate</h4>
+          <p>Zahlende Kunden konvertieren</p>
+          <p>RAG-Pipeline aufbauen</p>
+          <p>Branchenspezifische Features</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- Section 10: Pricing -->
+    <section id="preise">
+      <h2><span class="num">10</span> Preismodell</h2>
+
+      <div class="card-grid">
+        <div class="card" style="border-top: 3px solid var(--accent)">
+          <h4>Starter</h4>
+          <p style="font-size: 1.8rem; font-weight: 700; color: var(--text); margin: 0.5rem 0;">499 &euro;<span style="font-size: 0.9rem; font-weight: 400; color: var(--text-dim)">/Monat</span></p>
+          <p>1 Modell, Web-Chat, 5 User</p>
+        </div>
+        <div class="card" style="border-top: 3px solid var(--green)">
+          <h4>Professional</h4>
+          <p style="font-size: 1.8rem; font-weight: 700; color: var(--text); margin: 0.5rem 0;">1.499 &euro;<span style="font-size: 0.9rem; font-weight: 400; color: var(--text-dim)">/Monat</span></p>
+          <p>Multi-Modell, RAG, API, 20 User</p>
+        </div>
+        <div class="card" style="border-top: 3px solid var(--accent2)">
+          <h4>Enterprise</h4>
+          <p style="font-size: 1.8rem; font-weight: 700; color: var(--text); margin: 0.5rem 0;">3-5k &euro;<span style="font-size: 0.9rem; font-weight: 400; color: var(--text-dim)">/Monat</span></p>
+          <p>Dedicated, Fine-Tuning, SLA</p>
+        </div>
+      </div>
+
+      <div class="callout callout-blue" style="margin-top: 1.5rem">
+        <p><strong>Setup-Fee:</strong> 2.000-5.000 &euro; einmalig (Onboarding, AVV, Konfiguration)</p>
+      </div>
+
+      <h3>Break-Even-Rechnung</h3>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>Posten</th><th>Kosten/Monat</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>GPU-Server (gemietet)</td><td>499-800 &euro;</td></tr>
+            <tr><td>Domain + Hosting + SSL</td><td>~20 &euro;</td></tr>
+            <tr><td>AVV + Rechtsberatung (einmalig)</td><td>~1.500 &euro;</td></tr>
+            <tr><td><strong>Break-Even</strong></td><td><strong style="color: var(--green)">3-4 Starter-Kunden</strong></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- Section 11: Phasenplan -->
+    <section id="phasen">
+      <h2><span class="num">11</span> Strategischer Phasenplan</h2>
+
+      <div class="timeline">
+        <div class="timeline-item">
+          <div class="phase-label">Phase 1 &mdash; Validate</div>
+          <h4>Monat 1-2</h4>
+          <p>Server mieten, MVP bauen, 5 Pilotkunden</p>
+          <p><strong>Invest: ~2.000 &euro;</strong></p>
+        </div>
+        <div class="timeline-item">
+          <div class="phase-label">Phase 2 &mdash; Cashflow</div>
+          <h4>Monat 3-4</h4>
+          <p>Erste zahlende Kunden, AVV steht</p>
+          <p><strong>Kosten: ~1.500 &euro;/Monat</strong></p>
+        </div>
+        <div class="timeline-item">
+          <div class="phase-label">Phase 3 &mdash; Eigene HW</div>
+          <h4>Monat 6-9</h4>
+          <p>2&times; RTX 5090 Server, wenn &gt;10 Kunden</p>
+          <p><strong>Invest: ~9.000 &euro;</strong></p>
+        </div>
+        <div class="timeline-item">
+          <div class="phase-label">Phase 4 &mdash; Scale</div>
+          <h4>Monat 12+</h4>
+          <p>ISO 27001, mehr Modelle, Enterprise-Kunden</p>
+          <p><strong>Invest: ~20.000 &euro;</strong></p>
+        </div>
+      </div>
+
+      <h3>Das Flywheel</h3>
+      <div class="flywheel">
+        <div class="flywheel-step">Beratung</div>
+        <div class="flywheel-arrow">&rarr;</div>
+        <div class="flywheel-step">SaaS-Vertrag</div>
+        <div class="flywheel-arrow">&rarr;</div>
+        <div class="flywheel-step">Upsell Professional</div>
+        <div class="flywheel-arrow">&rarr;</div>
+        <div class="flywheel-step">Referenz</div>
+        <div class="flywheel-arrow">&rarr;</div>
+        <div class="flywheel-step">Naechster Kunde</div>
+      </div>
+
+      <h3>Risiken &amp; Gegenstrategien</h3>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>Risiko</th><th>Wahrscheinlichkeit</th><th>Gegenstrategie</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Grosse Cloud-Provider bieten DSGVO-Hosting an</td><td><span class="badge badge-red">Hoch</span></td><td>Nische + Naehe + Branchenverstaendnis als USP</td></tr>
+            <tr><td>Kunde will GPT-4-Qualitaet</td><td><span class="badge badge-yellow">Mittel</span></td><td>Ehrlich: 80% Qualitaet bei 100% Compliance</td></tr>
+            <tr><td>GPU-Kosten steigen</td><td><span class="badge badge-yellow">Mittel</span></td><td>Langfristige Vertraege, eigene Hardware spaeter</td></tr>
+            <tr><td>Open-Source wird zu schlecht</td><td><span class="badge badge-green">Niedrig</span></td><td>Trend gegenlaeuft, Multi-Modell-Strategie</td></tr>
+            <tr><td>Regulierung wird lockerer</td><td><span class="badge badge-green">Niedrig</span></td><td>EU verschaerft eher — unwahrscheinlich</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="callout callout-green" style="margin-top:1.5rem">
+        <p><strong>Inversions-Check:</strong> &bdquo;Was wenn Cloud besser waere?&ldquo; &mdash; Fuer &lt;2 Mio. Tokens/Tag ist GPU-Miete (WZ-IT ab 499&euro;/Monat) flexibler. Eigene Hardware erst bei konsistenter, planbarer Last. Deshalb: Phase 1 mieten, Phase 3 kaufen.</p>
+      </div>
+    </section>
+
+    <!-- Footer -->
+    <footer>
+      <p>Erstellt mit Lotus Ion &mdash; Strategy &times; Systems &times; Ethics</p>
+      <p style="margin-top:0.3rem">Quellen: LMArena, Hugging Face, RunPod, WZ-IT, TwinLadder, Bitkom, EU AI Act &mdash; Stand April 2026</p>
+    </footer>
+
+  </div>
+</body>
+</html>
