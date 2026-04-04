@@ -11,12 +11,22 @@ def handle_create_tool(ctx: ToolContext, tool_input: dict) -> str:
     name = tool_input.get("name", "")
     desc = tool_input.get("description", "")
 
-    # Schritt 1: Challenge — Benchmark finden (blockiert NICHT)
+    # Schritt 1: Challenge — Benchmark finden + Duplikat-Blocker
     challenge_info = None
     if ctx.curator:
         challenge_info = ctx.curator.challenge(name, desc)
 
-    # Schritt 2: Tool erstellen (immer erlaubt)
+    # Hard-Block: Aehnliches aktives Tool? Nicht neu erstellen.
+    if challenge_info and challenge_info.get("has_benchmark"):
+        bm = challenge_info.get("benchmark") or {}
+        if bm and not bm.get("archived") and bm.get("similarity", 0) >= 0.7:
+            return (
+                f"BLOCKIERT: '{bm['name']}' ist {int(bm['similarity'] * 100)}% "
+                f"aehnlich und {bm.get('uses', 0)}x bewaehrt. "
+                f"Nutze oder erweitere es statt ein neues Tool zu erstellen."
+            )
+
+    # Schritt 2: Tool erstellen
     composition_hint = ctx.composer.suggest_composition(desc)
     result = ctx.toolchain.create_tool(name, desc, tool_input["code"])
 
@@ -61,10 +71,17 @@ def handle_use_tool(ctx: ToolContext, tool_input: dict) -> str:
     )
 
     # Tool-Lifecycle: Failure-Loop pruefen
+    is_error = isinstance(result, str) and "FEHLER" in result
     if ctx.tool_meta_patterns:
         try:
-            is_error = isinstance(result, str) and "FEHLER" in result
             ctx.tool_meta_patterns.check_failure_loop(name, is_error)
+        except Exception:
+            pass
+
+    # Feedback-Loop: Tool-Ergebnis zurueck in Skill-Library
+    if ctx.skill_library:
+        try:
+            ctx.skill_library.record_tool_feedback(name, not is_error)
         except Exception:
             pass
 
@@ -79,10 +96,20 @@ def handle_generate_tool(ctx: ToolContext, tool_input: dict) -> str:
         if not name or not desc:
             return "FEHLER: name und description erforderlich."
 
-        # Schritt 1: Challenge — Benchmark finden (blockiert NICHT)
+        # Schritt 1: Challenge — Benchmark finden + Duplikat-Blocker
         challenge_info = None
         if ctx.curator:
             challenge_info = ctx.curator.challenge(name, desc)
+
+        # Hard-Block: Aehnliches aktives Tool? Nicht neu erstellen.
+        if challenge_info and challenge_info.get("has_benchmark"):
+            bm = challenge_info.get("benchmark") or {}
+            if bm and not bm.get("archived") and bm.get("similarity", 0) >= 0.7:
+                return (
+                    f"BLOCKIERT: '{bm['name']}' ist {int(bm['similarity'] * 100)}% "
+                    f"aehnlich und {bm.get('uses', 0)}x bewaehrt. "
+                    f"Nutze oder erweitere es statt ein neues Tool zu erstellen."
+                )
 
         # Composition-Hint isoliert abfragen (kann fehlschlagen)
         try:
@@ -90,7 +117,7 @@ def handle_generate_tool(ctx: ToolContext, tool_input: dict) -> str:
         except Exception:
             composition_hint = None
 
-        # Schritt 2: Tool generieren (immer erlaubt)
+        # Schritt 2: Tool generieren
         result = ctx.foundry.generate_tool(name, desc, ctx.toolchain)
 
         if isinstance(result, str) and result.startswith("FEHLER"):

@@ -310,29 +310,95 @@ class SkillLibrary:
             Prompt-Text oder leerer String.
         """
         skill = self.get_best_skill(goal_type)
+
+        # Transfer-Learning: Kein Skill fuer diesen Typ? Besten ueber alle Typen nehmen.
+        is_transfer = False
         if not skill:
-            return ""
+            all_skills = self.index.get("skills", [])
+            candidates = [s for s in all_skills if s.get("success_count", 0) >= 3]
+            if not candidates:
+                return ""
+            skill = max(
+                candidates,
+                key=lambda s: s.get("avg_score", 0) * min(s.get("success_count", 1), 5),
+            )
+            is_transfer = True
 
         steps = skill.get("abstract_steps", [])
         steps_text = " → ".join(steps) if steps else "keine Schritte"
+        prefix = "TRANSFER-MUSTER" if is_transfer else "BEWAEHRTES VORGEHEN"
+        source = skill.get("goal_type", "?") if is_transfer else goal_type
 
         return (
-            f"\nBEWAEHRTES VORGEHEN (aus {skill.get('success_count', 1)} Erfolgen):\n"
-            f"  Ziel-Typ: {goal_type}\n"
+            f"\n{prefix} (aus {skill.get('success_count', 1)} Erfolgen):\n"
+            f"  Ziel-Typ: {source}\n"
             f"  Muster: {steps_text}\n"
             f"  Beispiel: {skill.get('plan_goal', '')[:100]}\n"
             f"  Score: {skill.get('avg_score', '?')}/10\n"
             f"  Dies ist ein VORSCHLAG — passe ihn an die aktuelle Aufgabe an."
         )
 
+    # === Skill-Konsolidierung ===
+
+    def consolidate_skills(self) -> str:
+        """Merged aehnliche Skills gleichen goal_type (analog zu ToolConsolidator).
+
+        Returns:
+            Zusammenfassung oder leerer String.
+        """
+        # Zu entfernende Skills sammeln (IDs), NICHT waehrend Iteration loeschen
+        to_remove: set[str] = set()
+        types: dict[str, list] = {}
+        for s in self.index["skills"]:
+            types.setdefault(s.get("goal_type", "?"), []).append(s)
+
+        for group in types.values():
+            if len(group) < 2:
+                continue
+            for i, skill_a in enumerate(group):
+                if skill_a["id"] in to_remove:
+                    continue
+                for skill_b in group[i + 1:]:
+                    if skill_b["id"] in to_remove:
+                        continue
+                    if self._is_similar(skill_a["plan_goal"], skill_b["plan_goal"]):
+                        self._merge_skills(skill_a, skill_b)
+                        to_remove.add(skill_b["id"])
+
+        if to_remove:
+            self.index["skills"] = [
+                s for s in self.index["skills"] if s["id"] not in to_remove
+            ]
+            self._save_index()
+            logger.info("Skill-Konsolidierung: %d Skills gemerged", len(to_remove))
+        return f"{len(to_remove)} Skills konsolidiert" if to_remove else ""
+
+    def _merge_skills(self, keeper: dict, absorbed: dict) -> None:
+        """Merged absorbed in keeper (gewichteter Durchschnitt)."""
+        n_k = max(1, keeper.get("success_count", 1))
+        n_a = max(1, absorbed.get("success_count", 1))
+        total = n_k + n_a
+        keeper["success_count"] = total
+        keeper["avg_score"] = round(
+            (keeper.get("avg_score", 5) * n_k
+             + absorbed.get("avg_score", 5) * n_a) / total, 1,
+        )
+        keeper["avg_rating"] = round(
+            (keeper.get("avg_rating", 5) * n_k
+             + absorbed.get("avg_rating", 5) * n_a) / total, 1,
+        )
+        keeper["last_used"] = max(
+            keeper.get("last_used", ""), absorbed.get("last_used", ""),
+        )
+
     # === Skill → Tool Bridge ===
 
-    def find_promotion_candidates(self, min_successes: int = 7) -> list[dict]:
+    def find_promotion_candidates(self, min_successes: int = 4) -> list[dict]:
         """Findet reife Skills die als Tool generiert werden sollten.
 
         Kriterien:
-        - success_count >= min_successes
-        - avg_score >= 8.0
+        - success_count >= min_successes (4 — Phis Aufgaben sind divers)
+        - avg_score >= 8.5 (strenger als vorher, kompensiert niedrigere Menge)
         - Noch nicht promoted (kein 'promoted_to_tool' Flag)
 
         Returns:
@@ -343,7 +409,7 @@ class SkillLibrary:
             if skill.get("promoted_to_tool"):
                 continue
             if (skill.get("success_count", 0) >= min_successes
-                    and skill.get("avg_score", 0) >= 8.0):
+                    and skill.get("avg_score", 0) >= 8.5):
                 candidates.append(skill)
         return sorted(
             candidates,
@@ -358,7 +424,10 @@ class SkillLibrary:
             {"name": str, "description": str, "steps": list}
         """
         goal_type = skill.get("goal_type", "general")
-        steps = skill.get("abstract_steps", [])
+        # Optimierung: Aufeinanderfolgende Duplikate entfernen
+        raw_steps = skill.get("abstract_steps", [])
+        steps = [s for i, s in enumerate(raw_steps)
+                 if i == 0 or s != raw_steps[i - 1]]
         tools = skill.get("tool_sequence", [])
 
         name = f"auto_{goal_type}_{skill['id'].rsplit('_', 1)[-1]}"
@@ -389,6 +458,22 @@ class SkillLibrary:
                 return True
         logger.warning("mark_as_promoted: Skill %s nicht gefunden", skill_id)
         return False
+
+    def record_tool_feedback(self, tool_name: str, success: bool) -> None:
+        """Feedback von einem promoted Tool zurueck in den Quell-Skill.
+
+        Schliesst den Lernkreislauf: Skill → Tool → Ergebnis → Skill.
+        """
+        for skill in self.index.get("skills", []):
+            if skill.get("promoted_to_tool") == tool_name:
+                key = "tool_successes" if success else "tool_failures"
+                skill[key] = skill.get(key, 0) + 1
+                self._save_index()
+                logger.info(
+                    "Skill-Feedback: %s → %s (%s)",
+                    tool_name, skill["id"], "OK" if success else "FEHLER",
+                )
+                return
 
     def get_stats(self) -> dict:
         """Statistiken ueber die Skill-Library."""

@@ -53,6 +53,7 @@ class ToolContext:
     # Tool-Lifecycle
     tool_metrics: Any = None         # ToolMetrics
     tool_meta_patterns: Any = None   # ToolMetaPatterns
+    skill_library: Any = None        # SkillLibrary (Feedback-Loop Tool→Skill)
 
     # Laufzeit-State (mutable — wird pro Sequenz zurueckgesetzt)
     sequences_total: int = 0

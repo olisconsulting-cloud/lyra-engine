@@ -1585,24 +1585,23 @@ SEQUENZ-PLANUNG: Nutze write_sequence_plan am Anfang — plane dein Ziel, Exit-K
         if next_task:
             parts.append(f"\nNAECHSTE AUFGABE: {next_task['description']} [{next_task.get('priority', 'normal')}]")
 
-        # Relevanteste Erinnerungen (Phi-Decay + Valenz-Gewichtung)
-        # Cache-Key: Nur Goal-Titel ohne Status (Status aendert sich jede Sequenz)
+        # Unified Memory: Ein Query ueber Experience + Failure + Semantic
+        # Ersetzt 3 separate Abfragen durch einen gewichteten, gerankten Block
         focus_cache_key = focus.split("[")[0].strip() if focus else ""
         _mem_cache = getattr(self, "_memory_cache", {})
-        if _mem_cache.get("key") != focus_cache_key or not _mem_cache.get("results"):
-            relevant = self.memory.retrieve_relevant(top_k=3)
-            self._memory_cache = {"key": focus_cache_key, "results": relevant}
+        if _mem_cache.get("key") != focus_cache_key or not _mem_cache.get("result"):
+            unified_context = self.unified_memory.get_context_for(
+                focus, max_tokens=800,
+                sources=["semantic", "experience", "failure"],
+            )
+            self._memory_cache = {"key": focus_cache_key, "result": unified_context}
         else:
-            relevant = _mem_cache["results"]
+            unified_context = _mem_cache["result"]
 
-        if relevant:
-            parts.append("\nWICHTIGSTE ERINNERUNGEN:")
-            for m in relevant:
-                score = m.get("retrieval_score", 0)
-                parts.append(f"  - [{score:.2f}] {m.get('content', '')[:200]}")
+        if unified_context:
+            parts.append(f"\n{unified_context}")
 
-        # Failure-Memory + Skill-Komposition: Vor jeder Sequenz checken
-        # (focus wurde oben schon geholt — wiederverwenden)
+        # Baseline-Tracking: Failure-Match (fuer Unified Memory Metriken)
         failure_check = self.failure_memory.check(focus)
         self._track_baseline("fm_match", 1 if failure_check else 0)
 
@@ -1610,18 +1609,6 @@ SEQUENZ-PLANUNG: Nutze write_sequence_plan am Anfang — plane dein Ziel, Exit-K
         composition = self.composer.suggest_composition(focus)
         if composition:
             parts.append(f"\n{composition}")
-        if failure_check:
-            parts.append(f"\n{failure_check}")
-
-        # Semantische Memory: Fruehere Erkenntnisse aus finish_sequence
-        try:
-            semantic_hits = self.semantic_memory.search(focus, top_k=3)
-            if semantic_hits:
-                parts.append("\nFRUEHERE ERKENNTNISSE:")
-                for hit in semantic_hits:
-                    parts.append(f"  - {hit.get('content', '')[:150]}")
-        except Exception:
-            pass  # Nicht kritisch — Perception funktioniert auch ohne
 
         # Efficiency-Alerts (von letzter Trend-Analyse)
         eff_alerts = getattr(self, "_efficiency_alerts", [])
@@ -1709,6 +1696,7 @@ SEQUENZ-PLANUNG: Nutze write_sequence_plan am Anfang — plane dein Ziel, Exit-K
             failure_memory=self.failure_memory,
             tool_metrics=self.tool_metrics,
             tool_meta_patterns=self.tool_meta_patterns,
+            skill_library=self.skill_library,
             sequences_total=self.sequences_total,
             _installed_packages=self._installed_packages,
             # Callbacks fuer Logik die in consciousness.py bleibt
@@ -1741,6 +1729,88 @@ SEQUENZ-PLANUNG: Nutze write_sequence_plan am Anfang — plane dein Ziel, Exit-K
         rating = event.data.get("rating", 5)
         if hasattr(self, "perception_pipeline"):
             self.perception_pipeline.record_feedback("standard", rating)
+
+    # === Tool-Housekeeping (extrahiert aus Dream-Zyklus) ===
+
+    def _run_tool_housekeeping(self) -> str:
+        """Tool-Lifecycle: Prune + Consolidate + Promote + Skill-Bridge.
+
+        Laeuft im Dream-Zyklus, aber isoliert testbar.
+        """
+        results = []
+
+        # Stale Eintraege bereinigen
+        active_tools = set(
+            n for n, i in self.toolchain.registry.get("tools", {}).items()
+            if i.get("status") != "archived"
+        )
+        self.tool_meta_patterns.cleanup_stale_entries(active_tools)
+
+        # Orphan-Check: Tools erstellt aber nie benutzt
+        for name, info in self.toolchain.registry.get("tools", {}).items():
+            if info.get("status") != "archived":
+                self.tool_meta_patterns.check_orphan_creation(
+                    name, info.get("uses", 0), info.get("created", ""),
+                )
+
+        # Pruning → Konsolidierung → Nomination → Promotion (isoliert)
+        lifecycle_actions = [
+            ("prune", self.tool_pruner.auto_prune),
+            ("consolidate", self.tool_consolidator.auto_consolidate),
+            ("nominate", self.tool_promotion.auto_nominate),
+        ]
+        for action_name, action in lifecycle_actions:
+            try:
+                r = action()
+                if r:
+                    results.append(r)
+            except Exception as e:
+                logger.warning("Housekeeping %s: %s", action_name, e)
+
+        # Auto-Promotion mit DualReview-Gate
+        try:
+            r = self.tool_promotion.auto_promote(
+                dual_review=self.code_review,
+                communication=self.communication,
+            )
+            if r:
+                results.append(r)
+        except Exception as e:
+            logger.warning("Housekeeping auto_promote: %s", e)
+
+        # Skill-Konsolidierung: Aehnliche Skills mergen
+        try:
+            r = self.skill_library.consolidate_skills()
+            if r:
+                results.append(r)
+        except Exception as e:
+            logger.warning("Housekeeping skill_consolidation: %s", e)
+
+        # Skill → Tool Bridge: Reife Skills zu Tools (max 1)
+        for skill in self.skill_library.find_promotion_candidates()[:1]:
+            try:
+                spec = self.skill_library.build_tool_spec(skill)
+                gen = self.foundry.generate_tool(
+                    name=spec["name"],
+                    description=spec["description"],
+                    toolchain=self.toolchain,
+                )
+                if gen and not gen.startswith("FEHLER"):
+                    self.skill_library.mark_as_promoted(skill["id"], spec["name"])
+                    results.append(f"Skill→Tool: {spec['name']}")
+                    self.communication.send_message(
+                        f"SKILL→TOOL: '{spec['name']}' generiert aus "
+                        f"Skill {skill['id']} "
+                        f"({skill.get('success_count', 0)} Erfolge, "
+                        f"Score {skill.get('avg_score', 0)}/10).",
+                        channel=("telegram"
+                                 if self.communication.telegram_active
+                                 else "outbox"),
+                    )
+            except Exception as e:
+                logger.warning("Skill→Tool: %s — %s", skill.get("id", "?"), e)
+
+        return " | ".join(results)
 
     def _request_approval(self, name: str, tool_input: dict) -> bool:
         """Fragt Oliver um Erlaubnis fuer kritische Aktionen. Gibt True=genehmigt zurueck."""
@@ -2492,72 +2562,11 @@ Antworte als JSON:
 
                     # Tool-Lifecycle: Pruning + Konsolidierung + Promotion + Hygiene
                     try:
-                        # Memory-Leak-Praevention: Stale Eintraege bereinigen
-                        active_tools = set(
-                            n for n, i in self.toolchain.registry.get("tools", {}).items()
-                            if i.get("status") != "archived"
-                        )
-                        self.tool_meta_patterns.cleanup_stale_entries(active_tools)
-
-                        # Orphan-Check: Tools die erstellt aber nie benutzt wurden
-                        registry = self.toolchain.registry.get("tools", {})
-                        for tool_name, info in registry.items():
-                            if info.get("status") == "archived":
-                                continue
-                            self.tool_meta_patterns.check_orphan_creation(
-                                tool_name,
-                                info.get("uses", 0),
-                                info.get("created", ""),
-                            )
-
-                        prune_result = self.tool_pruner.auto_prune()
-                        if prune_result:
-                            result += f" | {prune_result}"
-                        consol_result = self.tool_consolidator.auto_consolidate()
-                        if consol_result:
-                            result += f" | {consol_result}"
-                        promo_result = self.tool_promotion.auto_nominate()
-                        if promo_result:
-                            result += f" | {promo_result}"
-
-                        # Auto-Promotion: DualReview-Gate + Telegram
-                        promote_result = self.tool_promotion.auto_promote(
-                            dual_review=self.code_review,
-                            communication=self.communication,
-                        )
-                        if promote_result:
-                            result += f" | {promote_result}"
-
-                        # Skill → Tool Bridge: Reife Skills zu Tools
-                        mature_skills = self.skill_library.find_promotion_candidates()
-                        for skill in mature_skills[:1]:  # Max 1 pro Zyklus
-                            try:
-                                spec = self.skill_library.build_tool_spec(skill)
-                                gen_result = self.foundry.generate_tool(
-                                    name=spec["name"],
-                                    description=spec["description"],
-                                    toolchain=self.toolchain,
-                                )
-                                # generate_tool gibt Fehler-String bei Misserfolg
-                                if gen_result and not gen_result.startswith("FEHLER"):
-                                    self.skill_library.mark_as_promoted(
-                                        skill["id"], spec["name"],
-                                    )
-                                    result += f" | Skill→Tool: {spec['name']}"
-                                    self.communication.send_message(
-                                        f"SKILL→TOOL: '{spec['name']}' generiert aus "
-                                        f"Skill {skill['id']} "
-                                        f"({skill.get('success_count', 0)} Erfolge, "
-                                        f"Score {skill.get('avg_score', 0)}/10).",
-                                        channel=("telegram"
-                                                 if self.communication.telegram_active
-                                                 else "outbox"),
-                                    )
-                            except Exception as e:
-                                logger.warning("Skill→Tool fehlgeschlagen: %s — %s",
-                                               skill.get("id", "?"), e)
+                        housekeeping = self._run_tool_housekeeping()
+                        if housekeeping:
+                            result += f" | {housekeeping}"
                     except Exception as e:
-                        logger.warning(f"Tool-Lifecycle im Dream-Zyklus fehlgeschlagen: {e}")
+                        logger.warning("Tool-Housekeeping fehlgeschlagen: %s", e)
 
                     self.narrator.dream_end(result)
                     self._sequences_since_dream = 0
