@@ -375,14 +375,20 @@ class SkillLibrary:
             "source_skill_id": skill["id"],
         }
 
-    def mark_as_promoted(self, skill_id: str, tool_name: str):
-        """Markiert einen Skill als zu Tool promoted."""
+    def mark_as_promoted(self, skill_id: str, tool_name: str) -> bool:
+        """Markiert einen Skill als zu Tool promoted.
+
+        Returns:
+            True bei Erfolg, False wenn Skill nicht gefunden.
+        """
         for skill in self.index.get("skills", []):
             if skill["id"] == skill_id:
                 skill["promoted_to_tool"] = tool_name
                 skill["promoted_at"] = datetime.now(timezone.utc).isoformat()
                 self._save_index()
-                return
+                return True
+        logger.warning("mark_as_promoted: Skill %s nicht gefunden", skill_id)
+        return False
 
     def get_stats(self) -> dict:
         """Statistiken ueber die Skill-Library."""

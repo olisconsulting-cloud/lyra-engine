@@ -337,7 +337,8 @@ class PromotionEngine:
 
         # === STUFE 1b: AST-Security-Check (deterministisch, vor LLM-Review) ===
         from engine.security import SecurityGateway
-        security = SecurityGateway()
+        from engine.config import DATA_PATH
+        security = SecurityGateway(ROOT_PATH, DATA_PATH)
         check = security.check_code_execution(tool_code)
         if not check["allowed"]:
             self.promotions.setdefault("rejected", []).append({
