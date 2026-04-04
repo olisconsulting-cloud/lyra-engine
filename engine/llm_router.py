@@ -2,19 +2,19 @@
 Multi-LLM Router — Waehlt das optimale Modell je nach Aufgabe.
 
 Aufstellung:
-- Kimi K2.5 (NVIDIA): Haupt-Arbeit (80%) — bewaehrtes Tool-Use ($0)
-- Gemma 4 31B: Wartet auf Self-Hosting (Cloud ueberall Tool-Use-Limits)
+- DeepSeek V3.2: Haupt-Arbeit (80%) — bestes P/L ($0.14/$0.28, Cache $0.028)
+- Kimi K2.5 (NVIDIA): Fallback-Stufe 1 ($0 auf NIM, Credit-basiert)
+- GPT-4.1-mini (OpenAI): Fallback-Stufe 2 + Dream (JSON-Garantie)
 - Claude Sonnet 4.6: Letzter Fallback — nativer Tool-Use
 - Claude Opus 4.6: Audit, Result-Validation — Tiefenanalyse
-- GPT-4.1-mini (OpenAI): Dream — JSON-Garantie
-- DeepSeek V3.2: Fallback-Stufe 2 (~35x guenstiger als Sonnet)
+- Gemma 4 31B: Wartet auf Self-Hosting (Cloud ueberall Tool-Use-Limits)
 
-Fallback-Kette: DeepSeek → Gemma 4 (Google) → GPT-4.1-mini → Sonnet 4.6
+Fallback-Kette: Kimi K2.5 → GPT-4.1-mini → Sonnet 4.6
 
 TASK_MODEL_MAP ist die EINZIGE Stelle fuer Modell-Zuordnung.
 Alle Module importieren von hier — keine hardcodierten Modell-IDs.
 
-Kosten: ~$2-5/Tag (Gemma $0 auf NIM, GPT-4.1-mini nur fuer Dream)
+Kosten: ~$1-3/Tag (DeepSeek Primary, Cache-Hits fast gratis)
 """
 
 import copy
@@ -46,10 +46,10 @@ MODELS = {
     "kimi_k25": {
         "provider": "nvidia",
         "model_id": "moonshotai/kimi-k2-instruct",
-        "input_cost": 0.0,  # Kostenlos ueber NVIDIA API
+        "input_cost": 0.0,  # Kostenlos ueber NVIDIA NIM (Credit-basiert)
         "output_cost": 0.0,
         "max_output_tokens": 16384,
-        "use_for": "Fallback-Stufe 1, Telegram-Antworten",
+        "use_for": "Fallback-Stufe 1 — bewaehrtes Tool-Use, Telegram ($0)",
     },
     "claude_opus": {
         "provider": "anthropic",
@@ -70,10 +70,10 @@ MODELS = {
     "deepseek_v3": {
         "provider": "deepseek",
         "model_id": "deepseek-chat",
-        "input_cost": 0.28,
-        "output_cost": 0.42,
+        "input_cost": 0.14,  # V3.2 Preise (Cache-Hit: $0.028)
+        "output_cost": 0.28,
         "max_output_tokens": 8192,
-        "use_for": "Tool-Foundry, Fallback",
+        "use_for": "Primary — Hauptarbeit, Coding, Tool-Use (bestes P/L am Markt)",
     },
     "gemma4_google": {
         "provider": "google",
@@ -103,23 +103,23 @@ MODELS = {
 
 # Welches Modell fuer welche Aufgabe — EINZIGE Stelle fuer Modell-Zuordnung
 TASK_MODEL_MAP = {
-    "main_work": "kimi_k25",               # Kimi K2.5 — Hauptarbeit ($0, stabiles Tool-Use)
-    "code_review": "kimi_k25",             # Kimi — Code-Review ($0)
+    "main_work": "deepseek_v3",            # DeepSeek V3.2 — Primary ($0.14/$0.28, Cache fast gratis)
+    "code_review": "deepseek_v3",          # DeepSeek — Code-Review (guenstig + stark)
     "audit_primary": "claude_opus",        # Opus 4.6 — Tiefenanalyse (hier keine Abstriche)
-    "audit_secondary": "kimi_k25",         # Kimi — Gegenpruefung ($0)
-    "telegram_reply": "kimi_k25",          # Kimi — Sofort-Antwort ($0)
+    "audit_secondary": "deepseek_v3",      # DeepSeek — Gegenpruefung (guenstig)
+    "telegram_reply": "deepseek_v3",       # DeepSeek — Sofort-Antwort
     "dream": "gpt4_1_mini",                # GPT-4.1-mini — Memory-Konsolidierung (JSON-Garantie)
-    "tool_generation": "kimi_k25",         # Kimi — Tool-Generierung ($0)
-    "goal_planning": "kimi_k25",           # Kimi — Goal-Planning ($0)
+    "tool_generation": "deepseek_v3",      # DeepSeek — Tool-Generierung
+    "goal_planning": "deepseek_v3",        # DeepSeek — Goal-Planning
     "result_validation": "claude_opus",    # Opus 4.6 — Ergebnis-Pruefung (kritisch)
-    "graceful_finish": "kimi_k25",         # Kimi — Sequenz-Zusammenfassungen ($0)
-    "fallback": "deepseek_v3",             # DeepSeek V3 — Fallback Stufe 1
+    "graceful_finish": "deepseek_v3",      # DeepSeek — Sequenz-Zusammenfassungen
+    "fallback": "kimi_k25",               # Kimi K2.5 — Fallback Stufe 1 ($0)
 }
 
 
 # Fallback-Kette: Wenn Primary ausfaellt, diese Reihenfolge versuchen
-# Kimi als erstes (bewaehrt + $0), dann DeepSeek, GPT, Sonnet als letzter
-FALLBACK_CHAIN = ["deepseek_v3", "gemma4_google", "gpt4_1_mini", "claude_sonnet"]
+# Kimi ($0) → GPT-4.1-mini (guenstig) → Sonnet (letzter, teuer aber zuverlaessig)
+FALLBACK_CHAIN = ["kimi_k25", "gpt4_1_mini", "claude_sonnet"]
 
 
 class ProviderHealth:

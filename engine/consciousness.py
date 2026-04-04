@@ -722,16 +722,16 @@ class ConsciousnessEngine:
         # Perception-Pipeline — gewichtete Wahrnehmung mit Token-Budget
         # Shared State pro Sequenz: self._pstate (von _build_perception gesetzt)
         self._pstate: dict = {}
-        self.perception_pipeline = PerceptionPipeline(config.DATA_PATH, max_tokens=8000)
+        self.perception_pipeline = PerceptionPipeline(config.DATA_PATH, max_tokens=5000)
 
         # Always-Load Kanaele (Kern — immer voll geladen)
         self.perception_pipeline.register_channel(PerceptionChannel(
             name="working_memory", builder=self._ch_working_memory,
-            base_weight=1.0, estimated_tokens=300, always_load=True,
+            base_weight=1.0, estimated_tokens=200, always_load=True,
         ))
         self.perception_pipeline.register_channel(PerceptionChannel(
             name="rhythm", builder=self._ch_rhythm,
-            base_weight=1.0, estimated_tokens=100, always_load=True,
+            base_weight=2.0, estimated_tokens=100,
         ))
         self.perception_pipeline.register_channel(PerceptionChannel(
             name="time", builder=self._ch_time,
@@ -739,11 +739,11 @@ class ConsciousnessEngine:
         ))
         self.perception_pipeline.register_channel(PerceptionChannel(
             name="inbox", builder=self._ch_inbox,
-            base_weight=1.0, estimated_tokens=200, always_load=True,
+            base_weight=2.5, estimated_tokens=200,
         ))
         self.perception_pipeline.register_channel(PerceptionChannel(
             name="focus", builder=self._ch_focus,
-            base_weight=1.0, estimated_tokens=300, always_load=True,
+            base_weight=1.0, estimated_tokens=150, always_load=True,
         ))
         # Planung am Ende — immer laden, steuert Sequenz-Verhalten
         self.perception_pipeline.register_channel(PerceptionChannel(
@@ -754,13 +754,13 @@ class ConsciousnessEngine:
         # Security-Lektionen — leichtgewichtig, verhindert wiederholte Security-Blocks
         self.perception_pipeline.register_channel(PerceptionChannel(
             name="security_lessons", builder=self._ch_security_lessons,
-            base_weight=1.0, estimated_tokens=50, always_load=True,
+            base_weight=2.0, estimated_tokens=50,
         ))
 
         # Budget-Kanaele (gewichtet nach Task-Typ, Pipeline entscheidet)
         self.perception_pipeline.register_channel(PerceptionChannel(
             name="sequence_memory", builder=self._ch_sequence_memory,
-            base_weight=1.0, estimated_tokens=400,
+            base_weight=1.0, estimated_tokens=250,
         ))
         self.perception_pipeline.register_channel(PerceptionChannel(
             name="live_notes", builder=self._ch_live_notes,
@@ -768,7 +768,7 @@ class ConsciousnessEngine:
         ))
         self.perception_pipeline.register_channel(PerceptionChannel(
             name="goal_context", builder=self._ch_goal_context,
-            base_weight=1.0, estimated_tokens=400,
+            base_weight=1.0, estimated_tokens=250,
         ))
         self.perception_pipeline.register_channel(PerceptionChannel(
             name="proactive_context", builder=self._ch_proactive_context,
@@ -776,7 +776,7 @@ class ConsciousnessEngine:
         ))
         self.perception_pipeline.register_channel(PerceptionChannel(
             name="projects_list", builder=self._ch_projects_list,
-            base_weight=0.4, estimated_tokens=500,
+            base_weight=0.4, estimated_tokens=250,
         ))
         self.perception_pipeline.register_channel(PerceptionChannel(
             name="filesystem", builder=self._ch_filesystem,
@@ -792,7 +792,7 @@ class ConsciousnessEngine:
         ))
         self.perception_pipeline.register_channel(PerceptionChannel(
             name="unified_memory", builder=self._ch_unified_memory,
-            base_weight=0.6, estimated_tokens=500,
+            base_weight=0.6, estimated_tokens=300,
         ))
         self.perception_pipeline.register_channel(PerceptionChannel(
             name="composition", builder=self._ch_composition,
@@ -1205,11 +1205,11 @@ SEQUENZ-PLANUNG: Nutze write_sequence_plan am Anfang — plane dein Ziel, Exit-K
             entries = data.get("entries", [])
             if not entries:
                 return ""
-            # Letzte 3 Zusammenfassungen als Kontext
-            recent = entries[-3:]
+            # Letzte 2 Zusammenfassungen als Kontext (Token-Effizienz)
+            recent = entries[-2:]
             lines = ["KONTEXT AUS VORHERIGEN SEQUENZEN:"]
             for entry in recent:
-                line = f"  [Seq {entry.get('seq', '?')}] {entry.get('summary', '')[:300]}"
+                line = f"  [Seq {entry.get('seq', '?')}] {entry.get('summary', '')[:200]}"
                 files = entry.get("files_written", [])
                 if files:
                     line += f" | Dateien: {', '.join(files[-5:])}"
@@ -1386,11 +1386,11 @@ SEQUENZ-PLANUNG: Nutze write_sequence_plan am Anfang — plane dein Ziel, Exit-K
             lines = [f"GOAL-KONTEXT (Seq {anchor.get('last_sequence', '?')}):"]
 
             if anchor.get("last_summary"):
-                lines.append(f"  Letzter Stand: {anchor['last_summary'][:200]}")
+                lines.append(f"  Letzter Stand: {anchor['last_summary'][:150]}")
 
             files = anchor.get("accumulated_files", [])
             if files:
-                lines.append(f"  Existierende Dateien: {', '.join(files[:10])}")
+                lines.append(f"  Existierende Dateien: {', '.join(files[:5])}")
 
             if anchor.get("project_name"):
                 lines.append(f"  Projekt: projects/{anchor['project_name']}/")
@@ -1429,7 +1429,7 @@ SEQUENZ-PLANUNG: Nutze write_sequence_plan am Anfang — plane dein Ziel, Exit-K
         if wm_path.exists():
             try:
                 content = wm_path.read_text(encoding="utf-8")
-                return content[:2000]  # Max 2000 Zeichen
+                return content[:800]  # Max 800 Zeichen (Token-Effizienz)
             except (OSError, UnicodeDecodeError):
                 pass
         return ""
@@ -1612,16 +1612,16 @@ SEQUENZ-PLANUNG: Nutze write_sequence_plan am Anfang — plane dein Ziel, Exit-K
                         existing = []
 
                     if existing:
-                        proj_list = ", ".join(d.name for d in existing[:10])
+                        proj_list = ", ".join(d.name for d in existing[:5])
                         hint = "EXISTIERENDE PROJEKTE: " + proj_list
-                        if len(existing) > 10:
-                            hint += f" (+{len(existing) - 10} weitere)"
+                        if len(existing) > 5:
+                            hint += f" (+{len(existing) - 5} weitere)"
                         hint += " | HINWEIS: Erstelle KEIN neues Projekt wenn ein passendes existiert!"
                         hint += " Nutze read_file/write_file um am bestehenden Projekt weiterzuarbeiten."
                         cache["hint"] = hint
 
                         _SKIP_EXT = frozenset((".pyc", ".pyo", ".tmp", ".bak"))
-                        for proj_dir in existing[:2]:
+                        for proj_dir in existing[:1]:
                             try:
                                 files = sorted(
                                     f.name for f in proj_dir.iterdir()
@@ -1677,7 +1677,7 @@ SEQUENZ-PLANUNG: Nutze write_sequence_plan am Anfang — plane dein Ziel, Exit-K
         focus_cache_key = focus.split("[")[0].strip() if focus else ""
         _mem_cache = getattr(self, "_memory_cache", {})
         if _mem_cache.get("key") != focus_cache_key or not _mem_cache.get("result"):
-            unified_context = self.unified_memory.get_context_for(focus, max_tokens=1000)
+            unified_context = self.unified_memory.get_context_for(focus, max_tokens=600)
             self._memory_cache = {"key": focus_cache_key, "result": unified_context}
         else:
             unified_context = _mem_cache["result"]
@@ -1791,7 +1791,7 @@ SEQUENZ-PLANUNG: Nutze write_sequence_plan am Anfang — plane dein Ziel, Exit-K
         self._last_task_type = task_type
 
         return self.perception_pipeline.build(
-            task_type=task_type, token_budget=8000,
+            task_type=task_type,
         )
 
     # === Tool-Ausfuehrung ===

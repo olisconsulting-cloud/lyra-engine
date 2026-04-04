@@ -43,13 +43,12 @@ python review_phi.py         # Regressions-Gate (14 Checks)
 ```
 
 ## LLM-Aufstellung
-- **Gemma 4 31B** (Google AI Studio): 80% — Hauptarbeit, Reasoning, Coding, Vision ($0.14/$0.40)
-- **Kimi K2.5** (NVIDIA): Fallback Stufe 1 — bewaehrt ($0)
-- **GPT-4.1-mini**: Dream — JSON-Garantie ($0.40/$1.60)
-- **DeepSeek V3**: Fallback Stufe 2 ($0.28/$0.42)
-- **Sonnet 4.6**: Letzter Fallback
+- **DeepSeek V3.2**: 80% — Primary, Coding, Tool-Use ($0.14/$0.28, Cache $0.028)
+- **Kimi K2.5** (NVIDIA): Fallback Stufe 1 — bewaehrt ($0, Credit-basiert)
+- **GPT-4.1-mini**: Fallback Stufe 2 + Dream — JSON-Garantie ($0.40/$1.60)
+- **Sonnet 4.6**: Letzter Fallback — nativer Tool-Use
 - **Opus 4.6**: Audit, Result-Validation — keine Abstriche
-- Fallback-Kette: Kimi → DeepSeek → GPT-4.1-mini → Sonnet
+- Fallback-Kette: Kimi → GPT-4.1-mini → Sonnet
 - `TASK_MODEL_MAP` in `llm_router.py` = EINZIGE Stelle fuer Modell-Zuordnung
 
 ## AGI-Kern: 5 Saeulen

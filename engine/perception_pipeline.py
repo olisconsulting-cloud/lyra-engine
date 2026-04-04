@@ -18,7 +18,7 @@ from .config import safe_json_read, safe_json_write
 logger = logging.getLogger(__name__)
 
 # Kanaele die IMMER geladen werden, unabhaengig von Gewichtung
-ALWAYS_LOAD = frozenset({"inbox", "focus", "working_memory", "time", "rhythm", "planning"})
+ALWAYS_LOAD = frozenset({"focus", "working_memory", "time", "planning"})
 
 # Default-Gewichte pro Task-Typ (Basis wenn keine gelernten vorhanden)
 # Keys muessen mit den registrierten Channel-Namen uebereinstimmen
@@ -29,6 +29,7 @@ DEFAULT_TASK_WEIGHTS: dict[str, dict[str, float]] = {
         "filesystem": 0.3, "file_changes": 0.3,
         "efficiency_alerts": 0.2, "checkpoint": 0.5,
         "composition": 0.4, "tasks": 0.4, "kpi": 0.3,
+        "inbox": 2.5, "rhythm": 2.0, "security_lessons": 2.0,
     },
     "projekt": {
         "sequence_memory": 1.0, "live_notes": 1.0, "goal_context": 1.2,
@@ -36,6 +37,7 @@ DEFAULT_TASK_WEIGHTS: dict[str, dict[str, float]] = {
         "filesystem": 0.5, "file_changes": 0.6,
         "efficiency_alerts": 0.3, "checkpoint": 1.0,
         "composition": 0.6, "tasks": 0.3, "kpi": 0.2,
+        "inbox": 2.5, "rhythm": 2.0, "security_lessons": 2.0,
     },
     "recherche": {
         "sequence_memory": 1.0, "live_notes": 0.5, "goal_context": 0.7,
@@ -43,6 +45,7 @@ DEFAULT_TASK_WEIGHTS: dict[str, dict[str, float]] = {
         "filesystem": 0.2, "file_changes": 0.1,
         "efficiency_alerts": 0.1, "checkpoint": 0.3,
         "composition": 0.3, "tasks": 0.3, "kpi": 0.2,
+        "inbox": 2.5, "rhythm": 2.0, "security_lessons": 2.0,
     },
     "evolution": {
         "sequence_memory": 1.0, "live_notes": 0.5, "goal_context": 0.8,
@@ -50,6 +53,7 @@ DEFAULT_TASK_WEIGHTS: dict[str, dict[str, float]] = {
         "filesystem": 0.8, "file_changes": 0.5,
         "efficiency_alerts": 0.8, "checkpoint": 0.5,
         "composition": 0.5, "tasks": 0.4, "kpi": 0.5,
+        "inbox": 2.5, "rhythm": 2.0, "security_lessons": 2.0,
     },
 }
 
@@ -127,7 +131,9 @@ class PerceptionPipeline:
                 content = ch.builder()
                 if content and content.strip():
                     parts.append(content)
-                    used_tokens += ch.estimated_tokens
+                    # Tatsaechliche Token-Kosten statt Estimates
+                    actual_tokens = max(len(content) // 4, 10)
+                    used_tokens += actual_tokens
                     self._last_active_channels.append(ch.name)
             except Exception as e:
                 logger.warning(f"PerceptionPipeline: Kanal '{ch.name}' fehlgeschlagen: {e}")
