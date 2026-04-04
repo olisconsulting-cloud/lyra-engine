@@ -17,6 +17,7 @@ Jedes Projekt hier veraendert nicht WAS Phi tut, sondern WIE Phi denkt, lernt un
 | [perception/](perception/) | Hybride Intelligenz | Geplant | Hoechster Effizienz-Effekt |
 | [telos/](telos/) | Hybride Intelligenz | Phase 1 teilweise | Zweck-geleitete Goals |
 | [unified-memory/](unified-memory/) | Multi-Memory | Baselines gemessen | 5 Systeme vereinen |
+| [competitive-intel/](competitive-intel/) | Alle Saeulen | **Neu** | Best Practices aus Hermes + OpenClaw |
 
 ## Abhaengigkeiten
 
@@ -27,7 +28,7 @@ enforcement ──→ dream-goals ──→ perception
     │                └── Braucht: Enforcement aktiv (sonst ignoriert Phi die Goals)
     └── Keine Abhaengigkeit (sofort umsetzbar)
 
-telos + unified-memory + tool-intelligence: Unabhaengig, koennen parallel laufen
+telos + unified-memory + tool-intelligence + competitive-intel: Unabhaengig, parallel
 ```
 
 ## Prinzipien (gelten fuer ALLE Projekte)
