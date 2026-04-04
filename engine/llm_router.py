@@ -155,7 +155,7 @@ class ProviderHealth:
         # Erfolg zwischen Timeouts reicht nicht fuer stabile Nutzung)
         self._session_timeouts = 0
         self._session_calls = 0
-        self._TIMEOUT_PRONE_THRESHOLD = 3  # Ab 3 Timeouts gilt Provider als instabil
+        self._TIMEOUT_PRONE_THRESHOLD = 1  # Ab 1 Timeout → Skip (spart 2x90s pro Sequenz)
 
     def record_success(self):
         """Provider hat erfolgreich geantwortet."""
@@ -389,11 +389,13 @@ class LLMRouter:
         provider = MODELS.get(model_key, {}).get("provider", "")
         health = self.provider_health.get(provider)
 
-        # Provider im Cooldown oder Dead? → Direkt Fallback
-        if health and not health.is_available():
+        # Provider im Cooldown, Dead oder timeout-anfaellig? → Direkt Fallback
+        # Timeout-prone Skip spart 2x90s Wartezeit pro Sequenz bei instabilem NVIDIA
+        if health and (not health.is_available() or health.is_timeout_prone()):
+            reason = health.state if not health.is_available() else f"timeout-prone ({health._session_timeouts}x)"
             logger.info(
                 "Provider %s nicht verfuegbar (%s) → Fallback-Kette",
-                provider, health.state,
+                provider, reason,
             )
             return self._fallback_call(
                 system, messages, tools, max_tokens,

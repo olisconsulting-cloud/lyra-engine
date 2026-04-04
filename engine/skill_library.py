@@ -133,7 +133,8 @@ class SkillLibrary:
 
     def extract_from_sequence(self, plan_goal: str, plan_score: int,
                                summary: str, tool_sequence: list,
-                               goal_type: str, rating: int) -> Optional[str]:
+                               goal_type: str, rating: int,
+                               enrich_callback=None) -> Optional[str]:
         """Extrahiert einen Skill aus einer erfolgreichen Sequenz.
 
         Nur bei Plan-Score >= 5 UND Rating >= 5 (Qualitaets-Gate).
@@ -145,6 +146,7 @@ class SkillLibrary:
             tool_sequence: Welche Tools in welcher Reihenfolge?
             goal_type: Typ des Goals (recherche, tool_building, etc.)
             rating: Phi's Selbstbewertung (1-10)
+            enrich_callback: Optional f(skill, focus) -> skill fuer Cross-System-Anreicherung.
 
         Returns:
             Skill-ID oder None wenn Qualitaets-Gate nicht bestanden.
@@ -189,6 +191,10 @@ class SkillLibrary:
             "avg_rating": rating,
             "last_used": datetime.now(timezone.utc).isoformat(),
         }
+
+        # Cross-System-Anreicherung (z.B. anti_patterns aus FailureMemory)
+        if enrich_callback:
+            skill = enrich_callback(skill, plan_goal)
 
         self.index["skills"].append(skill)
         self.index["total_extracted"] = self.index.get("total_extracted", 0) + 1
@@ -303,16 +309,45 @@ class SkillLibrary:
             key=lambda s: s.get("avg_score", 0) * min(s.get("success_count", 1), 5)
         )
 
-    def build_skill_prompt(self, goal_type: str) -> str:
+    # Stopwords fuer semantischen Wort-Overlap (de + en)
+    _STOPWORDS = frozenset({
+        "und", "oder", "der", "die", "das", "ein", "eine", "ist", "mit",
+        "von", "zu", "auf", "in", "fuer", "den", "dem", "des", "nicht",
+        "the", "and", "for", "this", "that", "with", "from", "into",
+    })
+
+    def build_skill_prompt(self, goal_type: str, focus: str = "") -> str:
         """Baut einen Prompt-Abschnitt mit dem besten Skill fuer den Goal-Typ.
+
+        Args:
+            goal_type: Klassifizierter Goal-Typ.
+            focus: Aktueller Goal-Focus fuer semantischen Fallback.
 
         Returns:
             Prompt-Text oder leerer String.
         """
         skill = self.get_best_skill(goal_type)
 
-        # Transfer-Learning: Kein Skill fuer diesen Typ? Besten ueber alle Typen nehmen.
         is_transfer = False
+        is_semantic = False
+
+        # Semantischer Fallback: Wort-Overlap zwischen Focus und plan_goals
+        if not skill and focus:
+            all_skills = self.index.get("skills", [])
+            focus_words = set(focus.lower().split()) - self._STOPWORDS
+            if focus_words and all_skills:
+                scored = []
+                for s in all_skills:
+                    plan_words = set(s.get("plan_goal", "").lower().split()) - self._STOPWORDS
+                    overlap = len(focus_words & plan_words)
+                    if overlap >= 2:
+                        scored.append((overlap, s.get("avg_score", 0), s))
+                if scored:
+                    scored.sort(key=lambda x: (-x[0], -x[1]))
+                    skill = scored[0][2]
+                    is_semantic = True
+
+        # Transfer-Learning: Kein Skill per Typ oder Semantik? Besten ueber alle Typen.
         if not skill:
             all_skills = self.index.get("skills", [])
             candidates = [s for s in all_skills if s.get("success_count", 0) >= 3]
@@ -326,8 +361,16 @@ class SkillLibrary:
 
         steps = skill.get("abstract_steps", [])
         steps_text = " → ".join(steps) if steps else "keine Schritte"
-        prefix = "TRANSFER-MUSTER" if is_transfer else "BEWAEHRTES VORGEHEN"
-        source = skill.get("goal_type", "?") if is_transfer else goal_type
+        if is_transfer:
+            prefix = "TRANSFER-MUSTER"
+        elif is_semantic:
+            prefix = "AEHNLICHES VORGEHEN"
+        else:
+            prefix = "BEWAEHRTES VORGEHEN"
+        source = skill.get("goal_type", "?") if (is_transfer or is_semantic) else goal_type
+
+        anti = skill.get("anti_patterns", "")
+        anti_line = f"\n  WARNUNG: {anti[:150]}" if anti else ""
 
         return (
             f"\n{prefix} (aus {skill.get('success_count', 1)} Erfolgen):\n"
@@ -336,6 +379,7 @@ class SkillLibrary:
             f"  Beispiel: {skill.get('plan_goal', '')[:100]}\n"
             f"  Score: {skill.get('avg_score', '?')}/10\n"
             f"  Dies ist ein VORSCHLAG — passe ihn an die aktuelle Aufgabe an."
+            f"{anti_line}"
         )
 
     # === Skill-Konsolidierung ===

@@ -62,6 +62,7 @@ from .unified_memory import (
     UnifiedMemory, MemoryHit, semantic_adapter, experience_adapter,
     failure_adapter, strategy_adapter,
 )
+from .skill_enricher import SkillEnricher
 from .sequence_runner import SequenceRunner
 # SequenceFinisher entfernt — Logik bleibt in _handle_finish_sequence
 from . import config
@@ -662,6 +663,7 @@ class ConsciousnessEngine:
         from .sequence_intelligence import SequenceIntelligence
         self.seq_intel = SequenceIntelligence(self.consciousness_path)
         self.skill_library = SkillLibrary(config.DATA_PATH)
+        self.skill_enricher = SkillEnricher(self.failure_memory)
         self.proactive_learner = ProactiveLearner(config.DATA_PATH)
 
         # Tool-Lifecycle: Module die seq_intel brauchen
@@ -709,7 +711,7 @@ class ConsciousnessEngine:
         _sem = self.semantic_memory
         def _skill_adapter_with_classify(skill_lib, query, top_k):
             goal_type = _sem.classify_goal_type(query)
-            prompt = skill_lib.build_skill_prompt(goal_type)
+            prompt = skill_lib.build_skill_prompt(goal_type, focus=query)
             if prompt and prompt.strip():
                 return [MemoryHit(source="skill", content=prompt[:400], score=0.7)]
             return []
@@ -1759,7 +1761,7 @@ SEQUENZ-PLANUNG: Nutze write_sequence_plan am Anfang — plane dein Ziel, Exit-K
         # Baseline-Tracking (kein Perception-Output, nur Metriken)
         focus = self.goal_stack.get_current_focus()
         goal_type = self.semantic_memory.classify_goal_type(focus)
-        skill_prompt = self.skill_library.build_skill_prompt(goal_type)
+        skill_prompt = self.skill_library.build_skill_prompt(goal_type, focus=focus)
         self._track_baseline("skill_hit", 1 if skill_prompt else 0, goal_type)
         failure_check = self.failure_memory.check(focus)
         self._track_baseline("fm_match", 1 if failure_check else 0)
@@ -2321,6 +2323,7 @@ SEQUENZ-PLANUNG: Nutze write_sequence_plan am Anfang — plane dein Ziel, Exit-K
             tool_sequence=m.tool_sequence,
             goal_type=goal_type,
             rating=rating,
+            enrich_callback=self.skill_enricher.enrich,
         )
         if skill_id:
             self.narrator.skill_extracted(skill_id)
