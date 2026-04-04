@@ -113,6 +113,10 @@ class FailureMemory:
             return ""
 
         for failure in self.failures:
+            # Nur echte Failures matchen (Successes haben kein error/lesson)
+            if failure.get("type") == "success":
+                continue
+
             # Match 1: Tool-Name im Ziel enthalten
             approach = failure.get("approach", "").lower()
             if approach and approach in goal_lower:

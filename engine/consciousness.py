@@ -709,9 +709,10 @@ class ConsciousnessEngine:
         # Skill-Adapter als Closure: classify_goal_type wandelt Focus→Kategorie
         # (der Modul-Adapter uebergibt focus direkt — findet nie Skills)
         _sem = self.semantic_memory
+        _fm = self.failure_memory
         def _skill_adapter_with_classify(skill_lib, query, top_k):
             goal_type = _sem.classify_goal_type(query)
-            prompt = skill_lib.build_skill_prompt(goal_type, focus=query)
+            prompt = skill_lib.build_skill_prompt(goal_type, focus=query, failure_checker=_fm.check)
             if prompt and prompt.strip():
                 return [MemoryHit(source="skill", content=prompt[:400], score=0.7)]
             return []
@@ -1761,7 +1762,9 @@ SEQUENZ-PLANUNG: Nutze write_sequence_plan am Anfang — plane dein Ziel, Exit-K
         # Baseline-Tracking (kein Perception-Output, nur Metriken)
         focus = self.goal_stack.get_current_focus()
         goal_type = self.semantic_memory.classify_goal_type(focus)
-        skill_prompt = self.skill_library.build_skill_prompt(goal_type, focus=focus)
+        skill_prompt = self.skill_library.build_skill_prompt(
+            goal_type, focus=focus, failure_checker=self.failure_memory.check,
+        )
         self._track_baseline("skill_hit", 1 if skill_prompt else 0, goal_type)
         failure_check = self.failure_memory.check(focus)
         self._track_baseline("fm_match", 1 if failure_check else 0)

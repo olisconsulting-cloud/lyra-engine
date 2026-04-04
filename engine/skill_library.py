@@ -316,12 +316,14 @@ class SkillLibrary:
         "the", "and", "for", "this", "that", "with", "from", "into",
     })
 
-    def build_skill_prompt(self, goal_type: str, focus: str = "") -> str:
+    def build_skill_prompt(self, goal_type: str, focus: str = "",
+                            failure_checker=None) -> str:
         """Baut einen Prompt-Abschnitt mit dem besten Skill fuer den Goal-Typ.
 
         Args:
             goal_type: Klassifizierter Goal-Typ.
             focus: Aktueller Goal-Focus fuer semantischen Fallback.
+            failure_checker: Optional f(focus) -> str fuer LIVE anti_patterns.
 
         Returns:
             Prompt-Text oder leerer String.
@@ -331,7 +333,7 @@ class SkillLibrary:
         is_transfer = False
         is_semantic = False
 
-        # Semantischer Fallback: Wort-Overlap zwischen Focus und plan_goals
+        # Semantischer Fallback: Jaccard-Overlap zwischen Focus und plan_goals
         if not skill and focus:
             all_skills = self.index.get("skills", [])
             focus_words = set(focus.lower().split()) - self._STOPWORDS
@@ -339,9 +341,13 @@ class SkillLibrary:
                 scored = []
                 for s in all_skills:
                     plan_words = set(s.get("plan_goal", "").lower().split()) - self._STOPWORDS
+                    if not plan_words:
+                        continue
                     overlap = len(focus_words & plan_words)
-                    if overlap >= 2:
-                        scored.append((overlap, s.get("avg_score", 0), s))
+                    union = len(focus_words | plan_words)
+                    jaccard = overlap / union if union else 0.0
+                    if jaccard >= 0.15 and overlap >= 2:
+                        scored.append((jaccard, s.get("avg_score", 0), s))
                 if scored:
                     scored.sort(key=lambda x: (-x[0], -x[1]))
                     skill = scored[0][2]
@@ -369,8 +375,16 @@ class SkillLibrary:
             prefix = "BEWAEHRTES VORGEHEN"
         source = skill.get("goal_type", "?") if (is_transfer or is_semantic) else goal_type
 
-        anti = skill.get("anti_patterns", "")
-        anti_line = f"\n  WARNUNG: {anti[:150]}" if anti else ""
+        # LIVE anti_patterns aus FailureMemory (aktuell) > gespeicherter Snapshot (Fallback)
+        anti = ""
+        if failure_checker and focus:
+            try:
+                anti = failure_checker(focus)
+            except Exception:
+                anti = skill.get("anti_patterns", "")
+        if not anti:
+            anti = skill.get("anti_patterns", "")
+        anti_line = f"\n  WARNUNG: {anti[:400]}" if anti else ""
 
         return (
             f"\n{prefix} (aus {skill.get('success_count', 1)} Erfolgen):\n"

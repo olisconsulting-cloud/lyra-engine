@@ -28,10 +28,10 @@
    Done: proactive_learner.py:117 geaendert, review_phi.py gruen
 
 7. **UM-Q2** — Skill-Extraktion: FailureMemory-Lektionen als anti_patterns einbetten
-   Done: SkillEnricher Modul erstellt, in consciousness.py verdrahtet
+   Done: engine/skill_enricher.py erstellt, enrich_callback in extract_from_sequence, anti_patterns in build_skill_prompt
 
 8. **UM-Q3** — Skill-Retrieval: Semantische Suche zusaetzlich zu goal_type
-   Done: build_skill_prompt() nutzt TF-IDF aus SemanticMemory als Fallback
+   Done: build_skill_prompt() nutzt Wort-Overlap auf plan_goals als Fallback vor Transfer-Learning
 
 9. **UM-Q4** — Baselines NACH Quick Wins erneut messen (gleiche 5 Metriken)
    Done: Phase-1-Spalte in BASELINES.md befuellt, Vergleich dokumentiert
