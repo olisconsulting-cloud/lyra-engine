@@ -136,7 +136,7 @@ class SkillLibrary:
                                goal_type: str, rating: int) -> Optional[str]:
         """Extrahiert einen Skill aus einer erfolgreichen Sequenz.
 
-        Nur bei Plan-Score >= 7 UND Rating >= 7 (Qualitaets-Gate).
+        Nur bei Plan-Score >= 5 UND Rating >= 5 (Qualitaets-Gate).
 
         Args:
             plan_goal: Was war das Ziel?
@@ -463,17 +463,38 @@ class SkillLibrary:
         """Feedback von einem promoted Tool zurueck in den Quell-Skill.
 
         Schliesst den Lernkreislauf: Skill → Tool → Ergebnis → Skill.
+        Bei >50% Fehlerrate (ab 5 Calls) wird die Promotion zurueckgezogen.
         """
         for skill in self.index.get("skills", []):
             if skill.get("promoted_to_tool") == tool_name:
                 key = "tool_successes" if success else "tool_failures"
                 skill[key] = skill.get(key, 0) + 1
+
+                # Degradation: Zu viele Fehler → Promotion zurueckziehen
+                successes = skill.get("tool_successes", 0)
+                failures = skill.get("tool_failures", 0)
+                total = successes + failures
+                if total >= 5 and failures / total > 0.5:
+                    logger.warning(
+                        "Skill-Degradation: %s hat %d/%d Fehler — "
+                        "Promotion von '%s' zurueckgezogen",
+                        skill["id"], failures, total, tool_name,
+                    )
+                    del skill["promoted_to_tool"]
+                    if "promoted_at" in skill:
+                        del skill["promoted_at"]
+                    # Score reduzieren (Strafe fuer gescheitertes Tool)
+                    skill["avg_score"] = round(
+                        max(1.0, skill.get("avg_score", 5) * 0.8), 1,
+                    )
+
                 self._save_index()
                 logger.info(
                     "Skill-Feedback: %s → %s (%s)",
                     tool_name, skill["id"], "OK" if success else "FEHLER",
                 )
                 return
+        logger.warning("record_tool_feedback: kein Skill fuer Tool '%s'", tool_name)
 
     def get_stats(self) -> dict:
         """Statistiken ueber die Skill-Library."""
