@@ -61,8 +61,8 @@ class PromotionEngine:
             try:
                 with open(self.promotions_path, "r", encoding="utf-8") as f:
                     return json.load(f)
-            except (json.JSONDecodeError, ValueError):
-                pass
+            except (json.JSONDecodeError, ValueError) as e:
+                logger.error(f"promotions.json korrupt: {e} — starte mit leeren Daten")
         return {"pending": [], "promoted": [], "rejected": []}
 
     def _save(self) -> None:

@@ -41,7 +41,7 @@ def handle_create_tool(ctx: ToolContext, tool_input: dict) -> str:
         result += f"\n{composition_hint}"
 
     # Tool-Lifecycle: Version-Sprawl pruefen
-    if ctx.tool_meta_patterns and not result.startswith("FEHLER"):
+    if ctx.tool_meta_patterns and isinstance(result, str) and not result.startswith("FEHLER"):
         try:
             ctx.tool_meta_patterns.check_version_sprawl(
                 name, ctx.toolchain.registry.get("tools", {})

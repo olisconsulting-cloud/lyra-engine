@@ -29,6 +29,16 @@ VOLUME_SATURATION = 20
 # Max gespeicherte Fehlergruende pro Tool
 MAX_FAILURE_REASONS = 10
 
+# Sliding Window fuer Stability (letzte N Calls)
+STABILITY_WINDOW = 10
+
+# Health Minimum-Gates (non-linear)
+HEALTH_GATE_LOW_SR = 0.3    # Unter 30% → max Health 3.0
+HEALTH_GATE_DEAD_SR = 0.1   # Unter 10% → max Health 1.0
+
+# Max Goal-Kontexte pro Tool
+MAX_GOAL_CONTEXTS = 20
+
 
 class ToolMetrics:
     """Qualitaetsmetriken fuer Phis selbstgebaute Tools."""
@@ -78,6 +88,8 @@ class ToolMetrics:
                 "last_used": now,
                 "last_success": None,
                 "failure_reasons": [],
+                "recent_calls": [],
+                "goal_contexts": {},
                 "health_score": 5.0,
             }
 
@@ -85,17 +97,31 @@ class ToolMetrics:
         entry["total_calls"] += 1
         entry["last_used"] = now
 
+        # Sliding Window: letzte N Calls (True/False)
+        recent = entry.get("recent_calls", [])
+        recent.append(success)
+        entry["recent_calls"] = recent[-STABILITY_WINDOW:]
+
         if success:
             entry["successes"] += 1
             entry["last_success"] = now
         else:
             entry["failures"] += 1
             if error:
-                # Nur erste 200 Zeichen, max 10 Gruende behalten
                 short_error = error[:200]
                 reasons = entry.get("failure_reasons", [])
                 reasons.append(short_error)
                 entry["failure_reasons"] = reasons[-MAX_FAILURE_REASONS:]
+
+        # Goal-Context tracken (welche Ziele nutzen dieses Tool?)
+        if goal_context:
+            contexts = entry.get("goal_contexts", {})
+            contexts[goal_context] = contexts.get(goal_context, 0) + 1
+            # Max Kontexte begrenzen (aelteste entfernen)
+            if len(contexts) > MAX_GOAL_CONTEXTS:
+                least_used = min(contexts, key=contexts.get)
+                del contexts[least_used]
+            entry["goal_contexts"] = contexts
 
         # Success-Rate aktualisieren
         total = entry["total_calls"]
@@ -109,15 +135,22 @@ class ToolMetrics:
     # === Health-Score ===
 
     def _compute_health(self, entry: dict) -> float:
-        """Berechnet Health-Score (0-10) aus 4 Faktoren.
+        """Berechnet Health-Score (0-10) aus 4 Faktoren + Minimum-Gate.
 
-        - Success-Rate (40%): Anteil erfolgreicher Aufrufe
+        Faktoren:
+        - Success-Rate (40%): Anteil erfolgreicher Aufrufe (gesamt)
         - Recency (30%): Exponentieller Decay seit letzter Nutzung
         - Volume (20%): Nutzungshaeufigkeit (saturiert bei VOLUME_SATURATION)
-        - Stability (10%): Keine Failures in letzten 5 Calls
+        - Stability (10%): Success-Rate der letzten N Calls (Sliding Window)
+
+        Minimum-Gate (non-linear):
+        - success_rate < 10% → max Health 1.0
+        - success_rate < 30% → max Health 3.0
         """
+        success_rate = entry.get("success_rate", 0.0)
+
         # Success-Rate: 0-10
-        sr = entry.get("success_rate", 0.0) * 10
+        sr = success_rate * 10
 
         # Recency: exponentieller Decay
         last_used = entry.get("last_used")
@@ -127,7 +160,7 @@ class ToolMetrics:
                 days_ago = (datetime.now(timezone.utc) - last_dt).total_seconds() / 86400
                 recency = max(0.0, 10.0 * (0.5 ** (days_ago / RECENCY_HALFLIFE_DAYS)))
             except (ValueError, TypeError):
-                recency = 5.0
+                recency = 0.0
         else:
             recency = 0.0
 
@@ -135,11 +168,13 @@ class ToolMetrics:
         total = entry.get("total_calls", 0)
         volume = min(10.0, (total / VOLUME_SATURATION) * 10.0)
 
-        # Stability: Keine Failures in letzten Calls
-        failures = entry.get("failures", 0)
-        successes = entry.get("successes", 0)
-        recent_failure_ratio = failures / max(1, failures + successes)
-        stability = 10.0 * (1.0 - recent_failure_ratio)
+        # Stability: Sliding Window (letzte N Calls)
+        recent_calls = entry.get("recent_calls", [])
+        if recent_calls:
+            recent_successes = sum(1 for c in recent_calls if c)
+            stability = 10.0 * (recent_successes / len(recent_calls))
+        else:
+            stability = 5.0  # Unbekannt = neutral
 
         score = (
             WEIGHT_SUCCESS_RATE * sr
@@ -148,7 +183,16 @@ class ToolMetrics:
             + WEIGHT_STABILITY * stability
         )
 
-        return round(min(10.0, max(0.0, score)), 1)
+        score = min(10.0, max(0.0, score))
+
+        # Minimum-Gate: Unzuverlaessige Tools deckeln
+        if total >= 5:  # Erst ab 5 Calls greift das Gate
+            if success_rate < HEALTH_GATE_DEAD_SR:
+                score = min(score, 1.0)
+            elif success_rate < HEALTH_GATE_LOW_SR:
+                score = min(score, 3.0)
+
+        return round(score, 1)
 
     def get_health_score(self, tool_name: str) -> float:
         """Gibt Health-Score eines Tools zurueck (0-10)."""

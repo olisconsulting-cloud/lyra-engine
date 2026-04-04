@@ -12,6 +12,7 @@ Jedes Projekt hier veraendert nicht WAS Phi tut, sondern WIE Phi denkt, lernt un
 | Projekt | AGI-Saeule | Status | Hebel |
 |---------|-----------|--------|-------|
 | [enforcement/](enforcement/) | Meta-Ebene (Flywheel) | **Aktiv** | Hoechster Sofort-Effekt |
+| [tool-intelligence/](tool-intelligence/) | Multi-Memory + Selbstverbesserung | **Aktiv** | Tool-Lifecycle → AGI |
 | [dream-goals/](dream-goals/) | Taktische Ebene (Lernen) | Geplant | Hoechster Langzeit-Effekt |
 | [perception/](perception/) | Hybride Intelligenz | Geplant | Hoechster Effizienz-Effekt |
 | [telos/](telos/) | Hybride Intelligenz | Phase 1 teilweise | Zweck-geleitete Goals |
@@ -26,7 +27,7 @@ enforcement ──→ dream-goals ──→ perception
     │                └── Braucht: Enforcement aktiv (sonst ignoriert Phi die Goals)
     └── Keine Abhaengigkeit (sofort umsetzbar)
 
-telos + unified-memory: Unabhaengig, koennen parallel laufen
+telos + unified-memory + tool-intelligence: Unabhaengig, koennen parallel laufen
 ```
 
 ## Prinzipien (gelten fuer ALLE Projekte)

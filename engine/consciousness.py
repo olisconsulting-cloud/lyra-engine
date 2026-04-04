@@ -2390,8 +2390,26 @@ Antworte als JSON:
                     except Exception as e:
                         logger.warning(f" Memory-Konsolidierung fehlgeschlagen: {e}")
 
-                    # Tool-Lifecycle: Pruning + Konsolidierung + Promotion
+                    # Tool-Lifecycle: Pruning + Konsolidierung + Promotion + Hygiene
                     try:
+                        # Memory-Leak-Praevention: Stale Eintraege bereinigen
+                        active_tools = set(
+                            n for n, i in self.toolchain.registry.get("tools", {}).items()
+                            if i.get("status") != "archived"
+                        )
+                        self.tool_meta_patterns.cleanup_stale_entries(active_tools)
+
+                        # Orphan-Check: Tools die erstellt aber nie benutzt wurden
+                        registry = self.toolchain.registry.get("tools", {})
+                        for tool_name, info in registry.items():
+                            if info.get("status") == "archived":
+                                continue
+                            self.tool_meta_patterns.check_orphan_creation(
+                                tool_name,
+                                info.get("uses", 0),
+                                self._sequences_since_dream + self.sequences_total,
+                            )
+
                         prune_result = self.tool_pruner.auto_prune()
                         if prune_result:
                             result += f" | {prune_result}"

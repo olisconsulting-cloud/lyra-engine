@@ -91,7 +91,8 @@ class ToolPruner:
             # Regel 3: Hohe Fehlerrate
             elif (metric.get("total_calls", 0) >= MIN_CALLS_FOR_RATE
                   and success_rate < LOW_SUCCESS_RATE):
-                reason = f"Success-Rate {success_rate:.0%} bei {metric['total_calls']} Calls"
+                total_calls = metric.get("total_calls", 0)
+                reason = f"Success-Rate {success_rate:.0%} bei {total_calls} Calls"
 
             if reason:
                 candidates.append({

@@ -28,10 +28,27 @@ ORPHAN_SEQUENCES = 10        # Sequenzen ohne Nutzung nach Erstellung
 class ToolMetaPatterns:
     """Erkennt wiederkehrende Tool-Probleme und erzwingt Regeln."""
 
+    # Max Eintraege im Failure-Tracker (Memory-Leak verhindern)
+    MAX_TRACKED_TOOLS = 50
+
     def __init__(self, meta_rules: "MetaRuleEngine"):
         self.meta_rules = meta_rules
-        # Zaehler fuer konsekutive Failures pro Tool
+        # Zaehler fuer konsekutive Failures pro Tool (begrenzt)
         self._consecutive_failures: dict[str, int] = {}
+
+    def cleanup_stale_entries(self, active_tools: set[str]) -> None:
+        """Entfernt Failure-Eintraege fuer nicht mehr existierende Tools."""
+        stale = set(self._consecutive_failures.keys()) - active_tools
+        for name in stale:
+            del self._consecutive_failures[name]
+        # Hard-Limit: Wenn trotzdem zu viele, aelteste entfernen
+        if len(self._consecutive_failures) > self.MAX_TRACKED_TOOLS:
+            # Tools mit 0 Failures zuerst entfernen
+            zeros = [k for k, v in self._consecutive_failures.items() if v == 0]
+            for k in zeros:
+                del self._consecutive_failures[k]
+                if len(self._consecutive_failures) <= self.MAX_TRACKED_TOOLS:
+                    break
 
     def check_version_sprawl(self, new_tool_name: str,
                               existing_tools: dict) -> None:
