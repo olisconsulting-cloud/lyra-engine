@@ -101,11 +101,13 @@ TOOLS = [
     },
     {
         "name": "read_file",
-        "description": "Liest eine Datei aus deinem Ordner.",
+        "description": "Liest eine Datei aus deinem Ordner. Bei grossen Dateien: offset/max_chars nutzen.",
         "input_schema": {
             "type": "object",
             "properties": {
                 "path": {"type": "string", "description": "Relativer Pfad"},
+                "offset": {"type": "integer", "description": "Start-Position in Zeichen (default: 0)", "default": 0},
+                "max_chars": {"type": "integer", "description": "Max. Zeichen zu lesen (default: 8000)", "default": 8000},
             },
             "required": ["path"],
         },
@@ -744,6 +746,12 @@ class ConsciousnessEngine:
         self.perception_pipeline.register_channel(PerceptionChannel(
             name="planning", builder=self._ch_planning,
             base_weight=1.0, estimated_tokens=400, always_load=True,
+        ))
+
+        # Security-Lektionen — leichtgewichtig, verhindert wiederholte Security-Blocks
+        self.perception_pipeline.register_channel(PerceptionChannel(
+            name="security_lessons", builder=self._ch_security_lessons,
+            base_weight=1.0, estimated_tokens=50, always_load=True,
         ))
 
         # Budget-Kanaele (gewichtet nach Task-Typ, Pipeline entscheidet)
@@ -1720,6 +1728,10 @@ SEQUENZ-PLANUNG: Nutze write_sequence_plan am Anfang — plane dein Ziel, Exit-K
         working_memory = self._pstate.get("working_memory", "")
         plan_history = self.seq_intel.get_plan_history()
         return self.seq_intel.build_planning_prompt(focus, working_memory, plan_history) or ""
+
+    def _ch_security_lessons(self) -> str:
+        """Security-Block-Warnungen aus FailureMemory."""
+        return self.failure_memory.get_security_lessons()
 
     # === Wahrnehmung ===
 

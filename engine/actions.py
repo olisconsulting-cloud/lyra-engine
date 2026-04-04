@@ -135,8 +135,8 @@ class ActionEngine:
 
         return f"{target}{warnings}"
 
-    def read_file(self, relative_path: str) -> str:
-        """Liest eine Datei."""
+    def read_file(self, relative_path: str, offset: int = 0, max_chars: int = 8000) -> str:
+        """Liest eine Datei (optional ab offset, max max_chars Zeichen)."""
         target = (self.base_path / relative_path).resolve()
         if not target.is_relative_to(self.base_path.resolve()):
             return "FEHLER: Darf nur in meinem eigenen Ordner lesen."
@@ -150,8 +150,22 @@ class ActionEngine:
 
         try:
             content = target.read_text(encoding="utf-8")
-            if len(content) > 5000:
-                return content[:5000] + f"\n\n[... GEKUERZT: {len(content)} Zeichen total, nur erste 5000 angezeigt]"
+            total_len = len(content)
+
+            # Offset anwenden
+            if offset > 0:
+                if offset >= total_len:
+                    return f"FEHLER: offset={offset} liegt ausserhalb der Datei ({total_len} Zeichen)."
+                content = content[offset:]
+
+            if len(content) > max_chars:
+                remaining = total_len - offset - max_chars
+                return content[:max_chars] + (
+                    f"\n\n[DATEI GEKUERZT: {total_len} Zeichen total. "
+                    f"Gezeigt: {offset}-{offset + max_chars}. "
+                    f"Nutze read_file(path=\"{relative_path}\", offset={offset + max_chars}) "
+                    f"fuer die naechsten {min(remaining, max_chars)} Zeichen.]"
+                )
             return content
         except Exception as e:
             return f"FEHLER beim Lesen: {e}"

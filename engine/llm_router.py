@@ -320,7 +320,7 @@ class LLMRouter:
         # Getrennte Pools: Primary-Timeout blockiert nicht den Fallback-Pool
         _timeout = httpx.Timeout(
             connect=10.0,   # Verbindung aufbauen: 10s reicht
-            read=120.0,     # Antwort abwarten: 120s (Gemma 4 braucht bei 23K+ Input bis zu 90s)
+            read=90.0,      # Antwort abwarten: 90s (Kimi antwortet meist <60s)
             write=15.0,     # Request senden: 15s
             pool=10.0,      # Connection-Pool: 10s
         )
@@ -853,21 +853,25 @@ class LLMRouter:
             if oai_tools:
                 body["tools"] = oai_tools
 
-        # Ein Versuch reicht — Circuit Breaker uebernimmt bei Failure
-
+        # 2 Versuche mit Backoff (wie DeepSeek/OpenAI)
         resp = None
-        try:
-            resp = self.http_primary.post(
-                "https://integrate.api.nvidia.com/v1/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {self.nvidia_key}",
-                    "Content-Type": "application/json",
-                },
-                json=body,
-            )
-        except (httpx.TimeoutException, httpx.ConnectError) as e:
-            logger.warning("NVIDIA Timeout: %s", e)
-            raise ValueError("NVIDIA API Timeout") from e
+        for attempt in range(2):
+            try:
+                resp = self.http_primary.post(
+                    "https://integrate.api.nvidia.com/v1/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {self.nvidia_key}",
+                        "Content-Type": "application/json",
+                    },
+                    json=body,
+                )
+            except (httpx.TimeoutException, httpx.ConnectError) as e:
+                logger.warning("NVIDIA Timeout (Versuch %d/2): %s", attempt + 1, e)
+                if attempt < 1:
+                    time.sleep(2)
+                    continue
+                raise ValueError("NVIDIA API Timeout nach 2 Versuchen") from e
+            break
 
         if resp.status_code == 429:
             logger.warning("NVIDIA Rate-Limit 429")

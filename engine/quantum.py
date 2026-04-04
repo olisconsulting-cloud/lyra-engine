@@ -177,6 +177,29 @@ class FailureMemory:
             parts.append("BEWAEHRTE ANSAETZE:\n" + "\n".join(f"  + {s[:100]}" for s in successes))
         return "\n".join(parts)
 
+    def get_security_lessons(self) -> str:
+        """Kompakte Security-Block-Lektionen (max ~50 Tokens)."""
+        blocked_patterns: set[str] = set()
+        for f in reversed(self.failures):
+            if f.get("type") != "failure":
+                continue
+            error = f.get("error", "")
+            if "BLOCKIERT" not in error:
+                continue
+            approach = f.get("approach", "")
+            if approach:
+                blocked_patterns.add(approach)
+            if len(blocked_patterns) >= 5:
+                break
+
+        if not blocked_patterns:
+            return ""
+
+        return (
+            "BEKANNTE SECURITY-BLOCKS (nicht erneut versuchen!):\n"
+            "  Nutze Mock-Daten oder web_search/web_read statt direkter HTTP-Calls."
+        )
+
 
 # ============================================================
 # 2. CRITIC-AGENT
