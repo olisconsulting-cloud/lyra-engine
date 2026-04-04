@@ -57,7 +57,7 @@ from .tool_lifecycle import (
     ToolMetrics, ToolPruner, ToolDreamBridge,
     ToolMetaPatterns, ToolConsolidator, PromotionEngine,
 )
-from .perception_pipeline import PerceptionPipeline
+from .perception_pipeline import PerceptionPipeline, PerceptionChannel
 from .unified_memory import (
     UnifiedMemory, MemoryHit, semantic_adapter, experience_adapter,
     failure_adapter, strategy_adapter,
@@ -714,8 +714,91 @@ class ConsciousnessEngine:
         self.unified_memory.register_source("skill", self.skill_library, adapter=_skill_adapter_with_classify)
         self.unified_memory.register_source("strategy", self.strategies, adapter=strategy_adapter)
 
-        # Perception-Pipeline — gewichtete Wahrnehmung (bereit fuer Feature-Flag)
-        self.perception_pipeline = PerceptionPipeline(config.DATA_PATH)
+        # Perception-Pipeline — gewichtete Wahrnehmung mit Token-Budget
+        # Shared State pro Sequenz: self._pstate (von _build_perception gesetzt)
+        self._pstate: dict = {}
+        self.perception_pipeline = PerceptionPipeline(config.DATA_PATH, max_tokens=8000)
+
+        # Always-Load Kanaele (Kern — immer voll geladen)
+        self.perception_pipeline.register_channel(PerceptionChannel(
+            name="working_memory", builder=self._ch_working_memory,
+            base_weight=1.0, estimated_tokens=300, always_load=True,
+        ))
+        self.perception_pipeline.register_channel(PerceptionChannel(
+            name="rhythm", builder=self._ch_rhythm,
+            base_weight=1.0, estimated_tokens=100, always_load=True,
+        ))
+        self.perception_pipeline.register_channel(PerceptionChannel(
+            name="time", builder=self._ch_time,
+            base_weight=1.0, estimated_tokens=20, always_load=True,
+        ))
+        self.perception_pipeline.register_channel(PerceptionChannel(
+            name="inbox", builder=self._ch_inbox,
+            base_weight=1.0, estimated_tokens=200, always_load=True,
+        ))
+        self.perception_pipeline.register_channel(PerceptionChannel(
+            name="focus", builder=self._ch_focus,
+            base_weight=1.0, estimated_tokens=300, always_load=True,
+        ))
+        # Planung am Ende — immer laden, steuert Sequenz-Verhalten
+        self.perception_pipeline.register_channel(PerceptionChannel(
+            name="planning", builder=self._ch_planning,
+            base_weight=1.0, estimated_tokens=400, always_load=True,
+        ))
+
+        # Budget-Kanaele (gewichtet nach Task-Typ, Pipeline entscheidet)
+        self.perception_pipeline.register_channel(PerceptionChannel(
+            name="sequence_memory", builder=self._ch_sequence_memory,
+            base_weight=1.0, estimated_tokens=400,
+        ))
+        self.perception_pipeline.register_channel(PerceptionChannel(
+            name="live_notes", builder=self._ch_live_notes,
+            base_weight=0.8, estimated_tokens=200,
+        ))
+        self.perception_pipeline.register_channel(PerceptionChannel(
+            name="goal_context", builder=self._ch_goal_context,
+            base_weight=1.0, estimated_tokens=400,
+        ))
+        self.perception_pipeline.register_channel(PerceptionChannel(
+            name="proactive_context", builder=self._ch_proactive_context,
+            base_weight=0.5, estimated_tokens=300,
+        ))
+        self.perception_pipeline.register_channel(PerceptionChannel(
+            name="projects_list", builder=self._ch_projects_list,
+            base_weight=0.4, estimated_tokens=500,
+        ))
+        self.perception_pipeline.register_channel(PerceptionChannel(
+            name="filesystem", builder=self._ch_filesystem,
+            base_weight=0.3, estimated_tokens=200,
+        ))
+        self.perception_pipeline.register_channel(PerceptionChannel(
+            name="file_changes", builder=self._ch_file_changes,
+            base_weight=0.3, estimated_tokens=200,
+        ))
+        self.perception_pipeline.register_channel(PerceptionChannel(
+            name="tasks", builder=self._ch_tasks,
+            base_weight=0.4, estimated_tokens=50,
+        ))
+        self.perception_pipeline.register_channel(PerceptionChannel(
+            name="unified_memory", builder=self._ch_unified_memory,
+            base_weight=0.6, estimated_tokens=500,
+        ))
+        self.perception_pipeline.register_channel(PerceptionChannel(
+            name="composition", builder=self._ch_composition,
+            base_weight=0.4, estimated_tokens=200,
+        ))
+        self.perception_pipeline.register_channel(PerceptionChannel(
+            name="efficiency_alerts", builder=self._ch_efficiency_alerts,
+            base_weight=0.2, estimated_tokens=100,
+        ))
+        self.perception_pipeline.register_channel(PerceptionChannel(
+            name="kpi", builder=self._ch_kpi,
+            base_weight=0.3, estimated_tokens=150,
+        ))
+        self.perception_pipeline.register_channel(PerceptionChannel(
+            name="checkpoint", builder=self._ch_checkpoint,
+            base_weight=0.5, estimated_tokens=300,
+        ))
 
         # Sequence-Runner — composable Sequenz-Phasen (bereit fuer Feature-Flag)
         self.sequence_runner = SequenceRunner(event_bus=self.event_bus)
@@ -1438,228 +1521,261 @@ SEQUENZ-PLANUNG: Nutze write_sequence_plan am Anfang — plane dein Ziel, Exit-K
         except Exception:
             pass  # Tracking darf nie den Hauptloop stoeren
 
-    # === Wahrnehmung ===
+    # === Wahrnehmung: Channel-Builder ===
+    # Jeder _ch_* liefert einen Perception-Block als String.
+    # Shared State liegt auf self._pstate (pro Sequenz frisch gesetzt).
 
-    def _build_perception(self) -> str:
-        """Baut die aktuelle Wahrnehmung fuer eine neue Sequenz."""
+    def _ch_working_memory(self) -> str:
+        wm = self._pstate.get("working_memory", "")
+        return f"ARBEITSNOTIZ (dein Wissen aus vorherigen Sequenzen):\n{wm}" if wm else ""
+
+    def _ch_rhythm(self) -> str:
+        mode = self._pstate.get("mode", {})
         parts = []
+        instruction = mode.get("instruction", "")
+        if instruction:
+            parts.append(instruction)
+        learn_result = self._pstate.get("learn_result", "")
+        if learn_result:
+            parts.append(f"Lehrprojekt: {learn_result}")
+        return "\n".join(parts)
 
-        # Working Memory — was Phi aus vorherigen Sequenzen weiss
-        working_memory = self._load_working_memory()
-        if working_memory:
-            parts.append(f"ARBEITSNOTIZ (dein Wissen aus vorherigen Sequenzen):\n{working_memory}")
-
-        # Adaptiver Rhythmus: Entscheidet was jetzt am wichtigsten ist
-        mode = self.rhythm.get_mode(self.state)
-        if mode["instruction"]:
-            parts.append(mode["instruction"])
-
-        # Lehrprojekt auto-starten wenn Learning-Modus
-        if mode["mode"] == "learning":
-            skill_gap = mode.get("reason", "").replace("Skill-Luecke: ", "")
-            if skill_gap:
-                learn_result = self.learning.start_learning_project(skill_gap, self.goal_stack)
-                parts.append(f"Lehrprojekt: {learn_result}")
-
-        # Zeit
+    def _ch_time(self) -> str:
         now = datetime.now(timezone.utc)
-        parts.append(f"Zeit: {now.strftime('%Y-%m-%d %H:%M')} UTC")
+        return f"Zeit: {now.strftime('%Y-%m-%d %H:%M')} UTC"
 
-        # Sequenz-Memory: Letzte 3 Summaries als zusaetzlichen Kontext laden
-        seq_context = self._load_sequence_memory()
-        if seq_context:
-            parts.append(seq_context)
+    def _ch_sequence_memory(self) -> str:
+        return self._load_sequence_memory() or ""
 
-        # Live-Notes: Letzte Aktionen der vorherigen Sequenz (falls Token-Budget)
+    def _ch_live_notes(self) -> str:
         live_notes_path = self.consciousness_path / "live_notes.md"
-        if live_notes_path.exists():
-            try:
-                notes = live_notes_path.read_text(encoding="utf-8").strip()
-                if notes:
-                    parts.append(f"LETZTE AKTIONEN (Live-Mitschrift):\n{notes[-500:]}")
-                # Ueberschreiben statt loeschen — vermeidet Race Condition mit _update_live_notes
-                live_notes_path.write_text("", encoding="utf-8")
-            except OSError:
-                pass
+        if not live_notes_path.exists():
+            return ""
+        try:
+            notes = live_notes_path.read_text(encoding="utf-8").strip()
+            live_notes_path.write_text("", encoding="utf-8")
+            return f"LETZTE AKTIONEN (Live-Mitschrift):\n{notes[-500:]}" if notes else ""
+        except OSError:
+            return ""
 
-        # Nachrichten von Oliver
+    def _ch_inbox(self) -> str:
         messages = self.communication.check_inbox()
-        if messages:
-            for msg in messages:
-                parts.append(f"\nOLIVER SAGT: {msg.get('content', '')}")
+        if not messages:
+            return ""
+        return "\n".join(f"\nOLIVER SAGT: {m.get('content', '')}" for m in messages)
 
-        # Extern hinzugefuegte Goals mergen (verhindert Race-Condition)
-        self.goal_stack.sync_from_disk()
+    def _ch_focus(self) -> str:
+        return self._pstate.get("focus", "")
 
-        # Aktueller Fokus — naechstes pending Sub-Goal auf in_progress setzen
-        self.goal_stack.start_next_subgoal()
-        focus = self.goal_stack.get_current_focus()
-        parts.append(chr(10) + focus)
+    def _ch_goal_context(self) -> str:
+        focus = self._pstate.get("focus", "")
+        return self._load_goal_context(focus) or ""
 
-        # Goal-Kontext-Anker: Wo stand Phi zuletzt bei diesem Goal?
-        # Spart 5-8 Orientierungs-Steps pro Sequenz bei Multi-Sequenz-Goals
-        goal_context = self._load_goal_context(focus)
-        if goal_context:
-            parts.append(goal_context)
-
-        # Goal-Typ klassifizieren (fuer ProactiveLearner + Baseline-Tracking)
-        goal_type = self.semantic_memory.classify_goal_type(focus)
-        # Baseline-Tracking: Skill-Hit (Skill-Injektion laeuft jetzt ueber UnifiedMemory)
-        skill_prompt = self.skill_library.build_skill_prompt(goal_type)
-        self._track_baseline("skill_hit", 1 if skill_prompt else 0, goal_type)
-
-        # Proaktives Lernen: Intern-first, Internet-Fallback
-        learn_context = self.proactive_learner.build_context(
+    def _ch_proactive_context(self) -> str:
+        focus = self._pstate.get("focus", "")
+        goal_type = self._pstate.get("goal_type", "standard")
+        return self.proactive_learner.build_context(
             focus, goal_type, self.skill_library, self.semantic_memory
-        )
-        if learn_context:
-            parts.append(learn_context)
+        ) or ""
 
-        # Existierende Projekte zum Fokus anzeigen (Anti-Loop, max 10)
-        # Cache: Nur alle 10 Sequenzen neu scannen (Projekte aendern sich selten)
-        if "FOKUS:" in focus and hasattr(self, "actions") and hasattr(self.actions, "projects_path"):
-            try:
-                cache = getattr(self, "_projects_cache", None)
-                cache_age = getattr(self, "_projects_cache_seq", 0)
-                need_refresh = cache is None or (self.sequences_total - cache_age) >= 10
+    def _ch_projects_list(self) -> str:
+        focus = self._pstate.get("focus", "")
+        if "FOKUS:" not in focus or not hasattr(self, "actions") or not hasattr(self.actions, "projects_path"):
+            return ""
+        try:
+            cache = getattr(self, "_projects_cache", None)
+            cache_age = getattr(self, "_projects_cache_seq", 0)
+            need_refresh = cache is None or (self.sequences_total - cache_age) >= 10
 
-                if need_refresh:
-                    projects_path = self.actions.projects_path
-                    cache = {"hint": "", "files": []}
-                    if projects_path.exists():
-                        try:
-                            all_dirs = [d for d in projects_path.iterdir() if d.is_dir()]
-                            existing = sorted(
-                                all_dirs,
-                                key=lambda d: d.stat().st_mtime, reverse=True,
-                            )
-                        except (OSError, PermissionError):
-                            existing = []
+            if need_refresh:
+                projects_path = self.actions.projects_path
+                cache = {"hint": "", "files": []}
+                if projects_path.exists():
+                    try:
+                        all_dirs = [d for d in projects_path.iterdir() if d.is_dir()]
+                        existing = sorted(
+                            all_dirs,
+                            key=lambda d: d.stat().st_mtime, reverse=True,
+                        )
+                    except (OSError, PermissionError):
+                        existing = []
 
-                        if existing:
-                            proj_list = ", ".join(d.name for d in existing[:10])
-                            hint = "EXISTIERENDE PROJEKTE: " + proj_list
-                            if len(existing) > 10:
-                                hint += f" (+{len(existing) - 10} weitere)"
-                            hint += " | HINWEIS: Erstelle KEIN neues Projekt wenn ein passendes existiert!"
-                            hint += " Nutze read_file/write_file um am bestehenden Projekt weiterzuarbeiten."
-                            cache["hint"] = hint
+                    if existing:
+                        proj_list = ", ".join(d.name for d in existing[:10])
+                        hint = "EXISTIERENDE PROJEKTE: " + proj_list
+                        if len(existing) > 10:
+                            hint += f" (+{len(existing) - 10} weitere)"
+                        hint += " | HINWEIS: Erstelle KEIN neues Projekt wenn ein passendes existiert!"
+                        hint += " Nutze read_file/write_file um am bestehenden Projekt weiterzuarbeiten."
+                        cache["hint"] = hint
 
-                            _SKIP_EXT = frozenset((".pyc", ".pyo", ".tmp", ".bak"))
-                            for proj_dir in existing[:2]:
-                                try:
-                                    files = sorted(
-                                        f.name for f in proj_dir.iterdir()
-                                        if (f.is_file()
-                                            and not f.name.startswith(".")
-                                            and f.suffix not in _SKIP_EXT)
+                        _SKIP_EXT = frozenset((".pyc", ".pyo", ".tmp", ".bak"))
+                        for proj_dir in existing[:2]:
+                            try:
+                                files = sorted(
+                                    f.name for f in proj_dir.iterdir()
+                                    if (f.is_file()
+                                        and not f.name.startswith(".")
+                                        and f.suffix not in _SKIP_EXT)
+                                )
+                                if files:
+                                    display = ", ".join(files[:25])
+                                    if len(files) > 25:
+                                        display += f" (+{len(files) - 25} weitere)"
+                                    cache["files"].append(
+                                        f"DATEIEN IN {proj_dir.name}/: {display}"
                                     )
-                                    if files:
-                                        display = ", ".join(files[:25])
-                                        if len(files) > 25:
-                                            display += f" (+{len(files) - 25} weitere)"
-                                        cache["files"].append(
-                                            f"DATEIEN IN {proj_dir.name}/: {display}"
-                                        )
-                                except (OSError, PermissionError):
-                                    continue
+                            except (OSError, PermissionError):
+                                continue
 
-                    self._projects_cache = cache
-                    self._projects_cache_seq = self.sequences_total
+                self._projects_cache = cache
+                self._projects_cache_seq = self.sequences_total
 
-                if cache.get("hint"):
-                    parts.append(cache["hint"])
-                for f in cache.get("files", []):
-                    parts.append(f)
-            except Exception as e:
-                logger.warning("Perception: Projekt-Liste konnte nicht geladen werden: %s", e)
+            parts = []
+            if cache.get("hint"):
+                parts.append(cache["hint"])
+            for f in cache.get("files", []):
+                parts.append(f)
+            return "\n".join(parts)
+        except Exception as e:
+            logger.warning("Perception: Projekt-Liste konnte nicht geladen werden: %s", e)
+            return ""
 
-        # Umgebung
+    def _ch_filesystem(self) -> str:
         env = self.perceiver._scan_home()
-        parts.append(f"\nDateisystem: {env}")
+        return f"\nDateisystem: {env}" if env else ""
 
-        # Datei-Aenderungen (Debounce: nur alle 5 Sequenzen — os.walk ist teuer)
+    def _ch_file_changes(self) -> str:
         if self.sequences_total > 0 and self.sequences_total % 5 == 0:
             file_changes = self.file_watcher.check_changes()
             if file_changes:
                 self._last_file_changes = file_changes
-                parts.append(f"\n{file_changes}")
-        elif hasattr(self, "_last_file_changes") and self._last_file_changes:
-            parts.append(f"\n{self._last_file_changes}")
+                return f"\n{file_changes}"
+        if hasattr(self, "_last_file_changes") and self._last_file_changes:
+            return f"\n{self._last_file_changes}"
+        return ""
 
-        # Offene Tasks
+    def _ch_tasks(self) -> str:
         next_task = self.task_queue.get_next()
-        if next_task:
-            parts.append(f"\nNAECHSTE AUFGABE: {next_task['description']} [{next_task.get('priority', 'normal')}]")
+        if not next_task:
+            return ""
+        return f"\nNAECHSTE AUFGABE: {next_task['description']} [{next_task.get('priority', 'normal')}]"
 
-        # Unified Memory: Ein Query ueber ALLE 5 Quellen — gerankt nach Score
-        # Semantic + Experience + Failure + Skill + Strategy in einem Block
+    def _ch_unified_memory(self) -> str:
+        focus = self._pstate.get("focus", "")
         focus_cache_key = focus.split("[")[0].strip() if focus else ""
         _mem_cache = getattr(self, "_memory_cache", {})
         if _mem_cache.get("key") != focus_cache_key or not _mem_cache.get("result"):
-            unified_context = self.unified_memory.get_context_for(
-                focus, max_tokens=1000,
-            )
+            unified_context = self.unified_memory.get_context_for(focus, max_tokens=1000)
             self._memory_cache = {"key": focus_cache_key, "result": unified_context}
         else:
             unified_context = _mem_cache["result"]
+        return f"\n{unified_context}" if unified_context else ""
 
-        if unified_context:
-            parts.append(f"\n{unified_context}")
-
-        # Baseline-Tracking: Failure-Match (fuer Unified Memory Metriken)
-        failure_check = self.failure_memory.check(focus)
-        self._track_baseline("fm_match", 1 if failure_check else 0)
-
-        # Skill-Komposition: Relevante existierende Tools anzeigen
+    def _ch_composition(self) -> str:
+        focus = self._pstate.get("focus", "")
         composition = self.composer.suggest_composition(focus)
-        if composition:
-            parts.append(f"\n{composition}")
+        return f"\n{composition}" if composition else ""
 
-        # Efficiency-Alerts (von letzter Trend-Analyse)
+    def _ch_efficiency_alerts(self) -> str:
         eff_alerts = getattr(self, "_efficiency_alerts", [])
-        if eff_alerts:
-            parts.append("\nEFFIZIENZ-WARNUNGEN:")
-            for a in eff_alerts[:3]:
-                parts.append(f"  ! {a}")
+        if not eff_alerts:
+            return ""
+        lines = ["\nEFFIZIENZ-WARNUNGEN:"]
+        for a in eff_alerts[:3]:
+            lines.append(f"  ! {a}")
+        return "\n".join(lines)
 
-        # Produktivitaets-KPI (numerisch, aus Metacognition)
+    def _ch_kpi(self) -> str:
         try:
             kpi_entries = [
                 e for e in self.metacognition.entries[-5:]
                 if "productive_steps" in e and "wasted_steps" in e
             ]
-            if kpi_entries:
-                total_prod = sum(e["productive_steps"] for e in kpi_entries)
-                total_waste = sum(e["wasted_steps"] for e in kpi_entries)
-                total = total_prod + total_waste
-                ratio = total_prod / max(total, 1)
-                avg_waste = total_waste / len(kpi_entries)
-                avg_prod = total_prod / len(kpi_entries)
-                bottlenecks = [e.get("bottleneck", "") for e in kpi_entries if e.get("bottleneck")]
-                top_bn = max(set(bottlenecks), key=bottlenecks.count) if bottlenecks else "unbekannt"
-                parts.append(
-                    f"\nPRODUKTIVITAET (letzte {len(kpi_entries)} Seq): "
-                    f"{ratio:.0%} produktiv "
-                    f"(Ø {avg_waste:.0f} wasted / {avg_prod:.0f} produktiv pro Seq) | "
-                    f"HAEUFIGSTER ENGPASS: \"{top_bn[:80]}\""
-                )
+            if not kpi_entries:
+                return ""
+            total_prod = sum(e["productive_steps"] for e in kpi_entries)
+            total_waste = sum(e["wasted_steps"] for e in kpi_entries)
+            total = total_prod + total_waste
+            ratio = total_prod / max(total, 1)
+            avg_waste = total_waste / len(kpi_entries)
+            avg_prod = total_prod / len(kpi_entries)
+            bottlenecks = [e.get("bottleneck", "") for e in kpi_entries if e.get("bottleneck")]
+            top_bn = max(set(bottlenecks), key=bottlenecks.count) if bottlenecks else "unbekannt"
+            return (
+                f"\nPRODUKTIVITAET (letzte {len(kpi_entries)} Seq): "
+                f"{ratio:.0%} produktiv "
+                f"(Ø {avg_waste:.0f} wasted / {avg_prod:.0f} produktiv pro Seq) | "
+                f"HAEUFIGSTER ENGPASS: \"{top_bn[:80]}\""
+            )
         except Exception:
-            pass
+            return ""
 
-        # Checkpoint-Resume: Falls letzte Sequenz abgebrochen wurde
+    def _ch_checkpoint(self) -> str:
         resume = self.seq_intel.build_resume_context()
-        if resume:
-            parts.append(f"\n{resume}")
+        return f"\n{resume}" if resume else ""
 
-        # Sequenz-Planung: Phi soll am Anfang planen
+    def _ch_planning(self) -> str:
+        focus = self._pstate.get("focus", "")
+        working_memory = self._pstate.get("working_memory", "")
         plan_history = self.seq_intel.get_plan_history()
-        plan_prompt = self.seq_intel.build_planning_prompt(
-            focus, working_memory, plan_history
-        )
-        parts.append(plan_prompt)
+        return self.seq_intel.build_planning_prompt(focus, working_memory, plan_history) or ""
 
-        return "\n".join(parts)
+    # === Wahrnehmung ===
+
+    def _build_perception(self) -> str:
+        """Baut die aktuelle Wahrnehmung via PerceptionPipeline.
+
+        Phase 1: Side-Effects (Goal-Sync, Baseline-Tracking, Lehrprojekt)
+        Phase 2: Shared State auf self._pstate setzen
+        Phase 3: pipeline.build() — Kanaele gewichtet nach Task-Typ + Budget
+        """
+        # --- Phase 1: Side-Effects (muessen IMMER laufen) ---
+
+        # Goals von Disk mergen (verhindert Race-Condition bei externen Edits)
+        self.goal_stack.sync_from_disk()
+        self.goal_stack.start_next_subgoal()
+
+        # Lehrprojekt auto-starten wenn Learning-Modus
+        mode = self.rhythm.get_mode(self.state)
+        learn_result = ""
+        if mode["mode"] == "learning":
+            skill_gap = mode.get("reason", "").replace("Skill-Luecke: ", "")
+            if skill_gap:
+                learn_result = self.learning.start_learning_project(skill_gap, self.goal_stack)
+
+        # Baseline-Tracking (kein Perception-Output, nur Metriken)
+        focus = self.goal_stack.get_current_focus()
+        goal_type = self.semantic_memory.classify_goal_type(focus)
+        skill_prompt = self.skill_library.build_skill_prompt(goal_type)
+        self._track_baseline("skill_hit", 1 if skill_prompt else 0, goal_type)
+        failure_check = self.failure_memory.check(focus)
+        self._track_baseline("fm_match", 1 if failure_check else 0)
+
+        # --- Phase 2: Shared State fuer Channel-Builder ---
+        self._pstate = {
+            "working_memory": self._load_working_memory(),
+            "mode": mode,
+            "focus": chr(10) + focus,
+            "goal_type": goal_type,
+            "learn_result": learn_result,
+        }
+
+        # --- Phase 3: Pipeline baut Perception nach Gewichtung + Budget ---
+        # Task-Type aus Rhythm-Mode ableiten
+        mode_to_task = {
+            "execution": "standard",
+            "sprint": "evolution",
+            "cooldown": "standard",
+            "evolution": "evolution",
+            "learning": "standard",
+        }
+        task_type = mode_to_task.get(mode.get("mode", "execution"), "standard")
+        self._last_task_type = task_type
+
+        return self.perception_pipeline.build(
+            task_type=task_type, token_budget=8000,
+        )
 
     # === Tool-Ausfuehrung ===
 
@@ -1733,8 +1849,9 @@ SEQUENZ-PLANUNG: Nutze write_sequence_plan am Anfang — plane dein Ziel, Exit-K
     def _on_sequence_finished(self, event):
         """Reagiert auf Sequenz-Ende: Perception-Feedback fuer Gewichts-Lernen."""
         rating = event.data.get("rating", 5)
+        task_type = getattr(self, "_last_task_type", "standard")
         if hasattr(self, "perception_pipeline"):
-            self.perception_pipeline.record_feedback("standard", rating)
+            self.perception_pipeline.record_feedback(task_type, rating)
 
     # === Tool-Housekeeping (extrahiert aus Dream-Zyklus) ===
 

@@ -18,37 +18,38 @@ from .config import safe_json_read, safe_json_write
 logger = logging.getLogger(__name__)
 
 # Kanaele die IMMER geladen werden, unabhaengig von Gewichtung
-ALWAYS_LOAD = frozenset({"inbox", "focus", "working_memory", "time"})
+ALWAYS_LOAD = frozenset({"inbox", "focus", "working_memory", "time", "rhythm", "planning"})
 
 # Default-Gewichte pro Task-Typ (Basis wenn keine gelernten vorhanden)
+# Keys muessen mit den registrierten Channel-Namen uebereinstimmen
 DEFAULT_TASK_WEIGHTS: dict[str, dict[str, float]] = {
     "standard": {
-        "sequence_memory": 1.0, "live_notes": 0.8, "skill_prompt": 0.5,
-        "proactive_context": 0.5, "projects_list": 0.4, "semantic_memory": 0.6,
-        "failure_check": 0.7, "filesystem": 0.3, "file_changes": 0.3,
-        "efficiency_alerts": 0.2, "checkpoint_context": 0.5,
-        "memories": 0.5, "composition": 0.4, "tasks": 0.4,
+        "sequence_memory": 1.0, "live_notes": 0.8, "goal_context": 0.9,
+        "proactive_context": 0.5, "projects_list": 0.4, "unified_memory": 0.6,
+        "filesystem": 0.3, "file_changes": 0.3,
+        "efficiency_alerts": 0.2, "checkpoint": 0.5,
+        "composition": 0.4, "tasks": 0.4, "kpi": 0.3,
     },
     "projekt": {
-        "sequence_memory": 1.0, "live_notes": 1.0, "skill_prompt": 1.2,
-        "proactive_context": 0.8, "projects_list": 1.5, "semantic_memory": 1.0,
-        "failure_check": 1.2, "filesystem": 0.5, "file_changes": 0.6,
-        "efficiency_alerts": 0.3, "checkpoint_context": 1.0,
-        "memories": 0.6, "composition": 0.6, "tasks": 0.3,
+        "sequence_memory": 1.0, "live_notes": 1.0, "goal_context": 1.2,
+        "proactive_context": 0.8, "projects_list": 1.5, "unified_memory": 1.0,
+        "filesystem": 0.5, "file_changes": 0.6,
+        "efficiency_alerts": 0.3, "checkpoint": 1.0,
+        "composition": 0.6, "tasks": 0.3, "kpi": 0.2,
     },
     "recherche": {
-        "sequence_memory": 1.0, "live_notes": 0.5, "skill_prompt": 0.3,
-        "proactive_context": 1.5, "projects_list": 0.2, "semantic_memory": 1.5,
-        "failure_check": 0.3, "filesystem": 0.2, "file_changes": 0.1,
-        "efficiency_alerts": 0.1, "checkpoint_context": 0.3,
-        "memories": 0.8, "composition": 0.3, "tasks": 0.3,
+        "sequence_memory": 1.0, "live_notes": 0.5, "goal_context": 0.7,
+        "proactive_context": 1.5, "projects_list": 0.2, "unified_memory": 1.5,
+        "filesystem": 0.2, "file_changes": 0.1,
+        "efficiency_alerts": 0.1, "checkpoint": 0.3,
+        "composition": 0.3, "tasks": 0.3, "kpi": 0.2,
     },
     "evolution": {
-        "sequence_memory": 1.0, "live_notes": 0.5, "skill_prompt": 0.7,
-        "proactive_context": 0.5, "projects_list": 0.3, "semantic_memory": 0.8,
-        "failure_check": 1.0, "filesystem": 0.8, "file_changes": 0.5,
-        "efficiency_alerts": 0.8, "checkpoint_context": 0.5,
-        "memories": 0.5, "composition": 0.5, "tasks": 0.4,
+        "sequence_memory": 1.0, "live_notes": 0.5, "goal_context": 0.8,
+        "proactive_context": 0.5, "projects_list": 0.3, "unified_memory": 0.8,
+        "filesystem": 0.8, "file_changes": 0.5,
+        "efficiency_alerts": 0.8, "checkpoint": 0.5,
+        "composition": 0.5, "tasks": 0.4, "kpi": 0.5,
     },
 }
 

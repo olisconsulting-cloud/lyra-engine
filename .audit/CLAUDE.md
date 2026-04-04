@@ -50,11 +50,11 @@ Python: 3.14, kein venv noetig.
 
 ## Kernmetriken
 
-| Metrik | Aktuell (2026-04-03) | Ziel |
+| Metrik | Aktuell (2026-04-04) | Ziel |
 |--------|----------------------|------|
-| Token-Verschwendung/Seq | ~5.000-9.000 | <3.000 |
+| Token-Verschwendung/Seq | ~8.000 (Pipeline-Budget) | <3.000 |
 | Verifizierte Bugs | 0 offen | 0 |
-| Inaktive Module | 3 von 3 | 0 von 3 |
+| Inaktive Module | 2 von 3 | 0 von 3 |
 | Dead Code Zeilen | ~50 | 0 |
 
 Aktualisiere diese Tabelle am Ende jeder Session die einen Bug fixt oder ein Modul aktiviert.
@@ -69,7 +69,7 @@ Aktualisiere diese Tabelle am Ende jeder Session die einen Bug fixt oder ein Mod
 | engine/llm_router.py | ~640 | Multi-Provider LLM Routing |
 | engine/sequence_intelligence.py | ~428 | Stuck-Detection, Metriken, Planung |
 | engine/sequence_finisher.py | ~314 | End-of-Sequence Aktionen (inaktiv) |
-| engine/perception_pipeline.py | ~184 | Gewichtete Wahrnehmung (inaktiv) |
+| engine/perception_pipeline.py | ~184 | Gewichtete Wahrnehmung (AKTIV) |
 | engine/unified_memory.py | ~197 | Cross-Domain Memory (inaktiv) |
 | engine/sequence_runner.py | ~180 | Composable Sequenz-Phasen (inaktiv) |
 | review_phi.py | ~354 | Pre-Flight-Check (14 Pruefungen) |
@@ -92,8 +92,8 @@ Nicht schneller. Nicht groesser. Besser. Stabiler. Effizienter. Sicherer.
 
 ## Aktueller Status (nach jeder Session aktualisieren)
 
-- **Naechster Fix**: A1a (PerceptionPipeline aktivieren) — siehe BACKLOG.md
+- **Naechster Fix**: A1b (UnifiedMemory Perception-Einbindung) — siehe BACKLOG.md
 - **Offene Bugs**: 0 — alle verifzierten Bugs gefixt
-- **Gefixt**: C1, H4, H5, H6, T2, T6, T7, S5. H1-H3/A1d/A2/A3/A4 wontfix.
-- **Inaktive Module**: 3 (PerceptionPipeline, UnifiedMemory, SequenceRunner)
-- **Letzte Session**: 2026-04-03 (Alle Bugs gefixt, Token-Quick-Wins erledigt)
+- **Gefixt**: C1, H4, H5, H6, T2, T6, T7, S5, A1a. H1-H3/A1d/A2/A3/A4 wontfix.
+- **Inaktive Module**: 2 (UnifiedMemory [teilweise aktiv], SequenceRunner)
+- **Letzte Session**: 2026-04-04 (PerceptionPipeline aktiviert — 19 Channels, 8k Budget)

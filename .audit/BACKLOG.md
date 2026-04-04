@@ -6,8 +6,7 @@
 
 ## JETZT — Module aktivieren
 
-1. **A1a** — PerceptionPipeline aktivieren (siehe auch T1: 1.000-2.000 Tok/Seq)
-   Done: _build_perception() delegiert an Pipeline, Channels registriert
+1. ~~**A1a** — PerceptionPipeline aktivieren~~ ✅ (2026-04-04)
 
 2. **A1b** — UnifiedMemory in Perception einbinden (siehe auch T3: 400-800 Tok/Seq)
    Done: Perception nutzt unified_memory.query() statt 4 separate Abfragen

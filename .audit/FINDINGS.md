@@ -96,12 +96,13 @@
 ## ARCHITEKTUR — Inaktive Module & doppelte Logik
 
 ### A1a: PerceptionPipeline gebaut aber nicht aktiviert
-- **Status**: `open`
+- **Status**: `fixed` (2026-04-04)
 - **Erstellt**: 2026-04-03
-- **Datei**: `engine/perception_pipeline.py` + `consciousness.py:~659`
-- **Detail**: Instanziiert, hat Budget-System + Channel-Gewichtung + Feedback-Learning.
-  `build()` wird nie aufgerufen. `_build_perception()` baut Perception manuell.
-  0 Channels registriert. Siehe auch T1 (Token-Ersparnis).
+- **Datei**: `engine/perception_pipeline.py` + `consciousness.py`
+- **Detail**: 19 Channels registriert (6 always-load, 13 budget-gesteuert).
+  `_build_perception()` delegiert an `pipeline.build()`. Side-Effects (Goal-Sync,
+  Baseline-Tracking) laufen vor Pipeline. Feedback-Hook nutzt korrekten Task-Type.
+  Token-Budget: 8.000 (vorher ~31.000 unkontrolliert).
 - **Done**: `_build_perception()` delegiert an Pipeline, Channels registriert, Feedback fliesst.
 
 ### A1b: UnifiedMemory gebaut aber nicht aktiviert
