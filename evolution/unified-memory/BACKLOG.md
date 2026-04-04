@@ -52,3 +52,31 @@
 
 14. **UM-D4** — Dream generiert "why"-Feld pro Skill (LLM-Zusammenfassung)
     Done: Skill-Eintraege haben why-Feld, build_skill_prompt() zeigt es an
+
+## SPAETER — Phase 3: Memory-Konsolidierung (AGI-Kern)
+
+> Problem: Experience-Memory (~745K) und Semantic-Memory wachsen endlos.
+> Kein Pruning, kein Merge, keine Alterung. Wird irgendwann zu gross fuer Kontext.
+> Ziel: Memory soll wie ein menschliches Gedaechtnis arbeiten — Wichtiges verdichten,
+> Unwichtiges vergessen, Muster extrahieren.
+
+15. **UM-M1** — Experience-Memory Bestandsaufnahme: Groesse, Duplikate, Altersverteilung messen
+    Done: Analyse in BASELINES.md, Top-10 Kategorien identifiziert
+
+16. **UM-M2** — Age-Based Decay: Erfahrungen aelter als 50 Sequenzen komprimieren (Summary statt Volltext)
+    Done: MemoryManager hat compress_old_experiences(), Fibonacci-Buckets nutzen Summaries
+
+17. **UM-M3** — Experience-Dedup: Aehnliche Erfahrungen (Jaccard >0.7) mergen, Zaehler erhoehen
+    Done: Deduplizierung laeuft im Dream-Zyklus, Zaehler pro unique Experience
+
+18. **UM-M4** — Semantic-Memory Cap: Hard-Limit bei 500 Eintraegen, aelteste/niedrigste TF-IDF raus
+    Done: SemanticMemory hat max_entries=500, Pruning bei Ueberschreitung
+
+19. **UM-M5** — Dream-Integration: Dream konsolidiert Experiences alle 10 Seq (wie Beliefs)
+    Done: Dream liest letzte 50 Experiences, extrahiert Top-Patterns, archiviert Rest
+
+20. **UM-M6** — Self-Modify Feedback-Loop: Nach Code-Aenderung Ergebnis messen und zurueckmelden
+    Done: self_modify.py trackt Aenderung → 5 Seq spaeter prueft success_rate, speichert in changelog
+
+21. **UM-M7** — Baselines NACH Phase 3 messen: Memory-Groesse, Retrieval-Qualitaet, Token-Verbrauch
+    Done: Phase-3-Spalte in BASELINES.md, Vorher/Nachher Vergleich
