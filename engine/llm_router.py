@@ -36,11 +36,11 @@ from anthropic import Anthropic
 
 MODELS = {
     "gemma4_31b": {
-        "provider": "nvidia",
+        "provider": "openrouter",
         "model_id": "google/gemma-4-31b-it",
-        "input_cost": 0.0,   # Kostenlos ueber NVIDIA NIM
-        "output_cost": 0.0,
-        "max_output_tokens": 32768,  # 32K Output-Limit
+        "input_cost": 0.14,  # OpenRouter: $0.14/$0.40 pro 1M Tokens
+        "output_cost": 0.40,
+        "max_output_tokens": 32768,
         "use_for": "Haupt-Arbeit, Reasoning, Coding, Goal-Planning, Vision",
     },
     "kimi_k25": {
@@ -300,10 +300,11 @@ class LLMRouter:
     """
     Routet Anfragen an das optimale Modell mit Provider-Health-Tracking.
 
+    OpenRouter: Gemma 4 31B — Primary (OpenAI-kompatibel)
+    NVIDIA: Kimi K2.5 — Fallback Stufe 1 (OpenAI-kompatibel)
     Anthropic: Tool-Use ueber native API (Sonnet, Opus)
     OpenAI: REST API (GPT-4.1-mini)
-    NVIDIA: OpenAI-kompatible REST API (Gemma 4 31B + Kimi K2.5)
-    Google: Tool-Use ueber REST API (Gemini Flash)
+    Google: Gemma 4 + Gemini Flash (REST, 16K TPM Limit!)
     DeepSeek: OpenAI-kompatible REST API (Fallback)
 
     Provider-Health: Automatisches Cooldown + Fallback bei Ausfaellen.
@@ -315,6 +316,7 @@ class LLMRouter:
         self.deepseek_key = os.getenv("DEEPSEEK_API_KEY", "").strip()
         self.nvidia_key = os.getenv("NVIDIA_API_KEY", "").strip()
         self.openai_key = os.getenv("OPENAI_API_KEY", "").strip()
+        self.openrouter_key = os.getenv("OPEN_ROUTER_API_KEY", "").strip()
         # Getrennte Pools: Primary-Timeout blockiert nicht den Fallback-Pool
         _timeout = httpx.Timeout(
             connect=10.0,   # Verbindung aufbauen: 10s reicht
@@ -443,6 +445,8 @@ class LLMRouter:
             return self.call_openai(model_key, system, messages, tools, max_tokens)
         elif provider == "google":
             return self.call_gemini(model_key, system, messages, tools, max_tokens)
+        elif provider == "openrouter":
+            return self.call_openrouter(model_key, system, messages, tools, max_tokens)
         else:
             raise ValueError(f"Unbekannter Provider: {provider}")
 
@@ -700,6 +704,64 @@ class LLMRouter:
 
         # Gemini Response → Anthropic-kompatibles Format konvertieren
         return self._gemini_to_anthropic_response(data, model_key)
+
+    # === OpenRouter (OpenAI-kompatibel, Multi-Provider) ===
+
+    def call_openrouter(
+        self, model_key: str, system: str, messages: list,
+        tools: Optional[list] = None, max_tokens: int = 32000,
+    ) -> dict:
+        """Ruft Modelle ueber OpenRouter auf — OpenAI-kompatible API."""
+        if not self.openrouter_key:
+            raise ValueError("OPEN_ROUTER_API_KEY nicht konfiguriert")
+
+        model_id = MODELS[model_key]["model_id"]
+        max_tokens = self._clamp_max_tokens(model_key, max_tokens)
+        oai_messages = self._anthropic_to_openai_messages(system, messages)
+
+        body = {
+            "model": model_id,
+            "messages": oai_messages,
+            "max_tokens": max_tokens,
+            "temperature": 1.0,
+            "top_p": 0.95,
+        }
+
+        if tools:
+            oai_tools = self._anthropic_to_openai_tools(tools)
+            if oai_tools:
+                body["tools"] = oai_tools
+
+        resp = self.http_primary.post(
+            "https://openrouter.ai/api/v1/chat/completions",
+            headers={
+                "Authorization": f"Bearer {self.openrouter_key}",
+                "HTTP-Referer": "https://github.com/lyra-phi",
+                "X-Title": "Lyra Phi AGI",
+            },
+            json=body,
+        )
+
+        # Rate-Limit Retry (analog zu Gemini)
+        if resp.status_code == 429:
+            retry_after = int(resp.headers.get("Retry-After", "5"))
+            logger.warning("OpenRouter Rate-Limit 429 — warte %ds", retry_after)
+            time.sleep(retry_after)
+            resp = self.http_primary.post(
+                "https://openrouter.ai/api/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {self.openrouter_key}",
+                    "HTTP-Referer": "https://github.com/lyra-phi",
+                    "X-Title": "Lyra Phi AGI",
+                },
+                json=body,
+            )
+
+        if resp.status_code != 200:
+            raise ValueError(f"OpenRouter API Fehler {resp.status_code}: {resp.text[:200]}")
+
+        data = resp.json()
+        return self._openai_to_anthropic_response(data, model_key)
 
     # === DeepSeek (OpenAI-kompatibel) ===
 
