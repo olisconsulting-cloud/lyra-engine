@@ -16,6 +16,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
+from engine.config import ROOT_PATH
+
 if TYPE_CHECKING:
     from engine.toolchain import Toolchain
     from engine.tool_lifecycle.metrics import ToolMetrics
@@ -333,10 +335,24 @@ class PromotionEngine:
 
         tool_code = tool_file.read_text(encoding="utf-8")
 
+        # === STUFE 1b: AST-Security-Check (deterministisch, vor LLM-Review) ===
+        from engine.security import SecurityGateway
+        security = SecurityGateway()
+        check = security.check_code_execution(tool_code)
+        if not check["allowed"]:
+            self.promotions.setdefault("rejected", []).append({
+                "name": tool_name,
+                "reason": f"Security-Block: {check.get('hard_blocks', [])}",
+                "rejected_at": datetime.now(timezone.utc).isoformat(),
+            })
+            self._save()
+            logger.warning("Auto-Promote Security-Block: %s — %s",
+                           tool_name, check.get("hard_blocks"))
+            return f"Promotion blockiert (Security): {tool_name}"
+
         # Ziel-Datei lesen und Tool-Code als neue Funktion anhaengen
         target_path = Path(target_module)
-        root = self.toolchain.tools_path.parent.parent  # engine/ -> project root
-        target_full = root / target_path
+        target_full = ROOT_PATH / target_path
         if not target_full.exists():
             logger.warning("Auto-Promote: Ziel-Modul nicht gefunden: %s", target_full)
             return ""
@@ -414,18 +430,31 @@ class PromotionEngine:
     ) -> str:
         """Baut einen integrierbaren Code-Block aus einem Tool.
 
-        Wrappet den Tool-Code in eine benannte Funktion mit Docstring.
+        - Imports werden entfernt (Ziel-Modul hat eigene)
+        - run() wird zu promoted_{name}() umbenannt
+        - Header mit Herkunft und Datum
         """
-        # Tool-Funktionsnamen aus dem Code extrahieren
         safe_name = tool_name.replace("-", "_").replace(" ", "_")
-        lines = [
-            f"# === Auto-Promoted: {tool_name} ===",
-            f"# Ursprung: data/tools/{tool_name}.py",
-            f"# Promotion: {datetime.now(timezone.utc).isoformat()[:10]}",
-            "",
-        ]
-        # Tool-Code einbetten (bereits als def run(**kwargs) strukturiert)
-        for line in tool_code.split("\n"):
-            lines.append(line)
 
-        return "\n".join(lines)
+        # Imports und Code-Body trennen
+        code_lines = []
+        for line in tool_code.split("\n"):
+            stripped = line.strip()
+            # Import-Zeilen am Datei-Anfang ueberspringen
+            if stripped.startswith(("import ", "from ")) and not code_lines:
+                continue
+            # Leere Zeilen zwischen Imports ueberspringen
+            if not stripped and not code_lines:
+                continue
+            code_lines.append(line)
+
+        # run() → promoted_{safe_name}() umbenennen
+        body = "\n".join(code_lines)
+        body = body.replace("def run(", f"def promoted_{safe_name}(")
+
+        header = (
+            f"\n# === Auto-Promoted: {tool_name} ===\n"
+            f"# Ursprung: data/tools/{tool_name}.py\n"
+            f"# Promotion: {datetime.now(timezone.utc).isoformat()[:10]}\n"
+        )
+        return header + body
