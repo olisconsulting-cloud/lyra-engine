@@ -448,6 +448,7 @@ class BehaviorActuator:
             "pattern_hits": {},
             "change_history": [],
             "efficiency_history": [],
+            "skipped_adjustments": [],
         }
         data = safe_json_read(self._state_path, default=default)
         # Migration: Fehlende Keys nachfuellen
