@@ -314,6 +314,16 @@ class ConsciousnessEngine:
             base_weight=0.5, estimated_tokens=300,
         ))
 
+        # Strategischer Kontext — Architektur-Brief + Audit-Findings
+        self.perception_pipeline.register_channel(PerceptionChannel(
+            name="strategic_context", builder=self._ch_strategic_context,
+            base_weight=0.25, estimated_tokens=300,
+        ))
+        self.perception_pipeline.register_channel(PerceptionChannel(
+            name="audit_findings", builder=self._ch_audit_findings,
+            base_weight=0.15, estimated_tokens=60,
+        ))
+
         # Sequence-Runner — composable Sequenz-Phasen (bereit fuer Feature-Flag)
         self.sequence_runner = SequenceRunner(event_bus=self.event_bus)
 
@@ -1292,6 +1302,44 @@ SEQUENZ-PLANUNG: Nutze write_sequence_plan am Anfang — plane dein Ziel, Exit-K
     def _ch_security_lessons(self) -> str:
         """Security-Block-Warnungen aus FailureMemory."""
         return self.failure_memory.get_security_lessons()
+
+    def _ch_strategic_context(self) -> str:
+        """Architektur-Brief: Warum die Architektur so ist, AGI-Hebel-Status."""
+        brief_path = self.consciousness_path / "architecture_brief.md"
+        if not brief_path.exists():
+            return ""
+        try:
+            content = brief_path.read_text(encoding="utf-8").strip()
+            # Hard Cap ~300 Tokens, verhindert Ueberlauf bei wachsender Datei
+            return content[:1200] if content else ""
+        except OSError:
+            return ""
+
+    def _ch_audit_findings(self) -> str:
+        """Offene CRITICAL/HIGH Audit-Findings aus .audit/FINDINGS.md."""
+        findings_path = Path(__file__).parent.parent / ".audit" / "FINDINGS.md"
+        if not findings_path.exists():
+            return ""
+        try:
+            content = findings_path.read_text(encoding="utf-8")
+        except OSError:
+            return ""
+
+        # Kompakt: Nur Ueberschriften mit Status "open" oder "in-progress" extrahieren
+        lines = content.split("\n")
+        open_items = []
+        current_heading = ""
+        for line in lines:
+            if line.startswith("### "):
+                current_heading = line.lstrip("# ").strip()
+            if "`open`" in line or "`in-progress`" in line:
+                if current_heading:
+                    open_items.append(current_heading)
+                    current_heading = ""
+
+        if not open_items:
+            return ""
+        return "AUDIT-FINDINGS (offen): " + "; ".join(open_items[:5])
 
     # === Wahrnehmung ===
 

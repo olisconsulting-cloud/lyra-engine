@@ -30,6 +30,7 @@ DEFAULT_TASK_WEIGHTS: dict[str, dict[str, float]] = {
         "efficiency_alerts": 0.2, "checkpoint": 0.5,
         "composition": 0.4, "tasks": 0.4, "kpi": 0.3,
         "inbox": 2.5, "rhythm": 2.0, "security_lessons": 2.0,
+        "strategic_context": 0.25, "audit_findings": 0.15,
     },
     "projekt": {
         "sequence_memory": 1.0, "live_notes": 1.0, "goal_context": 1.5,
@@ -38,6 +39,7 @@ DEFAULT_TASK_WEIGHTS: dict[str, dict[str, float]] = {
         "efficiency_alerts": 0.3, "checkpoint": 1.0,
         "composition": 0.6, "tasks": 0.3, "kpi": 0.2,
         "inbox": 2.5, "rhythm": 2.0, "security_lessons": 2.0,
+        "strategic_context": 0.3, "audit_findings": 0.15,
     },
     "recherche": {
         "sequence_memory": 1.0, "live_notes": 0.5, "goal_context": 0.7,
@@ -46,6 +48,7 @@ DEFAULT_TASK_WEIGHTS: dict[str, dict[str, float]] = {
         "efficiency_alerts": 0.1, "checkpoint": 0.3,
         "composition": 0.3, "tasks": 0.3, "kpi": 0.2,
         "inbox": 2.5, "rhythm": 2.0, "security_lessons": 2.0,
+        "strategic_context": 0.2, "audit_findings": 0.1,
     },
     "evolution": {
         "sequence_memory": 1.0, "live_notes": 0.5, "goal_context": 0.8,
@@ -54,6 +57,7 @@ DEFAULT_TASK_WEIGHTS: dict[str, dict[str, float]] = {
         "efficiency_alerts": 0.8, "checkpoint": 0.5,
         "composition": 0.5, "tasks": 0.4, "kpi": 0.5,
         "inbox": 2.5, "rhythm": 2.0, "security_lessons": 2.0,
+        "strategic_context": 0.5, "audit_findings": 0.4,
     },
 }
 
