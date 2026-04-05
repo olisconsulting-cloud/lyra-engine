@@ -2479,6 +2479,7 @@ Antworte als JSON:
         )
 
         perception = self._build_perception()
+        self.telemetry.log_event("perception_build", self.perception_pipeline.get_build_stats())
         messages = [{"role": "user", "content": perception}]
         step_count = 0
         finished = False

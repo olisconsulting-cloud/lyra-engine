@@ -112,6 +112,7 @@ class PerceptionPipeline:
         budget = token_budget or self._max_tokens
         parts: list[str] = []
         used_tokens = 0
+        truncated_count = 0
         self._last_active_channels = []
 
         # Kanaele mit Score versehen
@@ -127,21 +128,57 @@ class PerceptionPipeline:
         scored.sort(key=lambda x: x[0], reverse=True)
 
         for score, ch in scored:
-            # Budget-Check (always_load Kanaele ignorieren Budget)
-            if not (ch.always_load or ch.name in ALWAYS_LOAD):
-                if used_tokens + ch.estimated_tokens > budget:
-                    continue
+            is_always = ch.always_load or ch.name in ALWAYS_LOAD
+            # Gelernte Token-Groesse nutzen, Fallback auf statischen Estimate
+            est = self._token_averages.get(ch.name, float(ch.estimated_tokens))
+
+            # Budget-Check mit Truncation statt binary Drop
+            truncate_ratio = 1.0
+            if not is_always and used_tokens + est > budget:
+                remaining = budget - used_tokens
+                if remaining < 50:
+                    continue  # Weniger als 50 Tokens — nicht mehr laden
+                truncate_ratio = remaining / est
 
             try:
                 content = ch.builder()
-                if content and content.strip():
-                    parts.append(content)
-                    # Tatsaechliche Token-Kosten statt Estimates
-                    actual_tokens = max(len(content) // 4, 10)
-                    used_tokens += actual_tokens
-                    self._last_active_channels.append(ch.name)
+                if not content or not content.strip():
+                    continue
+
+                # Truncation: Kanal anteilig kuerzen statt komplett droppen
+                if truncate_ratio < 1.0:
+                    max_chars = int(len(content) * truncate_ratio)
+                    cut = content[:max_chars].rfind("\n")
+                    if cut > 0:
+                        content = content[:cut]
+                    else:
+                        content = content[:max_chars]
+                    truncated_count += 1
+
+                # Wort-basierte Token-Schaetzung (genauer als len/4)
+                actual_tokens = max(len(content.split()) * 4 // 3, 10)
+                used_tokens += actual_tokens
+                parts.append(content)
+                self._last_active_channels.append(ch.name)
+
+                # Lerne tatsaechliche Token-Groesse (EMA: 80% alt, 20% neu)
+                avg = self._token_averages.get(ch.name, float(ch.estimated_tokens))
+                self._token_averages[ch.name] = avg * 0.8 + actual_tokens * 0.2
             except Exception as e:
                 logger.warning(f"PerceptionPipeline: Kanal '{ch.name}' fehlgeschlagen: {e}")
+
+        # Token-Averages persistieren (1x pro Sequenz, nicht pro Step)
+        safe_json_write(self._token_avg_path, self._token_averages)
+
+        # Build-Statistiken fuer Telemetrie
+        self._last_build_stats = {
+            "total_tokens": used_tokens,
+            "budget": budget,
+            "channels_loaded": len(self._last_active_channels),
+            "channels_total": len(self._channels),
+            "channels_truncated": truncated_count,
+            "task_type": task_type,
+        }
 
         return "\n".join(parts)
 
@@ -179,6 +216,10 @@ class PerceptionPipeline:
     def get_active_channels(self) -> list[str]:
         """Gibt die Kanaele zurueck die beim letzten build() aktiv waren."""
         return list(self._last_active_channels)
+
+    def get_build_stats(self) -> dict:
+        """Gibt Statistiken des letzten build() zurueck (fuer Telemetrie)."""
+        return dict(self._last_build_stats)
 
     def get_learned_weights(self) -> dict:
         """Gibt die gelernten Gewichte zurueck (fuer Debugging)."""
