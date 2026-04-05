@@ -2635,10 +2635,14 @@ Antworte als JSON:
                     if getattr(block, "type", None) == "tool_use":
                         result = self._execute_tool(block.name, block.input)
                         trunc = 6000 if block.name == "read_file" else 3000
+                        result_full = str(result)
+                        result_content = result_full[:trunc]
+                        if len(result_full) > trunc:
+                            result_content += f"\n[GEKUERZT: {len(result_full)} Zeichen gesamt, erste {trunc} gezeigt. Nutze offset/max_chars fuer den Rest.]"
                         tool_results.append({
                             "type": "tool_result",
                             "tool_use_id": block.id,
-                            "content": str(result)[:trunc],
+                            "content": result_content,
                         })
                 messages.append({"role": "user", "content": tool_results})
             else:
@@ -3373,7 +3377,10 @@ Antworte als JSON:
                             # read_file: 6000 Zeichen (DeepSeek 128K haelt das)
                             # Andere Tools: 3000 (konservativ)
                             trunc = 6000 if block.name == "read_file" else 3000
-                            result_str = str(result)[:trunc]
+                            result_full = str(result)
+                            result_str = result_full[:trunc]
+                            if len(result_full) > trunc:
+                                result_str += f"\n[GEKUERZT: {len(result_full)} Zeichen gesamt, erste {trunc} gezeigt. Nutze offset/max_chars fuer den Rest.]"
                             is_error = (
                                 result_str.startswith("FEHLER")
                                 or result_str.startswith("WARNUNG")

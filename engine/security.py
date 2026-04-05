@@ -67,7 +67,7 @@ HARD_BLOCKED_PATTERNS = {
 # SOFT WARNING: Warnung ausgeben, aber nicht blockieren
 SOFT_WARNING_PATTERNS = {
     "eval": "eval() ist unsicher — nutze json.loads() oder ast.literal_eval()",
-    "exec": "exec() fuehrt beliebigen Code aus — nutze spezifischere Alternativen",
+    "exec(": "exec() fuehrt beliebigen Code aus — nutze spezifischere Alternativen",
     "__import__": "__import__() ist unueblich — nutze regulaere imports",
     "compile": "compile() + exec ist ein Umweg um exec — wirklich noetig?",
     "getattr(__builtins__": "Zugriff auf __builtins__ ist verdaechtig",

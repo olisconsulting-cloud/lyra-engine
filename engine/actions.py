@@ -296,6 +296,9 @@ class ActionEngine:
         "alpha", "beta", "rc", "rc1", "rc2",
         "dev", "prod", "staging", "test",
         "legacy", "deprecated", "archived",
+        # Bewusste Varianten (Test/Demo/Iteration)
+        "demo", "example", "mock", "stub", "benchmark", "sample", "fixture",
+        "fixed", "complete", "simple", "minimal", "basic",
     })
 
     def _find_similar_file(self, target: Path) -> Optional[Path]:
