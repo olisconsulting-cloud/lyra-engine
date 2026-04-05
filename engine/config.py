@@ -35,10 +35,10 @@ META_GOAL_KEYWORDS = frozenset((
     "tracking-system", "alert-mechanis", "uebungssequenz", "skill erweit",
     "self-diagnose", "speichermanagement", "reflexion", "routine",
     # Erweitert: Patterns die Dream als Meta-Goals tarnt
+    # NICHT: engine-architektur, eigenen code, selbstverbesser — das sind Kern-AGI-Aufgaben
     "selbstbewertung", "workflow optim", "monitoring implement",
     "eigene leistung", "sequenz-abschluss", "tool-management",
-    "prozess-management", "effizienz steiger", "eigenen code",
-    "selbstverbesser", "meta-lern", "engine-architektur",
+    "prozess-management", "effizienz steiger", "meta-lern",
 ))
 
 

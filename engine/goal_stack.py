@@ -9,10 +9,13 @@ Echte Zielstruktur die ueber Zyklen hinweg arbeitet:
 """
 
 import json
+import logging
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
+
+logger = logging.getLogger(__name__)
 
 from .config import safe_json_read, safe_json_write, normalize_name_words, is_meta_goal
 from .phi import PHI, phi_balance
@@ -464,6 +467,10 @@ class GoalStack:
         })
         self._save()
 
+        # Failed-Domain-Tracking: gescheiterte Domain fuer Dream-Guard speichern
+        # (VOR Kaskade und Early-Returns, damit auch abandon/complete-Faelle getrackt werden)
+        self._record_failed_domain(sg, reason)
+
         # Kaskaden-Fail: Pending SubGoals deren ALLE Vorgaenger failed sind
         # (z.B. "Unit-Tests schreiben" wenn Module nie gebaut wurden)
         cascade_count = 0
@@ -504,9 +511,6 @@ class GoalStack:
                     f"Mehrheit gescheitert: {done_count} erledigt, {failed_count} gescheitert",
                 )
 
-        # Failed-Domain-Tracking: gescheiterte Domain fuer Dream-Guard speichern
-        self._record_failed_domain(sg, reason)
-
         return f"Sub-Goal als gescheitert markiert: {sg['title']} — Grund: {reason}"
 
     def _record_failed_domain(self, subgoal: dict, reason: str):
@@ -531,7 +535,7 @@ class GoalStack:
             "wasted_steps": stats.get("total_wasted_steps", 0),
             "efficiency": stats.get("last_efficiency", 0.0),
             "failed_at": datetime.now(timezone.utc).isoformat(),
-            "keywords": list(set(subgoal.get("title", "").lower().split()))[:10],
+            "keywords": sorted(set(subgoal.get("title", "").lower().split()))[:10],
         }
 
         failed = self.goals.setdefault("_failed_domains", [])
@@ -551,8 +555,8 @@ class GoalStack:
         lines = ["GESCHEITERTE DOMAENEN (nicht erneut empfehlen):"]
         for f in failed[-10:]:
             lines.append(
-                f"  - {f['domain']}: {f['title']} "
-                f"(Grund: {f['reason'][:80]})"
+                f"  - {f.get('domain', '?')}: {f.get('title', '?')} "
+                f"(Grund: {(f.get('reason') or '')[:80]})"
             )
         return "\n".join(lines)
 

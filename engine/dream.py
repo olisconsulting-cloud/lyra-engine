@@ -550,43 +550,38 @@ Antworte als JSON:
             except (OSError, json.JSONDecodeError):
                 pass
 
-        # Effizienz-Muster als neue Beliefs speichern
+        # Effizienz-Muster + Tool-Insights als Beliefs speichern (atomar)
         eff_patterns = result.get("efficiency_patterns", [])
-        if eff_patterns:
+        tool_insights = result.get("tool_insights", "")
+        if eff_patterns or (tool_insights and len(tool_insights) > 20):
             beliefs_path = self.consciousness_path / "beliefs.json"
             try:
-                beliefs = self._safe_load_json(beliefs_path) or {}
+                beliefs = safe_json_read(beliefs_path, default={})
+                if not isinstance(beliefs, dict):
+                    beliefs = {}
                 formed = beliefs.get("formed_from_experience", [])
+                eff_dirty = False
+
                 for pattern in eff_patterns[:3]:
                     if pattern and not self._is_belief_duplicate(pattern, formed):
                         formed.append(pattern)
-                if len(formed) > 30:
-                    formed.sort(key=_belief_importance)
-                    formed = formed[len(formed) - 30:]
-                beliefs["formed_from_experience"] = formed
-                with open(beliefs_path, "w", encoding="utf-8") as f:
-                    json.dump(beliefs, f, indent=2, ensure_ascii=False)
-                applied.append(f"{len(eff_patterns)} Effizienz-Muster gespeichert")
-            except (OSError, json.JSONDecodeError):
-                pass
+                        eff_dirty = True
+                if eff_dirty:
+                    applied.append(f"{len(eff_patterns)} Effizienz-Muster gespeichert")
 
-        # Tool-Insights als Belief speichern (wenn vorhanden)
-        tool_insights = result.get("tool_insights", "")
-        if tool_insights and len(tool_insights) > 20:
-            beliefs_path = self.consciousness_path / "beliefs.json"
-            try:
-                beliefs = self._safe_load_json(beliefs_path) or {}
-                formed = beliefs.get("formed_from_experience", [])
-                insight_belief = f"[TOOLS] {tool_insights[:300]}"
-                if not self._is_belief_duplicate(insight_belief, formed):
-                    formed.append(insight_belief)
+                if tool_insights and len(tool_insights) > 20:
+                    insight_belief = f"[TOOLS] {tool_insights[:300]}"
+                    if not self._is_belief_duplicate(insight_belief, formed):
+                        formed.append(insight_belief)
+                        eff_dirty = True
+                        applied.append("Tool-Insights gespeichert")
+
+                if eff_dirty:
                     if len(formed) > 30:
                         formed.sort(key=_belief_importance)
                         formed = formed[len(formed) - 30:]
                     beliefs["formed_from_experience"] = formed
-                    with open(beliefs_path, "w", encoding="utf-8") as f:
-                        json.dump(beliefs, f, indent=2, ensure_ascii=False)
-                    applied.append("Tool-Insights gespeichert")
+                    safe_json_write(beliefs_path, beliefs)
             except (OSError, json.JSONDecodeError):
                 pass
 
@@ -727,18 +722,19 @@ Antworte als JSON:
                     continue
 
                 if action == "abort":
-                    for goal in goal_stack.goals.get("active", []):
-                        goal_idx = goal_stack.goals["active"].index(goal)
+                    for goal_idx, goal in enumerate(
+                        goal_stack.goals.get("active", [])
+                    ):
                         aborted = False
                         for sg in goal.get("sub_goals", []):
-                            if sg["status"] not in ("pending", "in_progress"):
+                            if sg.get("status") not in ("pending", "in_progress"):
                                 continue
-                            if subgoal_title.lower() in sg["title"].lower():
+                            if subgoal_title.lower() in sg.get("title", "").lower():
                                 goal_stack.fail_subgoal(
-                                    goal_idx, sg["index"],
+                                    goal_idx, sg.get("index", 0),
                                     reason=f"Dream-Abort: {reason[:150]}",
                                 )
-                                applied.append(f"ABORT: {sg['title'][:50]}")
+                                applied.append(f"ABORT: {sg.get('title', '?')[:50]}")
                                 aborted = True
                                 break
                         if aborted:
@@ -789,6 +785,7 @@ Antworte als JSON:
                 "process_insights": result.get("process_insights", ""),
                 "efficiency_patterns": result.get("efficiency_patterns", []),
                 "actuator_recommendations": result.get("actuator_recommendations", []),
+                "goal_recommendations": result.get("goal_recommendations", []),
             })
             log = log[-20:]
 

@@ -123,6 +123,7 @@ class SequenceIntelligence:
         self._stuck_tracker = {}
         self._token_warning_sent = False
         self._stagnant_checks = 0
+        self._read_only_warned = False
         self._plan_cache_dirty = False
         self._focus = focus
 
@@ -231,8 +232,10 @@ class SequenceIntelligence:
             else:
                 self._stagnant_checks = 0
 
-            # Read-only Spin: Viele Dateien gelesen, nichts geschrieben
-            if write_novelty == 0 and read_novelty > 5 and step >= 10:
+            # Read-only Spin: Viele Dateien gelesen, nichts geschrieben (einmalig)
+            if (write_novelty == 0 and read_novelty > 5 and step >= 10
+                    and not getattr(self, "_read_only_warned", False)):
+                self._read_only_warned = True
                 parts.append(
                     "\n\n⚠ READ-ONLY SPIN: Du hast viele Dateien gelesen aber "
                     "nichts geschrieben. Lesen ohne Output ist kein Fortschritt. "

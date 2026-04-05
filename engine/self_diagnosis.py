@@ -459,13 +459,14 @@ class SilentFailureDetector:
         warnings = []
 
         # 0. Spin-Loop Detection: Unproduktive Sequenz erkennen
-        # Kriterium: Keine Output-Artefakte UND sehr wenige Tool-Calls (<=1)
-        # Sequenzen mit 2+ Calls sind oft legitime Recherche (web_search, read_file)
-        # Unproduktiv: Kein Output UND entweder fast keine Calls ODER Read-only Spin
+        # Kriterium 1: Keine Output-Artefakte UND fast keine Calls
+        # Kriterium 2: Viele Calls aber kein Output (Read-only Spin, >= 5 um
+        #              legitime Recherche mit 3-4 Calls nicht zu treffen)
         is_unproductive = (
             (files_written == 0 and tools_built == 0
              and errors == 0 and tool_calls <= 1)
-            or (files_written == 0 and tools_built == 0 and tool_calls >= 3)
+            or (files_written == 0 and tools_built == 0
+                and errors == 0 and tool_calls >= 5)
         )
         if is_unproductive:
             self._record_unproductive()

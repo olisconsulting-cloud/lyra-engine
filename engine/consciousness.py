@@ -2475,15 +2475,19 @@ Antworte als JSON:
                     dream_log = safe_json_read(self.dream.dream_log_path, default=[])
                     if dream_log:
                         last_dream = dream_log[-1]
+                        # Erst bestehende Goals aufraeumen (abort/simplify)...
+                        try:
+                            goal_rec_result = self.dream._apply_goal_recommendations(
+                                last_dream, self.goal_stack,
+                            )
+                            if goal_rec_result:
+                                result += f" | Goal-Recs: {goal_rec_result}"
+                        except Exception as e:
+                            logger.warning("Dream goal_recommendations fehlgeschlagen: %s", e)
+                        # ...dann neue Goals erstellen (mit aktuellem active_count)
                         rec_result = self.dream._apply_recommendations(last_dream, self.goal_stack)
                         if rec_result:
                             result += f" | {rec_result}"
-                        # Dream goal_recommendations anwenden (abort/simplify)
-                        goal_rec_result = self.dream._apply_goal_recommendations(
-                            last_dream, self.goal_stack,
-                        )
-                        if goal_rec_result:
-                            result += f" | Goal-Recs: {goal_rec_result}"
                         # Actuator: Dream-Insights empfangen (bidirektionale Bruecke)
                         try:
                             self.actuator.learn_from_dream(last_dream)
