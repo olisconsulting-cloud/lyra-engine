@@ -86,13 +86,13 @@ class SequenceIntelligence:
     Checkpoint-Timing, Plan-Management, Finish-Differenzierung.
     """
 
-    def __init__(self, consciousness_path: Path):
+    def __init__(self, consciousness_path: Path, actuator=None):
         self._path = consciousness_path
 
         # Sub-Module (bleiben als eigenstaendige Dateien)
         self._checkpointer = CheckpointManager(consciousness_path)
         self._planner = SequencePlanner(consciousness_path)
-        self._meta_rules = MetaRuleEngine(consciousness_path)
+        self._meta_rules = MetaRuleEngine(consciousness_path, actuator=actuator)
         self._policy = PolicyEngine(consciousness_path)
 
         # Per-Sequence State (reset in init_sequence)

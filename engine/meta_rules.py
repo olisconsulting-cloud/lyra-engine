@@ -20,11 +20,24 @@ logger = logging.getLogger(__name__)
 
 
 class MetaRuleEngine:
-    """Erzwingt Verhaltensregeln die aus Erfahrung gelernt wurden."""
+    """Erzwingt Verhaltensregeln die aus Erfahrung gelernt wurden.
 
-    def __init__(self, consciousness_path: Path):
+    Hebel 3: Meta-Learning — Patterns erkennen und zu Code-Parameter-Aenderungen
+    eskalieren statt nur Prompt-Text zu injizieren.
+    """
+
+    # Mapping: Pattern-ID → (Actuator-Parameter, Richtung)
+    # NUR Patterns die der Actuator nicht selbst erkennt (keine Doppel-Anpassung).
+    # Actuator erkennt bereits: finish_too_late, zero_output, research_overrun.
+    PATTERN_TO_ACTUATOR = {
+        "high_error_rate": ("step_budget_modifier", "decrease"),
+        "same_subgoal_stuck": ("research_depth_limit", "decrease"),
+    }
+
+    def __init__(self, consciousness_path: Path, actuator=None):
         self.rules_path = consciousness_path / "meta_rules.json"
         self.rules = self._load_rules()
+        self.actuator = actuator  # BehaviorActuator fuer Code-Eskalation
 
     def _load_rules(self) -> dict:
         """Laedt Meta-Regeln: Bootstrap-Defaults + Instanz-Overrides."""
@@ -40,18 +53,44 @@ class MetaRuleEngine:
     def record_pattern(self, pattern_id: str, description: str):
         """Zaehlt ein beobachtetes Muster hoch.
 
-        Bei 3+ Vorkommen wird automatisch eine Meta-Regel erstellt.
+        Bei 3+ Vorkommen: Actuator-Parameter eskalieren (Code > Prompts)
+        und Meta-Regel erstellen.
         """
         counts = self.rules.setdefault("pattern_counts", {})
         counts[pattern_id] = counts.get(pattern_id, 0) + 1
         count = counts[pattern_id]
 
-        # Ab 3 Vorkommen: Regel erstellen
+        # Ab 3 Vorkommen: Zuerst Code-Eskalation, dann Regel erstellen
         if count == 3:
+            self._escalate_to_actuator(pattern_id)
             self._create_rule_from_pattern(pattern_id, description)
             logger.info(f" Meta-Regel erstellt: {pattern_id} (nach {count}x)")
 
+        # Alle 5 weiteren Vorkommen: erneut eskalieren (Pattern bleibt aktiv)
+        elif count > 3 and count % 5 == 0:
+            self._escalate_to_actuator(pattern_id)
+            logger.info("Meta-Regel re-eskaliert: %s (count=%d)", pattern_id, count)
+
         self._save_rules()
+
+    def _escalate_to_actuator(self, pattern_id: str):
+        """Eskaliert Pattern zu Actuator-Parameter-Aenderung (Hebel 3).
+
+        Code > Prompts: Statt Prompt-Text zu injizieren den das LLM ignoriert,
+        aendern wir harte Code-Parameter die das Verhalten erzwingen.
+        """
+        if not self.actuator:
+            return
+        mapping = self.PATTERN_TO_ACTUATOR.get(pattern_id)
+        if not mapping:
+            return
+        param, direction = mapping
+        self.actuator.force_adjust(param, direction)
+        # Regel als eskaliert markieren (unterdrueckt Prompt-Injection)
+        for rule in self.rules.get("rules", []):
+            if rule.get("id") == pattern_id:
+                rule["escalated_to_actuator"] = True
+        logger.info("Hebel-3-Eskalation: %s → %s %s", pattern_id, param, direction)
 
     def _create_rule_from_pattern(self, pattern_id: str, description: str):
         """Erstellt eine harte Regel aus einem wiederkehrenden Muster."""
@@ -161,9 +200,16 @@ class MetaRuleEngine:
 
         lines = ["\n=== META-REGELN (aus Erfahrung gelernt — NICHT ignorieren) ==="]
         for rule in active:
+            # Eskalierte Regeln: Code-Parameter erzwingen schon das Verhalten,
+            # Prompt-Text waere Token-Verschwendung (LLM ignoriert ihn ohnehin)
+            if rule.get("escalated_to_actuator"):
+                continue
             injection = rule.get("prompt_injection", "")
             if injection:
                 lines.append(f"- {injection}")
+        # Nur Header zurueckgeben wenn es tatsaechlich Injektionen gibt
+        if len(lines) <= 1:
+            return ""
         return "\n".join(lines)
 
     def check_guards(self, step: int, files_written: int,
@@ -257,8 +303,10 @@ class MetaRuleEngine:
     EVAL_WINDOW = 10  # Sequenzen nach Regel-Erstellung bis Evaluation
 
     def evaluate_rule_effectiveness(self, current_seq: int):
-        """Prueft ob aktive Regeln den Pattern-Count reduziert haben.
+        """Prueft ob aktive Regeln die Pattern-Rate reduziert haben.
 
+        Vergleicht Hits/Sequenz VOR der Regel mit Hits/Sequenz NACH der Regel.
+        Kumulative Counter gehen nur hoch — deshalb Rate statt Absolut.
         Prinzip wie ActuatorMeta: Messen ob Aenderung geholfen hat,
         revertieren wenn nicht. Schliesst den Meta-Learning-Loop (Hebel 3).
         """
@@ -269,30 +317,46 @@ class MetaRuleEngine:
             if not rule.get("active") or rule.get("evaluated"):
                 continue
             created_seq = rule.get("created_at_seq", 0)
-            if created_seq == 0 or current_seq - created_seq < self.EVAL_WINDOW:
+
+            # Alte Regeln ohne created_at_seq: Baseline jetzt setzen, naechstes Mal evaluieren
+            if created_seq == 0:
+                pattern_id = rule["id"]
+                rule["baseline_count"] = counts.get(pattern_id, 0)
+                rule["created_at_seq"] = current_seq
+                changed = True
+                logger.info("Meta-Regel Baseline gesetzt: %s (count=%d)", pattern_id, rule["baseline_count"])
+                continue
+
+            elapsed = current_seq - created_seq
+            if elapsed < self.EVAL_WINDOW:
                 continue  # Noch nicht genug Daten
 
             pattern_id = rule["id"]
             baseline = rule.get("baseline_count", 0)
             current = counts.get(pattern_id, 0)
+            new_hits = current - baseline  # Hits SEIT Regel-Erstellung
 
-            # Verbesserung = weniger Pattern-Hits seit Regel-Erstellung
-            improvement = baseline - current
+            # Rate: Hits pro Sequenz NACH Regel-Erstellung
+            rate_after = new_hits / max(1, elapsed)
+            # Rate VOR Regel: baseline / created_seq (kumulative Hits bis Erstellung)
+            rate_before = baseline / max(1, created_seq)
 
             rule["evaluated"] = True
             rule["evaluation_seq"] = current_seq
-            rule["improvement"] = improvement
+            rule["rate_before"] = round(rate_before, 3)
+            rule["rate_after"] = round(rate_after, 3)
             changed = True
 
-            if improvement <= 0:
+            # Regel wirkt wenn Rate NACH Erstellung niedriger als vorher
+            if rate_after >= rate_before:
                 rule["active"] = False
                 rule["deactivated_reason"] = (
-                    f"Keine Verbesserung nach {self.EVAL_WINDOW} Seq "
-                    f"(baseline={baseline}, aktuell={current})"
+                    f"Keine Verbesserung nach {elapsed} Seq "
+                    f"(rate vorher={rate_before:.3f}/seq, nachher={rate_after:.3f}/seq)"
                 )
-                logger.info("Meta-Regel deaktiviert: %s (keine Wirkung)", pattern_id)
+                logger.info("Meta-Regel deaktiviert: %s (rate %.3f→%.3f)", pattern_id, rate_before, rate_after)
             else:
-                logger.info("Meta-Regel bestaetigt: %s (+%d Verbesserung)", pattern_id, improvement)
+                logger.info("Meta-Regel bestaetigt: %s (rate %.3f→%.3f)", pattern_id, rate_before, rate_after)
 
         if changed:
             self._save_rules()

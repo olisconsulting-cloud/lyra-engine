@@ -160,10 +160,11 @@ class ConsciousnessEngine:
         self._wake_event = threading.Event()
         self.sequences_total = 0
 
+        # Actuator VOR SequenceIntelligence (MetaRuleEngine braucht Actuator-Referenz)
+        self.actuator = BehaviorActuator(self.consciousness_path)
         # Sequenz-Intelligence: Fassade fuer Checkpoint, Planner, Meta-Rules
         from .sequence_intelligence import SequenceIntelligence
-        self.seq_intel = SequenceIntelligence(self.consciousness_path)
-        self.actuator = BehaviorActuator(self.consciousness_path)
+        self.seq_intel = SequenceIntelligence(self.consciousness_path, actuator=self.actuator)
         self.skill_library = SkillLibrary(config.DATA_PATH)
         self.skill_enricher = SkillEnricher(self.failure_memory)
         self.episodic_bridge = EpisodicBridge(config.DATA_PATH)

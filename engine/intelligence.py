@@ -975,7 +975,7 @@ class EfficiencyTracker:
             **metrics,
         }
         self.data["sequences"].append(entry)
-        self.data["sequences"] = self.data["sequences"][-100:]
+        self.data["sequences"] = self.data["sequences"][-300:]
         self._save()
 
     def get_trend(self, last_n: int = 10) -> str:

@@ -455,6 +455,32 @@ class BehaviorActuator:
             param, old_val, new_val, trigger, seq_num,
         )
 
+    def force_adjust(self, param: str, direction: str):
+        """Externe Anpassung durch MetaRuleEngine (Hebel 3 Eskalation).
+
+        Wird aufgerufen wenn ein Pattern wiederholt erkannt wird und
+        die Prompt-basierte Regel nicht gewirkt hat.
+        Persistiert sofort — unabhaengig von process_prediction_error.
+        """
+        if param not in BOUNDS:
+            logger.warning("force_adjust: unbekannter Parameter %s", param)
+            return
+
+        seq_num = self._read_current_seq()
+        self._adjust_parameter(param, direction,
+                               trigger="meta_rule_escalation", seq_num=seq_num)
+        self._save()
+
+    def _read_current_seq(self) -> int:
+        """Liest aktuelle Sequenznummer aus state.json (zuverlaessige Quelle)."""
+        state_path = self._path / "state.json"
+        try:
+            import json
+            with open(state_path, "r", encoding="utf-8") as f:
+                return json.load(f).get("total_sequences", 0)
+        except (OSError, json.JSONDecodeError, ValueError):
+            return self._state.get("_last_adjustment_seq", 0)
+
     def _decay_toward_defaults(self, seq_num: int):
         """Relaxiert alle Parameter leicht zurueck Richtung Defaults."""
         params = self._state["parameters"]
