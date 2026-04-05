@@ -1668,7 +1668,12 @@ SEQUENZ-PLANUNG: Nutze write_sequence_plan am Anfang — plane dein Ziel, Exit-K
             kept_back = [b for b in original if b not in validated][:removed_count - 3]
             validated = validated + kept_back
             removed_count = before_count - len(validated)
-        self.beliefs["formed_from_experience"] = validated[-30:]
+        if len(validated) > 30:
+            # Wichtigste behalten (Importance-Score), nicht einfach neueste
+            from .dream import _belief_importance
+            validated.sort(key=_belief_importance)
+            validated = validated[len(validated) - 30:]
+        self.beliefs["formed_from_experience"] = validated
         challenged = [b for b in self.beliefs.get("formed_from_experience", [])
                       if self.strategies.get_belief_meta(b).get("status") == "challenged"]
         self.narrator.belief_update(removed_count, len(challenged))
@@ -2479,7 +2484,7 @@ Antworte als JSON:
         )
 
         perception = self._build_perception()
-        self.telemetry.log_event("perception_build", self.perception_pipeline.get_build_stats())
+        telemetry.log_event("perception_build", self.perception_pipeline.get_build_stats())
         messages = [{"role": "user", "content": perception}]
         step_count = 0
         finished = False

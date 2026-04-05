@@ -25,6 +25,20 @@ from .llm_ops import _extract_response_text
 logger = logging.getLogger(__name__)
 
 
+def _belief_importance(b: str) -> float:
+    """Bewertet Belief-Wichtigkeit: hoeher = wertvoller."""
+    score = 0.0
+    # Laenge korreliert mit Spezifitaet
+    score += min(len(b) / 200, 0.3)
+    # Konkrete Handlungsanweisungen
+    if any(kw in b.lower() for kw in ("sollte", "muss", "immer", "nie", "vermeiden", "stattdessen")):
+        score += 0.3
+    # Meta-Erkenntnisse besonders wertvoll
+    if any(kw in b.lower() for kw in ("false positive", "ursache", "root cause", "hinterfragen")):
+        score += 0.4
+    return score
+
+
 class DreamEngine:
     """Konsolidiert Lyras Gedaechtnis im Hintergrund."""
 
@@ -347,8 +361,9 @@ Antworte als JSON:
                         if not self._is_belief_duplicate(b, merged):
                             merged.append(b)
                             added += 1
-                    # Max 30 Beliefs — aelteste zuerst in Wisdom destillieren
+                    # Max 30 Beliefs — unwichtigste zuerst in Wisdom destillieren
                     if len(merged) > 30:
+                        merged.sort(key=_belief_importance)
                         overflow = merged[:len(merged) - 30]
                         merged = merged[len(merged) - 30:]
                         wisdom = beliefs.get("wisdom", [])
@@ -518,7 +533,10 @@ Antworte als JSON:
                 for pattern in eff_patterns[:3]:
                     if pattern and not self._is_belief_duplicate(pattern, formed):
                         formed.append(pattern)
-                beliefs["formed_from_experience"] = formed[-30:]
+                if len(formed) > 30:
+                    formed.sort(key=_belief_importance)
+                    formed = formed[len(formed) - 30:]
+                beliefs["formed_from_experience"] = formed
                 with open(beliefs_path, "w", encoding="utf-8") as f:
                     json.dump(beliefs, f, indent=2, ensure_ascii=False)
                 applied.append(f"{len(eff_patterns)} Effizienz-Muster gespeichert")
@@ -535,7 +553,10 @@ Antworte als JSON:
                 insight_belief = f"[TOOLS] {tool_insights[:300]}"
                 if not self._is_belief_duplicate(insight_belief, formed):
                     formed.append(insight_belief)
-                    beliefs["formed_from_experience"] = formed[-30:]
+                    if len(formed) > 30:
+                        formed.sort(key=_belief_importance)
+                        formed = formed[len(formed) - 30:]
+                    beliefs["formed_from_experience"] = formed
                     with open(beliefs_path, "w", encoding="utf-8") as f:
                         json.dump(beliefs, f, indent=2, ensure_ascii=False)
                     applied.append("Tool-Insights gespeichert")
@@ -562,9 +583,9 @@ Antworte als JSON:
 
         try:
             summary = goal_stack.get_summary()
-            # Nicht mehr als 5 aktive Goals
+            # Nicht mehr als 3 aktive Goals — Focus > Breite
             active_count = summary.count("[ ]") + summary.count("[→]") if summary else 0
-            if active_count >= 5:
+            if active_count >= 3:
                 return ""
 
             # Meta-Goal-Guard: Zaehle bereits aktive Meta-Goals
@@ -574,7 +595,8 @@ Antworte als JSON:
             )
 
             created = 0
-            for rec in recommendations[:2]:
+            max_new = min(2, 3 - active_count)
+            for rec in recommendations[:max_new]:
                 # Neues Format: dict mit title + sub_goals
                 if isinstance(rec, dict):
                     title = rec.get("title", "")[:100]

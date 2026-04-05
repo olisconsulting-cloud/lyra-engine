@@ -69,6 +69,12 @@ class SelfModifier:
         """
         target = (self.base_path / relative_path).resolve()
 
+        # Fallback: Datei koennte in data/ liegen (Projekte, Tools)
+        if not target.exists():
+            data_target = (self.base_path / "data" / relative_path).resolve()
+            if data_target.exists() and data_target.is_relative_to(self.base_path.resolve()):
+                target = data_target
+
         # Sicherheitscheck
         if not target.is_relative_to(self.base_path.resolve()):
             return "FEHLER: Zugriff nur auf eigene Dateien."
@@ -118,6 +124,12 @@ class SelfModifier:
             Ergebnis
         """
         target = (self.base_path / relative_path).resolve()
+
+        # Fallback: Datei koennte in data/ liegen (Projekte, Tools)
+        if not target.exists():
+            data_target = (self.base_path / "data" / relative_path).resolve()
+            if data_target.exists() and data_target.is_relative_to(self.base_path.resolve()):
+                target = data_target
 
         # Sicherheitschecks
         if not target.is_relative_to(self.base_path.resolve()):

@@ -97,6 +97,13 @@ class Toolchain:
         if "def run(" not in code:
             return "FEHLER: Tool muss eine 'def run(**kwargs) -> str' Funktion haben."
 
+        # Duplikat-Check: Aehnliches Tool bereits registriert?
+        similar = self._find_similar_tool(name)
+        if similar:
+            ex_desc = self.registry["tools"][similar].get("description", "")[:80]
+            return (f"DUPLIKAT: Aehnliches Tool existiert: '{similar}' ({ex_desc}). "
+                    f"Nutze oder verbessere das bestehende Tool.")
+
         # Header hinzufuegen
         full_code = f'"""\nTool: {name}\n{description}\n\nErstellt: {datetime.now().strftime("%Y-%m-%d %H:%M")}\n"""\n\n'
         full_code += f'NAME = "{name}"\n'
@@ -144,6 +151,29 @@ class Toolchain:
             pass
 
         return f"Tool '{name}' erstellt und registriert. Test: {test_result}"
+
+    # Version-Woerter: Nur nummerierte Versionen erlaubt (v1, v2...)
+    _TOOL_VERSION_WORDS = frozenset({
+        "v1", "v2", "v3", "v4", "v5", "v6", "v7", "v8", "v9", "v10",
+    })
+
+    def _find_similar_tool(self, name: str) -> Optional[str]:
+        """Findet aehnliches registriertes Tool (Jaccard >= 0.5)."""
+        from .config import normalize_name_words
+        new_words = normalize_name_words(name)
+        if not new_words or (new_words & self._TOOL_VERSION_WORDS):
+            return None
+        for ex_name, ex_meta in self.registry.get("tools", {}).items():
+            if ex_meta.get("status") == "archived":
+                continue
+            ex_words = normalize_name_words(ex_name)
+            if not ex_words or (ex_words & self._TOOL_VERSION_WORDS):
+                continue
+            overlap = len(new_words & ex_words)
+            union = len(new_words | ex_words)
+            if union and overlap / union >= 0.5:
+                return ex_name
+        return None
 
     def _test_tool(self, name: str, filepath: Path) -> str:
         """Testet ob ein Tool importierbar ist und run() hat."""
