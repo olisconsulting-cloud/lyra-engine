@@ -1,0 +1,42 @@
+{
+  "sequence_id": "seq_214",
+  "start_time": "2026-04-05T22:15:33.080156",
+  "max_steps": 20,
+  "current_step": 26,
+  "finish_called": true,
+  "finish_step": 8,
+  "finish_time": "2026-04-05T22:16:23.220191",
+  "warnings": [
+    {
+      "step": 18,
+      "message": "Finish sequence noch nicht aufgerufen nach 18 Steps (Warnschwelle: 15)",
+      "time": "2026-04-05T22:15:55.707766",
+      "level": "warning"
+    },
+    {
+      "step": 26,
+      "message": "Finish sequence noch nicht aufgerufen nach 26 Steps (Warnschwelle: 15)",
+      "time": "2026-04-05T22:15:59.942967",
+      "level": "warning"
+    }
+  ],
+  "alerts": [
+    {
+      "step": 26,
+      "message": "KRITISCH: Finish sequence noch nicht aufgerufen nach 26 Steps (Kritische Schwelle: 25)",
+      "time": "2026-04-05T22:15:59.942980",
+      "level": "critical"
+    }
+  ],
+  "status": "finished",
+  "performance": {
+    "finish_step": 8,
+    "max_steps": 20,
+    "efficiency_score": 60.0,
+    "rating": "excellent",
+    "rating_emoji": "⭐",
+    "warnings_count": 2,
+    "alerts_count": 1,
+    "message": "⭐ Finish in Step 8/20 (Score: 60.0)"
+  }
+}

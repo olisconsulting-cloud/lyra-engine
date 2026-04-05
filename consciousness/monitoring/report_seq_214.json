@@ -1,0 +1,77 @@
+{
+  "success": true,
+  "sequence_id": "seq_214",
+  "summary": "⚠️  Sequenz seq_214: Finish sequence in Step 8. 2 Warnungen, 1 Alerts.",
+  "timeline": [
+    {
+      "time": "2026-04-05T22:15:33.080156",
+      "event": "Sequenz gestartet",
+      "step": 0,
+      "level": "info"
+    },
+    {
+      "time": "2026-04-05T22:15:55.707766",
+      "event": "Warnung: Finish sequence noch nicht aufgerufen nach 18 Steps (Warnschwelle: 15)",
+      "step": 18,
+      "level": "warning"
+    },
+    {
+      "time": "2026-04-05T22:15:59.942967",
+      "event": "Warnung: Finish sequence noch nicht aufgerufen nach 26 Steps (Warnschwelle: 15)",
+      "step": 26,
+      "level": "warning"
+    },
+    {
+      "time": "2026-04-05T22:15:59.942980",
+      "event": "Kritischer Alert: KRITISCH: Finish sequence noch nicht aufgerufen nach 26 Steps (Kritische Schwelle: 25)",
+      "step": 26,
+      "level": "critical"
+    },
+    {
+      "time": "2026-04-05T22:16:23.220191",
+      "event": "Finish sequence aufgerufen",
+      "step": 8,
+      "level": "success"
+    }
+  ],
+  "performance_metrics": {
+    "finish_step": 8,
+    "max_steps": 20,
+    "efficiency_score": 60.0,
+    "rating": "excellent",
+    "rating_emoji": "⭐",
+    "warnings_count": 2,
+    "alerts_count": 1,
+    "message": "⭐ Finish in Step 8/20 (Score: 60.0)"
+  },
+  "warnings": [
+    {
+      "step": 18,
+      "message": "Finish sequence noch nicht aufgerufen nach 18 Steps (Warnschwelle: 15)",
+      "time": "2026-04-05T22:15:55.707766",
+      "level": "warning"
+    },
+    {
+      "step": 26,
+      "message": "Finish sequence noch nicht aufgerufen nach 26 Steps (Warnschwelle: 15)",
+      "time": "2026-04-05T22:15:59.942967",
+      "level": "warning"
+    }
+  ],
+  "alerts": [
+    {
+      "step": 26,
+      "message": "KRITISCH: Finish sequence noch nicht aufgerufen nach 26 Steps (Kritische Schwelle: 25)",
+      "time": "2026-04-05T22:15:59.942980",
+      "level": "critical"
+    }
+  ],
+  "recommendations": [
+    "✅ Ausgezeichnet! Finish sequence früh aufgerufen (Step 8). Weiter so!",
+    "⚠️  2 Warnungen erhalten. Überprüfe die finish_sequence Checkliste in consciousness/finish_sequence_checklist.md",
+    "🚨 1 kritische Alerts. Dringend finish_sequence Implementierung überprüfen."
+  ],
+  "start_time": "2026-04-05T22:15:33.080156",
+  "finish_time": "2026-04-05T22:16:23.220191",
+  "total_steps": 26
+}
