@@ -2478,6 +2478,12 @@ Antworte als JSON:
                         rec_result = self.dream._apply_recommendations(last_dream, self.goal_stack)
                         if rec_result:
                             result += f" | {rec_result}"
+                        # Dream goal_recommendations anwenden (abort/simplify)
+                        goal_rec_result = self.dream._apply_goal_recommendations(
+                            last_dream, self.goal_stack,
+                        )
+                        if goal_rec_result:
+                            result += f" | Goal-Recs: {goal_rec_result}"
                         # Actuator: Dream-Insights empfangen (bidirektionale Bruecke)
                         try:
                             self.actuator.learn_from_dream(last_dream)

@@ -217,6 +217,10 @@ class GoalStack:
         """
         sg = self._find_active_subgoal()
         if not sg:
+            logger.warning(
+                "record_subgoal_attempt: Kein aktives SubGoal — Stats verloren "
+                "(steps=%d, files=%d, errors=%d)", steps_used, files_written, errors,
+            )
             return
 
         stats = sg.setdefault("_attempt_stats", {
@@ -409,13 +413,18 @@ class GoalStack:
             "progress_log": [],
         }
 
-        # Sub-Goals anlegen
+        # Sub-Goals anlegen (mit Validierung)
         if sub_goals:
             for i, sg_title in enumerate(sub_goals):
+                if not sg_title or not isinstance(sg_title, str):
+                    continue
+                sg_title = sg_title.strip()[:200]
+                if not sg_title:
+                    continue
                 goal["sub_goals"].append({
                     "index": i,
                     "title": sg_title,
-                    "status": "pending",  # pending, in_progress, done
+                    "status": "pending",
                     "result": None,
                 })
 
@@ -481,16 +490,71 @@ class GoalStack:
             all_failed = all(s["status"] == "failed" for s in sgs)
             if all_failed:
                 return self.abandon_goal(goal_index, f"Alle Sub-Goals gescheitert: {reason}")
-            # Mix aus done + failed → Ziel abschliessen (teilweise erreicht)
-            has_any_done = any(s["status"] == "done" for s in sgs)
-            if has_any_done:
-                done_count = sum(1 for s in sgs if s["status"] == "done")
-                failed_count = sum(1 for s in sgs if s["status"] == "failed")
+            # Mix aus done + failed → abschliessen nur wenn >= 50% done
+            done_count = sum(1 for s in sgs if s["status"] == "done")
+            failed_count = sum(1 for s in sgs if s["status"] == "failed")
+            if done_count > 0 and done_count >= failed_count:
                 return self.complete_goal(
                     goal_index,
                 ) + f" (teilweise: {done_count} erledigt, {failed_count} gescheitert)"
+            elif done_count > 0:
+                # Mehr failed als done → aufgeben
+                return self.abandon_goal(
+                    goal_index,
+                    f"Mehrheit gescheitert: {done_count} erledigt, {failed_count} gescheitert",
+                )
+
+        # Failed-Domain-Tracking: gescheiterte Domain fuer Dream-Guard speichern
+        self._record_failed_domain(sg, reason)
 
         return f"Sub-Goal als gescheitert markiert: {sg['title']} — Grund: {reason}"
+
+    def _record_failed_domain(self, subgoal: dict, reason: str):
+        """Speichert gescheiterte Domain fuer Dream-Guard.
+
+        Nur bei echtem Scheitern (nicht bei Abhaengigkeits-Kaskaden
+        oder trivialen Fehlern mit wenig Waste).
+        """
+        stats = subgoal.get("_attempt_stats", {})
+        # Kaskaden-Fails nicht tracken — die Ursache liegt im Vorgaenger
+        if "Abhaengigkeit" in (reason or "") and stats.get("total_wasted_steps", 0) < 10:
+            return
+
+        domain = self._classify_domain(subgoal.get("title", ""))
+        if domain == "sonstiges":
+            return
+
+        entry = {
+            "domain": domain,
+            "title": subgoal.get("title", "")[:100],
+            "reason": (reason or "")[:200],
+            "wasted_steps": stats.get("total_wasted_steps", 0),
+            "efficiency": stats.get("last_efficiency", 0.0),
+            "failed_at": datetime.now(timezone.utc).isoformat(),
+            "keywords": list(set(subgoal.get("title", "").lower().split()))[:10],
+        }
+
+        failed = self.goals.setdefault("_failed_domains", [])
+        failed.append(entry)
+
+        # Max 30 Eintraege (FIFO)
+        if len(failed) > 30:
+            self.goals["_failed_domains"] = failed[-30:]
+
+        self._save()
+
+    def get_failed_domains_summary(self) -> str:
+        """Zusammenfassung gescheiterter Domaenen fuer Dream-Prompt."""
+        failed = self.goals.get("_failed_domains", [])
+        if not failed:
+            return ""
+        lines = ["GESCHEITERTE DOMAENEN (nicht erneut empfehlen):"]
+        for f in failed[-10:]:
+            lines.append(
+                f"  - {f['domain']}: {f['title']} "
+                f"(Grund: {f['reason'][:80]})"
+            )
+        return "\n".join(lines)
 
     def start_next_subgoal(self, goal_index: int = 0) -> Optional[dict]:
         """
@@ -563,7 +627,11 @@ class GoalStack:
         goal = active.pop(goal_index)
         goal["status"] = "completed"
         goal["completed_at"] = datetime.now(timezone.utc).isoformat()
-        self.goals.setdefault("completed", []).append(goal)
+        completed = self.goals.setdefault("completed", [])
+        completed.append(goal)
+        # FIFO: Max 50 abgeschlossene Goals behalten
+        if len(completed) > 50:
+            self.goals["completed"] = completed[-50:]
         self._save()
         return f"ZIEL ERREICHT: '{goal['title']}'"
 

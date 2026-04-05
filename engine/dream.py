@@ -93,6 +93,9 @@ class DreamEngine:
         # === 1. ORIENT — Alles lesen ===
         context = self._gather_all_memory()
 
+        if not context or not context.strip():
+            return "Dream uebersprungen: Keine Memories vorhanden"
+
         # === 2-4. Claude konsolidiert ===
         system_prompt = """Du bist ein Memory-Konsolidierungs-Agent.
 Deine Aufgabe: Das Gedaechtnis eines autonomen KI-Agenten namens Lyra aufraumen und optimieren.
@@ -163,9 +166,13 @@ Antworte als JSON:
             try:
                 result = json.loads(cleaned)
             except json.JSONDecodeError:
+                # Regex-Fallback: aeusserstes JSON-Objekt finden
                 match = re.search(r"\{.*\}", cleaned, re.DOTALL)
                 if match:
-                    result = json.loads(match.group(0))
+                    try:
+                        result = json.loads(match.group(0))
+                    except json.JSONDecodeError:
+                        return "Dream fehlgeschlagen: JSON-Regex-Match ungueltig"
                 else:
                     return "Dream fehlgeschlagen: Konnte Antwort nicht parsen"
 
@@ -633,9 +640,39 @@ Antworte als JSON:
                     logger.info("Meta-Goal geblockt (max 1): %s", title[:60])
                     continue
 
-                # Duplikat-Check: Jaccard statt nur Prefix
-                if self._is_goal_duplicate(title, active_goals):
+                # Duplikat-Check: Jaccard gegen active + completed + abandoned
+                all_known_goals = (
+                    active_goals
+                    + goal_stack.goals.get("completed", [])[-20:]
+                    + goal_stack.goals.get("abandoned", [])
+                )
+                if self._is_goal_duplicate(title, all_known_goals):
                     logger.info("Duplikat-Goal geblockt: %s", title[:60])
+                    continue
+
+                # Domain-Check: Gescheiterte SubGoals in gleicher Domain blocken
+                new_domain = goal_stack._classify_domain(title)
+                domain_blocked = False
+                for past_goal in (goal_stack.goals.get("completed", [])[-20:]
+                                  + goal_stack.goals.get("abandoned", [])):
+                    for sg in past_goal.get("sub_goals", []):
+                        if sg.get("status") != "failed":
+                            continue
+                        sg_domain = goal_stack._classify_domain(sg.get("title", ""))
+                        if sg_domain != new_domain or new_domain == "sonstiges":
+                            continue
+                        stats = sg.get("_attempt_stats", {})
+                        if (stats.get("total_wasted_steps", 0) > 30
+                                or stats.get("last_efficiency", 1.0) < 0.1):
+                            logger.info(
+                                "Domain-Block: '%s' — aehnliches SubGoal gescheitert: %s",
+                                title[:60], sg["title"][:60],
+                            )
+                            domain_blocked = True
+                            break
+                    if domain_blocked:
+                        break
+                if domain_blocked:
                     continue
 
                 goal_stack.create_goal(
@@ -655,6 +692,54 @@ Antworte als JSON:
         except Exception as e:
             logger.warning("Dream-Empfehlungen zu Goals fehlgeschlagen: %s", e)
         return ""
+
+    def _apply_goal_recommendations(self, result: dict, goal_stack) -> str:
+        """Wendet Dream goal_recommendations auf bestehende SubGoals an.
+
+        Aktionen: abort (SubGoal failen), simplify (Vorschlag loggen).
+        """
+        recs = result.get("goal_recommendations", [])
+        if not recs or goal_stack is None:
+            return ""
+
+        applied = []
+        try:
+            for rec in recs:
+                if not isinstance(rec, dict):
+                    continue
+                action = rec.get("action", "")
+                subgoal_title = rec.get("subgoal", "")
+                reason = rec.get("reason", "")
+
+                if not subgoal_title or not action:
+                    continue
+
+                if action == "abort":
+                    for goal in goal_stack.goals.get("active", []):
+                        goal_idx = goal_stack.goals["active"].index(goal)
+                        aborted = False
+                        for sg in goal.get("sub_goals", []):
+                            if sg["status"] not in ("pending", "in_progress"):
+                                continue
+                            if subgoal_title.lower() in sg["title"].lower():
+                                goal_stack.fail_subgoal(
+                                    goal_idx, sg["index"],
+                                    reason=f"Dream-Abort: {reason[:150]}",
+                                )
+                                applied.append(f"ABORT: {sg['title'][:50]}")
+                                aborted = True
+                                break
+                        if aborted:
+                            break
+
+                elif action == "simplify" and rec.get("suggestion"):
+                    applied.append(
+                        f"SIMPLIFY empfohlen: {rec['suggestion'][:80]}"
+                    )
+        except Exception as e:
+            logger.warning("goal_recommendations fehlgeschlagen: %s", e)
+
+        return ", ".join(applied) if applied else ""
 
     @staticmethod
     def _is_goal_duplicate(title: str, existing_goals: list,

@@ -290,11 +290,15 @@ class SequenceIntelligence:
         self._metrics.tool_sequence.append({"name": name})
         self._metrics.unique_tools.add(name)
 
-        # Neuheits-Tracking: Gelesene Pfade erfassen
+        # Neuheits-Tracking: Gelesene Pfade/Quellen erfassen
         if name in ("read_file", "list_directory", "read_own_code"):
             read_path = tool_input.get("path", "")
             if read_path:
                 self._metrics.read_paths.add(read_path)
+        elif name in ("web_search", "web_read"):
+            query_or_url = tool_input.get("query", tool_input.get("url", ""))
+            if query_or_url:
+                self._metrics.read_paths.add(f"web:{query_or_url[:100]}")
 
         # Stuck-Key: Tool + relevanter Input
         stuck_key, stuck_input = self._make_stuck_key(name, tool_input)
@@ -341,8 +345,12 @@ class SequenceIntelligence:
             )
 
         else:
-            # Erfolg: Diesen Key zuruecksetzen
-            self._stuck_tracker.pop(stuck_key, None)
+            # Erfolg: Count halbieren statt loeschen — verhindert
+            # dass wiederholte erfolgreiche-aber-nutzlose Calls unsichtbar bleiben
+            if stuck_key in self._stuck_tracker:
+                self._stuck_tracker[stuck_key]["count"] //= 2
+                if self._stuck_tracker[stuck_key]["count"] == 0:
+                    self._stuck_tracker.pop(stuck_key, None)
 
             # Decay: Jeder Erfolg reduziert alte Fehler-Counts
             stale_keys = []
