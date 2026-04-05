@@ -1742,6 +1742,9 @@ SEQUENZ-PLANUNG: Nutze write_sequence_plan am Anfang — plane dein Ziel, Exit-K
             key_decision=key_decision,
         )
 
+        # Meta-Learning: Regel-Effektivitaet evaluieren (Hebel 3)
+        self.seq_intel._meta_rules.evaluate_rule_effectiveness(self.sequences_total)
+
         # Actuator: Prediction-Error-Loop schliessen
         # Wandelt Bottleneck-Erkenntnisse in harte Parameteraenderungen um
         # FailureMemory-Kontext: Verhindert generische Parameter-Aenderungen

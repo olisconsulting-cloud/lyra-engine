@@ -131,6 +131,8 @@ class MetaRuleEngine:
         rule = {
             "id": pattern_id,
             "created": datetime.now(timezone.utc).isoformat(),
+            "created_at_seq": self._get_current_seq(),
+            "baseline_count": counts.get(pattern_id, 0),
             "description": description[:200],
             "active": True,
             **template,
@@ -249,6 +251,60 @@ class MetaRuleEngine:
                 "same_subgoal_stuck",
                 f"Sub-Goal '{subgoal_title[:50]}' seit {consecutive_count} Sequenzen blockiert"
             )
+
+    # === Meta-Learning: Regel-Effektivitaet evaluieren ===
+
+    EVAL_WINDOW = 10  # Sequenzen nach Regel-Erstellung bis Evaluation
+
+    def evaluate_rule_effectiveness(self, current_seq: int):
+        """Prueft ob aktive Regeln den Pattern-Count reduziert haben.
+
+        Prinzip wie ActuatorMeta: Messen ob Aenderung geholfen hat,
+        revertieren wenn nicht. Schliesst den Meta-Learning-Loop (Hebel 3).
+        """
+        counts = self.rules.get("pattern_counts", {})
+        changed = False
+
+        for rule in self.rules.get("rules", []):
+            if not rule.get("active") or rule.get("evaluated"):
+                continue
+            created_seq = rule.get("created_at_seq", 0)
+            if created_seq == 0 or current_seq - created_seq < self.EVAL_WINDOW:
+                continue  # Noch nicht genug Daten
+
+            pattern_id = rule["id"]
+            baseline = rule.get("baseline_count", 0)
+            current = counts.get(pattern_id, 0)
+
+            # Verbesserung = weniger Pattern-Hits seit Regel-Erstellung
+            improvement = baseline - current
+
+            rule["evaluated"] = True
+            rule["evaluation_seq"] = current_seq
+            rule["improvement"] = improvement
+            changed = True
+
+            if improvement <= 0:
+                rule["active"] = False
+                rule["deactivated_reason"] = (
+                    f"Keine Verbesserung nach {self.EVAL_WINDOW} Seq "
+                    f"(baseline={baseline}, aktuell={current})"
+                )
+                logger.info("Meta-Regel deaktiviert: %s (keine Wirkung)", pattern_id)
+            else:
+                logger.info("Meta-Regel bestaetigt: %s (+%d Verbesserung)", pattern_id, improvement)
+
+        if changed:
+            self._save_rules()
+
+    def _get_current_seq(self) -> int:
+        """Liest aktuelle Sequenznummer aus state.json."""
+        state_path = self.rules_path.parent / "state.json"
+        try:
+            with open(state_path, "r", encoding="utf-8") as f:
+                return json.load(f).get("total_sequences", 0)
+        except (OSError, json.JSONDecodeError):
+            return 0
 
     # === Verwaltung ===
 
