@@ -519,8 +519,8 @@ class ConsciousnessEngine:
         self.sequences_total = self.state.get("sequences_total", 0)
         self._installed_packages = set(self.state.get("installed_packages", []))
         from .bootstrap import load_approved_packages
-        instance_approved = set(self.state.get("approved_packages", []))
-        self._approved_packages = load_approved_packages(instance_approved)
+        self._instance_approved = set(self.state.get("approved_packages", []))
+        self._approved_packages = load_approved_packages(self._instance_approved)
         # Provider-Health aus State laden (ueberlebt Neustarts)
         health_state = self.state.get("provider_health", {})
         if health_state:
@@ -534,7 +534,7 @@ class ConsciousnessEngine:
         self.consciousness_path.mkdir(parents=True, exist_ok=True)
         # Installierte/genehmigte Pakete im State persistieren
         self.state["installed_packages"] = sorted(self._installed_packages)
-        self.state["approved_packages"] = sorted(self._approved_packages)
+        self.state["approved_packages"] = sorted(self._instance_approved)
         # Provider-Health persistent speichern
         self.state["provider_health"] = self.llm.get_health_state()
         for path, data in [
@@ -1711,9 +1711,14 @@ SEQUENZ-PLANUNG: Nutze write_sequence_plan am Anfang — plane dein Ziel, Exit-K
                     return f"FEHLER: Paket '{pkg}' nicht auf der Allowlist. Im Unattended-Modus nur Allowlist-Pakete erlaubt."
                 elif self._request_approval(name, tool_input):
                     self._approved_packages.add(pkg)
+                    self._instance_approved.add(pkg)
                     self._save_all()  # Genehmigung sofort persistieren
                 else:
                     return f"FEHLER: Oliver hat '{name}' nicht genehmigt."
+            elif os.environ.get("PHI_UNATTENDED"):
+                # Unattended-Modus: Nicht-pip-Tools generell ablehnen
+                logger.warning(f"UNATTENDED: '{name}' im Unattended-Modus nicht erlaubt")
+                return f"FEHLER: '{name}' im Unattended-Modus nicht erlaubt."
             elif not self._request_approval(name, tool_input):
                 return f"FEHLER: Oliver hat '{name}' nicht genehmigt."
 
@@ -1851,8 +1856,8 @@ SEQUENZ-PLANUNG: Nutze write_sequence_plan am Anfang — plane dein Ziel, Exit-K
         # Prozess-Metriken: .md-Dateien zaehlen nur 0.3x (Busywork-Spirale verhindern)
         sm = self.seq_intel.metrics
         _md_count = sum(1 for p in sm.written_paths if p.endswith(".md"))
-        _code_count = sm.files_written - _md_count
-        output_count = _code_count + (_md_count * 0.3) + sm.tools_built
+        _code_count = max(0, sm.files_written - _md_count)
+        output_count = int(_code_count + (_md_count * 0.3) + sm.tools_built)
         total_steps = max(sm.step_count, 1)
         efficiency_ratio = round(output_count / total_steps, 3)
 

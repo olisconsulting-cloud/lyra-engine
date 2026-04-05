@@ -593,36 +593,52 @@ Antworte als JSON:
         from .config import is_meta_goal
         return is_meta_goal(title)
 
-    # Artifact Gate: Sub-Goals muessen Code-Artefakte produzieren, nicht nur analysieren
+    # Artifact Gate (Whitelist): Sub-Goals muessen Code-Artefakte produzieren.
+    # Ansatz: Positiv-Match auf Artifact-Verben, nicht Negativ-Match auf Analyse.
     _ARTIFACT_VERBS = (
-        "erstell", "bau", "implement", "build", "create", "deploy",
-        "generi", "integrier", "refactor", "test", "fixe", "migrat",
-        "schreib code", "programmier", "entwickl",
+        "implement", "build", "create", "deploy", "refactor",
+        "fixe", "fix ", "migrat", "programmier", "entwickl",
+        "schreib", "write", "add", "update", "upgrade", "patch",
+        "bau", "generi", "integrier", "konfigur", "install",
     )
-    _ANALYSIS_ONLY_VERBS = (
-        "analysier", "dokumentier", "beschreib", "zusammenfass",
-        "vergleich", "pruefe", "review", "untersuche", "recherchier",
-        "evaluier", "identifizier",
+    # Nomen die ein Artifact-Verb entwerten ("Erstelle Analyse" ist kein Artefakt)
+    _ANALYSIS_NOUNS = (
+        "analyse", "analys", "dokumentation", "doku ", "guide",
+        "uebersicht", "report", "bericht", "zusammenfass",
+        "vergleich", "bewertung", "audit", "review",
     )
 
     @classmethod
-    def _filter_artifact_subgoals(cls, sub_goals: list[str]) -> list[str]:
-        """Filtert Sub-Goals: Behaelt nur solche mit Code-Artefakt-Verben.
+    def _is_artifact_subgoal(cls, sg_text: str) -> bool:
+        """Prueft ob ein Sub-Goal ein Code-Artefakt beschreibt (Whitelist).
 
-        Verhindert Busywork-Spirale: Goals die nur Analyse/Dokumentation
-        beschreiben werden nicht erstellt.
+        Positiv-Match: Muss Artifact-Verb enthalten.
+        Entwertung: "erstell" + Analyse-Nomen zaehlt nicht.
         """
-        artifact_sgs = []
-        for sg in sub_goals:
-            sg_lower = sg.lower()
-            has_artifact = any(v in sg_lower for v in cls._ARTIFACT_VERBS)
-            has_only_analysis = (
-                any(v in sg_lower for v in cls._ANALYSIS_ONLY_VERBS)
-                and not has_artifact
-            )
-            if not has_only_analysis:
-                artifact_sgs.append(sg)
-        return artifact_sgs
+        sg_lower = sg_text.lower()
+        has_artifact = any(v in sg_lower for v in cls._ARTIFACT_VERBS)
+        if has_artifact:
+            return True
+        # "erstell/create" nur als Artifact wenn nicht gefolgt von Analyse-Nomen
+        if "erstell" in sg_lower or "creat" in sg_lower:
+            has_analysis_noun = any(n in sg_lower for n in cls._ANALYSIS_NOUNS)
+            return not has_analysis_noun
+        return False
+
+    @classmethod
+    def _filter_artifact_subgoals(cls, sub_goals: list[str]) -> list[str]:
+        """Prueft ob genug Sub-Goals Code-Artefakte beschreiben.
+
+        Whitelist-Ansatz: Mindestens 50% muessen Artifact-Verben haben.
+        Returns: Alle Sub-Goals wenn Gate passt, leere Liste wenn nicht.
+        """
+        if not sub_goals:
+            return sub_goals
+        artifact_count = sum(1 for sg in sub_goals if cls._is_artifact_subgoal(sg))
+        # Mindestens 50% muessen Artefakte sein
+        if artifact_count >= len(sub_goals) * 0.5:
+            return sub_goals  # Alle behalten — auch Analyse-Steps sind ok wenn genug Code dabei
+        return []  # Zu wenig Artefakte → Goal blocken
 
     def _apply_recommendations(self, result: dict, goal_stack=None) -> str:
         """Wandelt Dream-Empfehlungen in Goals um (max 2 pro Dream).

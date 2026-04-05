@@ -270,9 +270,9 @@ class GoalStack:
         avg_files = total_files / total_seq
         avg_errors = total_errors / total_seq
 
-        # Busywork-Falle: 80%+ der Sequenzen nur .md-Output → unviable
+        # Busywork-Falle: 90%+ der Sequenzen nur .md-Output → unviable
         md_only_seqs = stats.get("md_only_sequences", 0)
-        if total_seq >= 3 and md_only_seqs >= total_seq * 0.8:
+        if total_seq >= 3 and md_only_seqs >= total_seq * 0.9:
             return "unviable"
 
         # Unviable: 5+ Sequenzen und weniger als 1 Datei/Seq im Schnitt
