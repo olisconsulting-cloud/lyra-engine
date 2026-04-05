@@ -103,7 +103,7 @@ Du bekommst den aktuellen Stand aller Memory-Dateien. Deine Aufgabe:
 
 Antworte als JSON:
 {
-  "consolidated_beliefs": [{"text": "Das Prinzip", "confidence": 0.8, "source": "Woraus abgeleitet"}],
+  "consolidated_beliefs": ["Abstrahiertes Prinzip — nicht die Details, sondern die Regel dahinter"],
   "wisdom_extractions": ["Domain-uebergreifende Weisheit — max 3 Saetze, abstrahiert aus allen Beliefs"],
   "contradictions_resolved": [{"beliefs": ["Belief A", "Belief B"], "resolution": "Wie der Widerspruch aufgeloest wird"}],
   "obsolete_beliefs": ["Beliefs die ueberholt sind — max 3, werden als Lektionen archiviert"],
@@ -304,9 +304,9 @@ Antworte als JSON:
         """Wendet die Dream-Ergebnisse an."""
         applied = []
 
-        # Beliefs konsolidieren — Konfidenz-basiert, MERGE statt Replace
-        # Beliefs sind jetzt strukturiert: {text, confidence, source}
-        # Alte String-Beliefs werden automatisch migriert
+        # Beliefs konsolidieren — MERGE statt Replace, Strings fuer Kompatibilitaet
+        # Konfidenz wird in belief_meta.json getrackt (bestehendes System),
+        # nicht in den Beliefs selbst — verhindert Crashes in finish_sequence/validate.
         new_beliefs = result.get("consolidated_beliefs", [])
         if new_beliefs and len(new_beliefs) >= 3:
             beliefs_path = self.consciousness_path / "beliefs.json"
@@ -318,55 +318,37 @@ Antworte als JSON:
                     if key not in beliefs:
                         beliefs[key] = []
 
-                # Neue Beliefs normalisieren (String → Dict mit Konfidenz)
+                # Beliefs normalisieren: LLM kann Strings oder Dicts liefern → immer Strings
                 validated = []
                 for b in new_beliefs[:30]:
-                    if isinstance(b, dict) and b.get("text"):
-                        validated.append({
-                            "text": b["text"][:300],
-                            "confidence": min(1.0, max(0.1, b.get("confidence", 0.5))),
-                            "source": b.get("source", "dream")[:200],
-                        })
-                    elif isinstance(b, str) and len(b) > 5:
-                        validated.append({
-                            "text": b[:300],
-                            "confidence": 0.5,
-                            "source": "dream",
-                        })
+                    text = b.get("text", "") if isinstance(b, dict) else b if isinstance(b, str) else ""
+                    if isinstance(text, str) and len(text) > 5:
+                        validated.append(text[:300])
 
                 if len(validated) >= 3:
                     existing = beliefs.get("formed_from_experience", [])
-                    # Alte Strings migrieren → Dict-Format
-                    migrated = []
+                    # Bestehende Dicts → Strings migrieren (Rueckwaerts-Fix)
+                    existing_clean = []
                     for e in existing:
-                        if isinstance(e, str):
-                            migrated.append({"text": e, "confidence": 0.5, "source": "legacy"})
-                        elif isinstance(e, dict) and e.get("text"):
-                            migrated.append(e)
-                    # Merge: Neue zu bestehenden hinzufuegen
-                    merged = list(migrated)
+                        if isinstance(e, dict):
+                            existing_clean.append(e.get("text", str(e)))
+                        elif isinstance(e, str):
+                            existing_clean.append(e)
+                    # Merge: Neue zu bestehenden HINZUFUEGEN
+                    merged = list(existing_clean)
                     added = 0
                     for b in validated:
-                        existing_texts = [m.get("text", "") for m in merged]
-                        if not self._is_belief_duplicate(b["text"], existing_texts):
+                        if not self._is_belief_duplicate(b, merged):
                             merged.append(b)
                             added += 1
-                        else:
-                            # Duplikat gefunden → Konfidenz des bestehenden erhoehen
-                            for m in merged:
-                                if self._is_belief_duplicate(b["text"], [m.get("text", "")]):
-                                    m["confidence"] = min(1.0, m.get("confidence", 0.5) + 0.1)
-                                    break
-                    # Max 30 Beliefs — niedrigste Konfidenz zuerst in Wisdom
+                    # Max 30 Beliefs — aelteste zuerst in Wisdom destillieren
                     if len(merged) > 30:
-                        merged.sort(key=lambda x: x.get("confidence", 0), reverse=True)
-                        overflow = merged[30:]
-                        merged = merged[:30]
+                        overflow = merged[:len(merged) - 30]
+                        merged = merged[len(merged) - 30:]
                         wisdom = beliefs.get("wisdom", [])
                         for old in overflow:
-                            text = old.get("text", "")
-                            if text and not self._is_belief_duplicate(text, wisdom):
-                                wisdom.append(text)
+                            if old and not self._is_belief_duplicate(old, wisdom):
+                                wisdom.append(old)
                         beliefs["wisdom"] = wisdom[-50:]
                     beliefs["formed_from_experience"] = merged
                     with open(beliefs_path, "w", encoding="utf-8") as f:
@@ -422,6 +404,7 @@ Antworte als JSON:
 
         # Obsolete Beliefs → Wisdom destillieren (nie loeschen, immer lernen)
         # Max 3 pro Dream-Zyklus — verhindert Belief-Extinction
+        # Matching per Jaccard-Similarity statt exaktem String (LLM paraphrasiert)
         obsolete = result.get("obsolete_beliefs", [])
         if obsolete:
             beliefs_path = self.consciousness_path / "beliefs.json"
@@ -429,14 +412,13 @@ Antworte als JSON:
                 beliefs = self._safe_load_json(beliefs_path) or {}
                 formed = beliefs.get("formed_from_experience", [])
                 wisdom = beliefs.get("wisdom", [])
-                before_count = len(formed)
-                obsolete_lower = {o.lower().strip() for o in obsolete if isinstance(o, str)}
-                # Maximal 3 Beliefs pro Zyklus als obsolet markieren
+                # Jaccard-basiertes Matching: obsolete Belief aehnlich genug?
+                obsolete_texts = [o for o in obsolete if isinstance(o, str) and len(o) > 5]
                 removed_beliefs = []
                 kept = []
                 for b in formed:
-                    text = (b if isinstance(b, str) else b.get("text", "")).lower().strip()
-                    if text in obsolete_lower and len(removed_beliefs) < 3:
+                    text = b if isinstance(b, str) else b.get("text", "")
+                    if len(removed_beliefs) < 3 and self._is_belief_duplicate(text, obsolete_texts):
                         removed_beliefs.append(b)
                     else:
                         kept.append(b)
