@@ -207,6 +207,12 @@ class Telemetry:
             "reason": reason[:200] if reason else "",
         })
 
+    def log_event(self, event_type: str, data: dict):
+        """Generischer Event-Logger fuer beliebige Events."""
+        entry = {"event": event_type}
+        entry.update(data)
+        self._write(entry)
+
     # === Abfragen (fuer Dashboard / Evaluation) ===
 
     def get_today_stats(self) -> dict:

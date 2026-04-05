@@ -130,7 +130,7 @@ class PerceptionPipeline:
         for score, ch in scored:
             is_always = ch.always_load or ch.name in ALWAYS_LOAD
             # Gelernte Token-Groesse nutzen, Fallback auf statischen Estimate
-            est = self._token_averages.get(ch.name, float(ch.estimated_tokens))
+            est = max(self._token_averages.get(ch.name, float(ch.estimated_tokens)), 1.0)
 
             # Budget-Check mit Truncation statt binary Drop
             truncate_ratio = 1.0
@@ -148,6 +148,8 @@ class PerceptionPipeline:
                 # Truncation: Kanal anteilig kuerzen statt komplett droppen
                 if truncate_ratio < 1.0:
                     max_chars = int(len(content) * truncate_ratio)
+                    if max_chars < 20:
+                        continue  # Sinnlose Reste nicht laden
                     cut = content[:max_chars].rfind("\n")
                     if cut > 0:
                         content = content[:cut]
@@ -162,10 +164,19 @@ class PerceptionPipeline:
                 self._last_active_channels.append(ch.name)
 
                 # Lerne tatsaechliche Token-Groesse (EMA: 80% alt, 20% neu)
-                avg = self._token_averages.get(ch.name, float(ch.estimated_tokens))
-                self._token_averages[ch.name] = avg * 0.8 + actual_tokens * 0.2
+                # NUR bei nicht-truncated Content — sonst Abwaertsspirale
+                if truncate_ratio >= 1.0:
+                    avg = self._token_averages.get(ch.name, float(ch.estimated_tokens))
+                    self._token_averages[ch.name] = avg * 0.8 + actual_tokens * 0.2
             except Exception as e:
                 logger.warning(f"PerceptionPipeline: Kanal '{ch.name}' fehlgeschlagen: {e}")
+
+        # Warnung wenn Always-Load das Budget sprengt
+        if used_tokens > budget:
+            logger.warning(
+                f"PerceptionPipeline: Verbrauch ({used_tokens} Tok) "
+                f"uebersteigt Budget ({budget} Tok)"
+            )
 
         # Token-Averages persistieren (1x pro Sequenz, nicht pro Step)
         safe_json_write(self._token_avg_path, self._token_averages)

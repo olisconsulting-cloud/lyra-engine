@@ -177,7 +177,7 @@ class TestFeedback:
 class TestTruncation:
     def test_truncation_preserves_partial_content(self, tmp_path):
         """Bei Budget-Druck wird Content gekuerzt statt komplett gedroppt."""
-        pipe = PerceptionPipeline(tmp_path, max_tokens=50)
+        pipe = PerceptionPipeline(tmp_path, max_tokens=80)
         consciousness_path = tmp_path / "consciousness"
         consciousness_path.mkdir(parents=True, exist_ok=True)
 
