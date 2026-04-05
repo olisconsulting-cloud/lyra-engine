@@ -89,10 +89,10 @@ class EventBus:
         for handler in handlers:
             try:
                 handler(event)
-            except Exception as e:
-                logger.warning(
-                    f"EventBus: Handler {handler.__name__} fuer "
-                    f"'{event.type}' fehlgeschlagen: {e}"
+            except Exception:
+                logger.exception(
+                    "EventBus: Handler %s fuer '%s' fehlgeschlagen",
+                    handler.__name__, event.type,
                 )
 
     def emit_simple(self, event_type: str, source: str = "", **data) -> Event:

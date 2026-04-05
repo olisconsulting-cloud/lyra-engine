@@ -17,8 +17,11 @@ Jedes Tool muss eine standard-Schnittstelle implementieren:
 
 import importlib.util
 import json
+import logging
 import sys
 import traceback
+
+logger = logging.getLogger(__name__)
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -63,7 +66,7 @@ class Toolchain:
                     module = self._load_module(name, filepath)
                     self.loaded_tools[name] = module
                 except Exception:
-                    pass  # Kaputte Tools ignorieren
+                    logger.warning("Toolchain: Tool '%s' konnte nicht geladen werden (%s)", name, filepath)
 
     def _load_module(self, name: str, filepath: Path):
         """Laedt ein Python-Modul dynamisch."""
