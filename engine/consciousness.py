@@ -66,6 +66,7 @@ from .unified_memory import (
 )
 from .episodic_bridge import EpisodicBridge
 from .actuator import BehaviorActuator
+from .daily_summary import check_and_send_summary
 from .skill_enricher import SkillEnricher
 from .sequence_runner import SequenceRunner
 from .telemetry import telemetry
@@ -2395,6 +2396,15 @@ Antworte als JSON:
         except Exception as e:
             logger.warning(f" Morgen-Briefing fehlgeschlagen: {e}")
 
+    def _send_daily_summary(self):
+        """Tages-Zusammenfassung per Telegram — 16:00 und 23:59 Uhr."""
+        check_and_send_summary(
+            call_llm=self._call_llm,
+            send_message=self.communication.send_message,
+            telegram_active=self.communication.telegram_active,
+            narrator=self.narrator,
+        )
+
     # === Autonomer Modus ===
 
     def run(self):
@@ -2420,6 +2430,8 @@ Antworte als JSON:
             while self.running:
                 # Morgen-Briefing pruefen (sendet max 1x/Tag)
                 self._send_daily_briefing()
+                # Tages-Zusammenfassung pruefen (16:00 + 23:59)
+                self._send_daily_summary()
 
                 self._run_sequence()
 

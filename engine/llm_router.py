@@ -115,6 +115,7 @@ TASK_MODEL_MAP = {
     "goal_planning": "deepseek_v3",        # DeepSeek — Goal-Planning
     "result_validation": "claude_opus",    # Opus 4.6 — Ergebnis-Pruefung (kritisch)
     "graceful_finish": "deepseek_v3",      # DeepSeek — Sequenz-Zusammenfassungen
+    "daily_summary": "deepseek_v3",        # DeepSeek — Tages-Zusammenfassung (2x/Tag, guenstig)
     "fallback": "kimi_k25",               # Kimi K2.5 — Fallback Stufe 1 ($0)
 }
 
