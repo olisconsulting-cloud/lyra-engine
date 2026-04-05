@@ -112,6 +112,7 @@ python review_phi.py         # Regressions-Gate (14 Checks)
 
 ## Referenzen
 
+- `.planning/AGI-ROADMAP.md` — 7-Hebel-Roadmap mit Status und Dateipfaden
 - `.planning/META.md` — Meta-Prozess-Manifest (Warum + Wie messen)
 - `.audit/BACKLOG.md` — Priorisierte Arbeitsliste
 - `.audit/FINDINGS.md` — Bug/Issue-Tracking mit Status
