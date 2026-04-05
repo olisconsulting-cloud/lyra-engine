@@ -71,7 +71,8 @@ def run():
     # === 2. IMPORTS ===
     sys.path.insert(0, str(ROOT))
     try:
-        from engine.consciousness import ConsciousnessEngine, TOOLS, TOOL_TIERS, select_tools
+        from engine.consciousness import ConsciousnessEngine
+        from engine.tool_definitions import TOOLS, TOOL_TIERS, select_tools
         from engine.tool_registry import ToolRegistry
         from engine.actions import ActionEngine
         from engine.goal_stack import GoalStack
@@ -83,7 +84,7 @@ def run():
         return _print_results(results)  # Ohne Imports koennen weitere Checks nicht laufen
 
     # === 3. TOOL-INTEGRITAET ===
-    from engine.consciousness import _get_compact_tools
+    from engine.tool_definitions import _get_compact_tools
     tools_set = {t["name"] for t in TOOLS}
     tiers_set = set(TOOL_TIERS.keys())
     missing = tools_set - tiers_set
