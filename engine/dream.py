@@ -19,6 +19,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
 
+from .actuator import DEFAULTS as ACTUATOR_DEFAULTS
 from .llm_ops import _extract_response_text
 
 logger = logging.getLogger(__name__)
@@ -239,14 +240,9 @@ Antworte als JSON:
 
         # Aktuelle Parameter vs. Defaults
         params = state.get("parameters", {})
-        defaults = {
-            "step_budget_modifier": 1.0,
-            "research_depth_limit": 25,
-            "output_checkpoint_step": 12,
-        }
         lines.append("Aktuelle Parameter:")
         for key, val in params.items():
-            default = defaults.get(key, "?")
+            default = ACTUATOR_DEFAULTS.get(key, "?")
             marker = " (ANGEPASST)" if val != default else ""
             lines.append(f"  {key}: {val}{marker} (Default: {default})")
 
@@ -269,6 +265,16 @@ Antworte als JSON:
                     f"  {c.get('parameter')}: {c.get('old_value')} -> {c.get('new_value')} "
                     f"(Trigger: {c.get('trigger')}, Seq {c.get('sequence')}, "
                     f"Eff {eff_before:.0%} -> {eff_after:.0%}, Status: {status})"
+                )
+
+        # Uebersprungene Anpassungen (Non-Process-Fehler)
+        skipped = state.get("skipped_adjustments", [])[-5:]
+        if skipped:
+            lines.append("Uebersprungene Anpassungen (Fehler war nicht prozessual):")
+            for s in skipped:
+                lines.append(
+                    f"  Pattern '{s.get('pattern')}' bei Seq {s.get('sequence')} "
+                    f"— Grund: {s.get('reason')}"
                 )
 
         # Effizienz-Trend
@@ -541,6 +547,7 @@ Antworte als JSON:
                 "skill_notes": result.get("skill_notes", ""),
                 "process_insights": result.get("process_insights", ""),
                 "efficiency_patterns": result.get("efficiency_patterns", []),
+                "actuator_recommendations": result.get("actuator_recommendations", []),
             })
             log = log[-20:]
 

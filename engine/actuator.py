@@ -203,7 +203,7 @@ class BehaviorActuator:
             return
 
         current_seq = (
-            self._state["efficiency_history"][-1]["sequence"]
+            self._state["efficiency_history"][-1].get("sequence", 0)
             if self._state.get("efficiency_history") else 0
         )
 
@@ -245,7 +245,11 @@ class BehaviorActuator:
             if change.get("parameter") != param:
                 continue
             # Gleiche Richtung wie revertiert? Dann nicht wiederholen.
-            was_decrease = change.get("new_value", 0) < change.get("old_value", 0)
+            old = change.get("old_value")
+            new = change.get("new_value")
+            if old is None or new is None:
+                continue
+            was_decrease = new < old
             if (direction == "decrease" and was_decrease) or \
                (direction == "increase" and not was_decrease):
                 return True
@@ -564,8 +568,9 @@ class ActuatorMeta:
             change["reverted"] = True
 
             # Pattern-Hits zuruecksetzen damit der Threshold neu zaehlt (M5-Fix)
+            # Dream-Trigger ("dream:reason") haben keine eigenen Pattern-Hits → Skip
             trigger = change.get("trigger", "")
-            if trigger:
+            if trigger and not trigger.startswith("dream:"):
                 hits = self._state.get("pattern_hits", {})
                 hits[trigger] = max(0, hits.get(trigger, 0) - ADJUSTMENT_THRESHOLD)
 

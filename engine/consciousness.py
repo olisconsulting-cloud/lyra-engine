@@ -3500,8 +3500,8 @@ Antworte als JSON:
             print(f"  [WARNUNG] IOR nicht gespeichert: {e}")
 
         # Evaluation: Sequenz-Daten aufzeichnen
-        # Produktive Steps: Dateien + Tools + erfolgreiche Tool-Calls ohne Fehler
-        productive = m.files_written + m.tools_built + max(0, m.tool_calls - m.errors)
+        # Produktive Steps = files + tools (konsistent mit MetaCognition + Actuator)
+        productive = m.files_written + m.tools_built
         total = max(m.step_count, 1)
         try:
             self.evaluation.record_sequence({
