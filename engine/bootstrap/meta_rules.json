@@ -1,0 +1,63 @@
+{
+  "_bootstrap_version": 1,
+  "_description": "Universelle Meta-Regeln aus 188 Sequenzen Phi-Erfahrung. Pre-aktiviert (pattern_count >= 3).",
+  "rules": [
+    {
+      "id": "zero_output_loop",
+      "created": "2026-04-05T00:00:00+00:00",
+      "description": "Sequenzen ohne Output verschwenden Tokens",
+      "active": true,
+      "type": "detection",
+      "condition": "3x keine Dateien geschrieben",
+      "action": "force_write_or_finish",
+      "prompt_injection": "HARTE REGEL: Jede Sequenz MUSS mindestens eine Datei schreiben oder ein konkretes Ergebnis produzieren. Reines Lesen ohne Output ist nicht erlaubt."
+    },
+    {
+      "id": "same_subgoal_stuck",
+      "created": "2026-04-05T00:00:00+00:00",
+      "description": "Sub-Goal blockiert seit mehreren Sequenzen",
+      "active": true,
+      "type": "reflection",
+      "condition": "3x gleiches Sub-Goal ohne Fortschritt",
+      "action": "reflect_and_learn",
+      "prompt_injection": "HARTE REGEL: Du arbeitest zum dritten Mal am gleichen Ziel ohne Fortschritt. BEVOR du weitermachst:\n1. REFLEKTIERE: Was genau blockiert dieses Ziel?\n2. ANALYSIERE: Was hast du bisher versucht und warum hat es nicht funktioniert?\n3. LERNE: Was ist die Ursache des Problems?\n4. ENTSCHEIDE: Neuer Ansatz ODER Ziel als gescheitert markieren (fail_subgoal) mit klarer Begruendung.\nSchreibe deine Analyse in finish_sequence unter 'bottleneck' und 'next_time_differently'."
+    },
+    {
+      "id": "token_budget_research",
+      "created": "2026-04-05T00:00:00+00:00",
+      "description": "Token-Budget geht aus bevor Recherche abgeschlossen",
+      "active": true,
+      "type": "step_limit",
+      "condition": "goal_type == 'recherche'",
+      "action": "max_steps = 20, force_finish_with_partial",
+      "prompt_injection": "HARTE REGEL: Bei Recherche-Aufgaben maximal 20 Steps. Nach 15 Steps MUSS ein Zwischenergebnis geschrieben werden. Lieber ein unvollstaendiges Ergebnis als gar keins."
+    },
+    {
+      "id": "no_finish_sequence",
+      "created": "2026-04-05T00:00:00+00:00",
+      "description": "finish_sequence wird nicht rechtzeitig aufgerufen",
+      "active": true,
+      "type": "enforcement",
+      "condition": "3x kein finish_sequence aufgerufen",
+      "action": "force_finish_at_80_percent",
+      "prompt_injection": "HARTE REGEL: Du MUSST finish_sequence selbst aufrufen. In den letzten Sequenzen wurde es nie explizit genutzt. Plane dein finish_sequence von Anfang an ein."
+    },
+    {
+      "id": "recurring_engine_warning",
+      "created": "2026-04-05T00:00:00+00:00",
+      "description": "Gleiche Warnung tritt wiederholt auf — untersuchen statt ignorieren",
+      "active": true,
+      "type": "self_diagnosis",
+      "condition": "Gleiche Warnung in 3+ Sequenzen",
+      "action": "investigate_engine_source",
+      "prompt_injection": "HARTE REGEL: Eine Warnung tritt wiederholt auf. Warnungen sind KEIN Naturgesetz — sie kommen aus deinem Engine-Code.\nAKTION:\n1. read_own_code('engine/security.py') um die Warnung zu verstehen\n2. Pruefe ob die Warnung ein False Positive ist\n3. Falls ja: modify_own_code um den Check zu verbessern\n4. Falls nein: Passe deinen Code an um die Warnung zu vermeiden\nDu KANNST deinen eigenen Engine-Code verbessern. Tu es."
+    }
+  ],
+  "pattern_counts": {
+    "zero_output_loop": 3,
+    "same_subgoal_stuck": 3,
+    "token_budget_research": 3,
+    "no_finish_sequence": 3,
+    "recurring_engine_warning": 3
+  }
+}

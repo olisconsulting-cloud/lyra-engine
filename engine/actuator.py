@@ -36,12 +36,9 @@ ADJUSTMENT_THRESHOLD = 3
 # Sequenzen Cooldown nach Adjustment bevor Decay erlaubt ist
 ADJUSTMENT_COOLDOWN = 5
 
-# Default-Werte fuer alle steuerbaren Parameter
-DEFAULTS = {
-    "step_budget_modifier": 1.0,       # Multiplikator auf Step-Budget (0.3-1.0)
-    "research_depth_limit": 25,        # Max Steps fuer Research-Tasks (5-30)
-    "output_checkpoint_step": 20,      # Ab welchem Step Output geprueft wird (15-25)
-}
+# Default-Werte aus Bootstrap (getunte Erfahrungswerte) mit hardcoded Fallback
+from .bootstrap import load_actuator_defaults
+DEFAULTS = load_actuator_defaults()
 
 # Grenzen fuer Parameter (Sicherheit gegen Spiral)
 # output_checkpoint min=15: Phi braucht ~8 Steps zum Lesen + ~4 Planung + ~3 Schreiben

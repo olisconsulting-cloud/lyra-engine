@@ -1,0 +1,26 @@
+[
+  {
+    "type": "process",
+    "tool": "meta",
+    "pattern": "no_finish_sequence",
+    "strategy": "Nutze finish_sequence proaktiv nach 15-20 Steps wenn Teilergebnis steht",
+    "occurrences": 3,
+    "created": "2026-04-05T00:00:00+00:00"
+  },
+  {
+    "tool": "read_own_code",
+    "error_type": "not_found",
+    "pattern": "read_own_code fehlt bei not_found",
+    "strategy": "Vor Zugriff pruefen ob Datei/Pfad existiert",
+    "occurrences": 2,
+    "created": "2026-04-05T00:00:00+00:00"
+  },
+  {
+    "tool": "complete_project",
+    "error_type": "import",
+    "pattern": "complete_project fehlt bei import",
+    "strategy": "Fehlende Module mit pip_install installieren bevor import",
+    "occurrences": 2,
+    "created": "2026-04-05T00:00:00+00:00"
+  }
+]

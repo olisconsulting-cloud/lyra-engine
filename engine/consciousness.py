@@ -12,6 +12,7 @@ Dann: State speichern, neue Wahrnehmung, weiter.
 
 import json
 import logging
+import os
 import re
 import tempfile
 import threading
@@ -882,13 +883,19 @@ class ConsciousnessEngine:
         mission = self._load_mission()
         owner_name = mission.get("owner_name", "Owner")
 
-        # 2. Beliefs aus Mission ableiten
-        self.beliefs = {
-            "about_self": ["Gerade geboren, alle Skills auf novice, bereit zu lernen"],
-            "about_world": [],
-            "about_oliver": [f"{owner_name}, {mission.get('owner_role', '')}"],
-            "formed_from_experience": [],
-        }
+        # 2. Beliefs: Bootstrap-Wissen + Mission-Kontext
+        from .bootstrap import load_beliefs
+        self.beliefs = load_beliefs(self.beliefs_path)
+        # Duplikat-Check: Nur hinzufuegen wenn nicht schon vorhanden
+        about_self = self.beliefs.setdefault("about_self", [])
+        birth_msg = "Gerade geboren, alle Skills auf novice, bereit zu lernen"
+        if birth_msg not in about_self:
+            about_self.append(birth_msg)
+        self.beliefs.setdefault("about_world", [])
+        about_oliver = self.beliefs.setdefault("about_oliver", [])
+        oliver_msg = f"{owner_name}, {mission.get('owner_role', '')}"
+        if oliver_msg not in about_oliver:
+            about_oliver.append(oliver_msg)
         if mission.get("mission_text"):
             self.beliefs["about_world"].append(f"Mission: {mission['mission_text'][:200]}")
 
@@ -985,7 +992,8 @@ class ConsciousnessEngine:
     def load_state(self):
         self.genesis = safe_json_read(self.genesis_path, default={})
         self.state = safe_json_read(self.state_path, default={})
-        self.beliefs = safe_json_read(self.beliefs_path, default={})
+        from .bootstrap import load_beliefs
+        self.beliefs = load_beliefs(self.beliefs_path)
         self.state["awake_since"] = datetime.now(timezone.utc).isoformat()
         self.sequences_total = self.state.get("sequences_total", 0)
         self._installed_packages = set(self.state.get("installed_packages", []))
@@ -1552,7 +1560,7 @@ SEQUENZ-PLANUNG: Nutze write_sequence_plan am Anfang — plane dein Ziel, Exit-K
                 dir=str(wm_path.parent), suffix=".tmp"
             )
             try:
-                with open(tmp_fd, "w", encoding="utf-8") as f:
+                with os.fdopen(tmp_fd, "w", encoding="utf-8") as f:
                     f.write(content)
                 Path(tmp_path).replace(wm_path)
             except OSError:
@@ -2273,9 +2281,9 @@ SEQUENZ-PLANUNG: Nutze write_sequence_plan am Anfang — plane dein Ziel, Exit-K
         # Wandelt Bottleneck-Erkenntnisse in harte Parameteraenderungen um
         # FailureMemory-Kontext: Verhindert generische Parameter-Aenderungen
         # bei Non-Process-Fehlern (CAPABILITY, INPUT_ERROR, LOGIC_ERROR)
+        sm = self.seq_intel.metrics
+        eff_ratio = output_count / max(1, sm.step_count)
         try:
-            sm = self.seq_intel.metrics
-            eff_ratio = output_count / max(1, sm.step_count)
             failure_ctx = self.seq_intel.get_failure_category_summary()
             self.actuator.process_prediction_error(
                 bottleneck=bottleneck,
@@ -2587,7 +2595,10 @@ Antworte als JSON:
                 except json.JSONDecodeError:
                     match = _re.search(r"\{.*\}", cleaned, _re.DOTALL)
                     if match:
-                        result = json.loads(match.group(0))
+                        try:
+                            result = json.loads(match.group(0))
+                        except json.JSONDecodeError:
+                            raise ValueError(f"JSON nach Regex-Extraktion invalide: {match.group(0)[:100]}")
                     else:
                         raise ValueError("JSON nicht parsebar")
 

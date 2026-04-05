@@ -647,7 +647,9 @@ class StrategyEvolution:
         self.error_log = self._load_errors()
 
     def _load_rules(self) -> list:
-        return safe_json_read(self.rules_path, default=[])
+        """Laedt Strategies: Bootstrap-Defaults + Instanz-Overrides."""
+        from .bootstrap import load_strategies
+        return load_strategies(self.rules_path)
 
     def _load_errors(self) -> list:
         return safe_json_read(self.error_log_path, default=[])

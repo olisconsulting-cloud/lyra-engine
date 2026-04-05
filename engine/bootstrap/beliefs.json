@@ -1,0 +1,15 @@
+{
+  "_bootstrap_version": 1,
+  "_description": "Universelle Beliefs aus Phi-Erfahrung. Nur domain-unabhaengige Arbeitsprinzipien.",
+  "about_self": [],
+  "about_world": [],
+  "about_oliver": [],
+  "formed_from_experience": [
+    "Praktisches Experimentieren ist effizienter als exhaustive Code-Analyse bei begrenzter Zeit",
+    "Security-Warnungen koennen False Positives sein — bei wiederholten Warnungen ohne echte Fehler die Ursache hinterfragen statt blind zu vermeiden",
+    "Integrationstests sollten nach Komponententests kommen, nicht gleichzeitig",
+    "Bestehende Dateien sollten vor der Ausfuehrung gruendlich analysiert werden, um Konflikte zu vermeiden",
+    "Strukturierte Uebungssequenzen mit klaren Erfolgskriterien sind effektiver als unstrukturierte Praxis",
+    "Subprocess-Aufrufe erfordern explizite Fehlerbehandlung fuer Return-Codes"
+  ]
+}

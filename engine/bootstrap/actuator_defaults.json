@@ -1,0 +1,9 @@
+{
+  "_bootstrap_version": 1,
+  "_description": "Getunte Parameter-Defaults aus 188 Sequenzen Erfahrung. Ersetzen die hardcoded Defaults in actuator.py.",
+  "parameters": {
+    "step_budget_modifier": 1.0,
+    "research_depth_limit": 22,
+    "output_checkpoint_step": 18
+  }
+}

@@ -13,19 +13,20 @@ Grad naeher an autonome, generalisierte, sich selbst verbessernde Intelligenz?
 ```
 engine/                        Code (Git-tracked)
   CORE LOOP
-    consciousness.py (3.7k)      Agentic Loop — Perceive → Plan → Execute → Reflect
-    sequence_intelligence.py     Native Tool-Use, Stuck-Detection, Sequenz-Metriken
+    consciousness.py             Agentic Loop — Perceive → Plan → Execute → Reflect
+    goal_stack.py                Hierarchische Goals + Sub-Goals + Spin-Erkennung
+    sequence_intelligence.py     Stuck-Detection, Sequenz-Metriken, Step-Prompts
     sequence_runner.py           Sequenz-Ausfuehrung + Tool-Handling
     sequence_planner.py          Plan-Generierung fuer Sequenzen
-    perception_pipeline.py       Multi-Channel Perception (19 Channels, 8k Budget)
+    perception_pipeline.py       Multi-Channel Perception (20 Channels, 5k Budget)
     perception.py                Raw-Input-Verarbeitung
     evaluation.py                Score 0-100, Checkpoints, Alerts
     actions.py                   Action-Engine + Action-Management
 
   INTELLIGENCE
-    llm_router.py (1.3k)         Multi-Provider: DeepSeek V3.2 Primary, 4-Stufen-Fallback
+    llm_router.py                Multi-Provider: DeepSeek V3.2 Primary, 3-Stufen-Fallback
     llm_ops.py                   LLM-Utility-Funktionen
-    intelligence.py (1k)         SemanticMemory (TF-IDF), Skills, Strategies, Efficiency
+    intelligence.py              SemanticMemory (TF-IDF), SkillTracker, StrategyEvolution
     unified_memory.py            Cross-Domain Memory-Abstraktion (Semantic+Episodic+Failure)
     memory_manager.py            Memory-Verwaltung + Persistenz
     episodic_bridge.py           Episodisches Gedaechtnis zwischen Sequenzen
@@ -33,11 +34,11 @@ engine/                        Code (Git-tracked)
     message_compression.py       Kontext-Kompression fuer lange Konversationen
 
   ADAPTATION
-    evolution.py (1.5k)          AdaptiveRhythm, ToolFoundry, ToolCurator, MetaCognition
+    evolution.py                 AdaptiveRhythm, ToolFoundry, ToolCurator, MetaCognition
     quantum.py                   FailureMemory, Critic, PromptMutator, SkillComposer
     meta_rules.py                Gelernte Hard-Rules aus Pattern-Erkennung
     actuator.py                  BehaviorActuator — Prediction-Error-Loop (Friston)
-    competence.py                CompetenceMatrix + SelfAudit (4-Ringe-System)
+    competence.py                CompetenceMatrix + SelfAudit
     skill_library.py             Skill-Verwaltung + Kategorisierung
     skill_enricher.py            Skill-Anreicherung
     proactive_learner.py         Proaktives Lernen aus Web + Cache
@@ -45,10 +46,17 @@ engine/                        Code (Git-tracked)
   GOVERNANCE
     policy.py                    Policy-Engine + DecisionGate — Lernen → Verhaltensaenderung
     security.py                  3-Schicht: Path → AST → DualReview
-    code_review.py               CodeReviewer + DualReviewSystem (Opus+Gemma)
+    code_review.py               CodeReviewer + DualReviewSystem (Opus)
     self_diagnosis.py            Selbst-Diagnose + Fehleranalyse
     quality_checks.py            Markdown- und Output-Qualitaet
     phi.py                       Golden-Ratio-Mathematik (Decay, Buckets, Blend)
+
+  BOOTSTRAP
+    bootstrap/__init__.py        Merge-Logik: Bootstrap-Defaults + Instanz-Overrides
+    bootstrap/meta_rules.json    5 universelle Meta-Regeln (pre-aktiviert)
+    bootstrap/beliefs.json       6 Erfahrungs-Beliefs (domain-unabhaengig)
+    bootstrap/strategies.json    3 Error-Recovery-Patterns
+    bootstrap/actuator_defaults.json  Getunte Parameter aus 188 Sequenzen
 
   INFRASTRUCTURE
     config.py                    Zentrale Pfade, Konstanten, safe_json_read/write
@@ -61,7 +69,7 @@ engine/                        Code (Git-tracked)
     reporting.py                 Narrative Reports
     extensions.py                PipManager, GitManager, TaskQueue, SelfRating, FileWatcher
     ior.py                       Input/Output/Result-Tracking (IOR-Metrik)
-    handlers/ (11 Module)        30 Tools: File, Code, Web, Goal, Project, Memory, Tool, System, Seq
+    handlers/ (11 Module)        31 Tools: File, Code, Web, Goal, Project, Memory, Tool, System, Seq
     tool_lifecycle/ (6 Module)   Metrics, Pruner, DreamBridge, MetaPatterns, Consolidator, Promotion
 
   BRIDGES
@@ -70,8 +78,10 @@ engine/                        Code (Git-tracked)
     self_modify.py               Code lesen/aendern mit Backup + Rollback
     communication.py             Multi-Channel-Kommunikation
 
-data/                          Persoenlichkeit (.gitignore'd)
+data/                          Persoenlichkeit (.gitignore'd, Instanz-spezifisch)
   consciousness/                 state, goals, beliefs, skills, strategies, metacognition
+                                 (Bootstrap-Defaults aus engine/bootstrap/ werden bei
+                                  fehlenden Dateien automatisch geladen)
   memory/                        experiences, reflections, semantic index
   journal/                       Tagebuch
   messages/                      Telegram inbox/outbox
@@ -87,7 +97,7 @@ python run.py                # Autonomer Loop
 python run.py --once         # Einzelne Sequenz
 python interact.py           # Direkter Chat
 python run_live.py           # Live-Konsole + Hintergrund
-python review_phi.py         # Regressions-Gate (14 Checks)
+python review_phi.py         # Regressions-Gate (17 Checks)
 ```
 
 ## LLM-Aufstellung
@@ -104,7 +114,7 @@ python review_phi.py         # Regressions-Gate (14 Checks)
 
 - **Path**: `.env`, `genesis.json` = GESCHUETZT, Engine = DualReview
 - **AST**: Hard-Block auf `shutil.rmtree`, `os.system`, `shell=True`, direkte HTTP
-- **Review**: Engine-Aenderungen → Opus + Gemma parallel, beide muessen approven
+- **Review**: Engine-Aenderungen → Opus reviewed, muss approven
 
 ## Kritische Regeln
 
@@ -116,6 +126,7 @@ python review_phi.py         # Regressions-Gate (14 Checks)
 - **Agent-Findings verifizieren**: ~30% False-Positive-Rate bei CRITICAL
 - **Emergency-Exit**: Jede API-Schleife braucht einen "alle tot"-Pfad
 - **Beobachten vor Weiterbauen**: review_phi → starten → 20-30 Seq → dann naechste Ebene
+- **Bootstrap pflegen**: Universelle Learnings aus data/ regelmaessig in engine/bootstrap/ promoten
 
 ## Entwicklungs-Workflow
 

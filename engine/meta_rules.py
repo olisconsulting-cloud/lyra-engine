@@ -27,9 +27,9 @@ class MetaRuleEngine:
         self.rules = self._load_rules()
 
     def _load_rules(self) -> dict:
-        """Laedt gespeicherte Meta-Regeln."""
-        default = {"rules": [], "pattern_counts": {}}
-        return safe_json_read(self.rules_path, default=default)
+        """Laedt Meta-Regeln: Bootstrap-Defaults + Instanz-Overrides."""
+        from .bootstrap import load_meta_rules
+        return load_meta_rules(self.rules_path)
 
     def _save_rules(self):
         """Persistiert Meta-Regeln."""

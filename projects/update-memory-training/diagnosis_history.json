@@ -1,60 +1,18 @@
 [
   {
-    "status": "success",
-    "timestamp": "2026-04-05T18:34:43.962395",
-    "analysis": {
-      "total_operations": 0,
-      "successful_operations": 0,
-      "failed_operations": 0,
-      "success_rate": 0,
-      "error_patterns_count": 0
-    },
+    "exercise_name": "unnamed_exercise",
+    "success_rate": 0.0,
+    "total_operations": 0,
+    "successful_operations": 0,
     "error_patterns": [],
-    "recommendations": [
-      "\u26a0\ufe0f KRITISCH: Erfolgsrate unter 50%. \u00dcberpr\u00fcfe grundlegende Memory-Operationen.",
-      "Starte mit einfachen Memory-Erstellungs-Operationen bevor du Updates versuchst.",
-      "\ud83d\udcca F\u00fchre regelm\u00e4\u00dfige Diagnosen durch um Trends zu erkennen",
-      "\ud83d\udd0d Analysiere Fehlermuster systematisch um Ursachen zu finden"
-    ],
+    "recommendations": [],
+    "timestamp": "2026-04-05T18:35:28.940022",
     "trend_analysis": {
-      "current_performance": "kritisch",
-      "common_issues": [
-        "Keine wiederkehrenden Fehler erkannt"
-      ],
-      "improvement_suggestions": [
-        "Konzentriere dich auf erfolgreiche Memory-Erstellung (create-Operationen)",
-        "\u00dcbe einfache read/search Operationen bevor du Updates versuchst",
-        "Nutze die `remember` Funktion um existierende Eintr\u00e4ge zu finden"
-      ]
-    }
-  },
-  {
-    "status": "success",
-    "timestamp": "2026-04-05T18:34:54.541117",
-    "analysis": {
-      "total_operations": 0,
-      "successful_operations": 0,
-      "failed_operations": 0,
-      "success_rate": 0,
-      "error_patterns_count": 0
-    },
-    "error_patterns": [],
-    "recommendations": [
-      "\u26a0\ufe0f KRITISCH: Erfolgsrate unter 50%. \u00dcberpr\u00fcfe grundlegende Memory-Operationen.",
-      "Starte mit einfachen Memory-Erstellungs-Operationen bevor du Updates versuchst.",
-      "\ud83d\udcca F\u00fchre regelm\u00e4\u00dfige Diagnosen durch um Trends zu erkennen",
-      "\ud83d\udd0d Analysiere Fehlermuster systematisch um Ursachen zu finden"
-    ],
-    "trend_analysis": {
-      "current_performance": "kritisch",
-      "common_issues": [
-        "Keine wiederkehrenden Fehler erkannt"
-      ],
-      "improvement_suggestions": [
-        "Konzentriere dich auf erfolgreiche Memory-Erstellung (create-Operationen)",
-        "\u00dcbe einfache read/search Operationen bevor du Updates versuchst",
-        "Nutze die `remember` Funktion um existierende Eintr\u00e4ge zu finden"
-      ]
+      "status": "no_data",
+      "message": "Keine historischen Diagnose-Daten verf\u00fcgbar",
+      "average_success_rate": 0.0,
+      "trend": "stabil",
+      "confidence": "low"
     }
   }
 ]

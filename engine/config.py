@@ -48,6 +48,9 @@ ROOT_PATH = Path(__file__).parent.parent
 # Engine = Der Code (GitHub-faehig)
 ENGINE_PATH = ROOT_PATH / "engine"
 
+# Bootstrap = Universelles Wissen fuer neue Instanzen (Git-tracked)
+BOOTSTRAP_PATH = ENGINE_PATH / "bootstrap"
+
 # Data = Die Inhalte (persoenlich, austauschbar)
 DATA_PATH = ROOT_PATH / "data"
 
