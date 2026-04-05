@@ -2633,10 +2633,11 @@ Antworte als JSON:
                 for block in response["content"]:
                     if getattr(block, "type", None) == "tool_use":
                         result = self._execute_tool(block.name, block.input)
+                        trunc = 6000 if block.name == "read_file" else 3000
                         tool_results.append({
                             "type": "tool_result",
                             "tool_use_id": block.id,
-                            "content": str(result)[:3000],
+                            "content": str(result)[:trunc],
                         })
                 messages.append({"role": "user", "content": tool_results})
             else:
@@ -3351,7 +3352,10 @@ Antworte als JSON:
                                 )
                         else:
                             result = self._execute_tool(block.name, block.input)
-                            result_str = str(result)[:3000]
+                            # read_file: 6000 Zeichen (DeepSeek 128K haelt das)
+                            # Andere Tools: 3000 (konservativ)
+                            trunc = 6000 if block.name == "read_file" else 3000
+                            result_str = str(result)[:trunc]
                             is_error = (
                                 result_str.startswith("FEHLER")
                                 or result_str.startswith("WARNUNG")
@@ -3413,7 +3417,7 @@ Antworte als JSON:
                 # Enforcement basiert auf step (LLM-Calls), nicht step_count.
                 # evolution/sprint: erhoehtes Limit (25 statt 15).
                 is_evo = mode.get("mode") in ("evolution", "sprint")
-                enforcement_limit = 25 if is_evo else 15
+                enforcement_limit = 30 if is_evo else 20
                 if step >= enforcement_limit and not finished:
                     m = self.seq_intel.metrics
                     self.narrator.enforcement(

@@ -120,24 +120,30 @@ class BehaviorActuator:
 
     @property
     def step_budget_modifier(self) -> float:
-        """Multiplikator fuer Step-Budget (0.3-1.0)."""
-        return self._state["parameters"].get(
+        """Multiplikator fuer Step-Budget (Bounds-geclampt)."""
+        val = self._state["parameters"].get(
             "step_budget_modifier", DEFAULTS["step_budget_modifier"]
         )
+        lo, hi = BOUNDS["step_budget_modifier"]
+        return max(lo, min(hi, val))
 
     @property
     def research_depth_limit(self) -> int:
-        """Max Steps fuer Research-Tasks."""
-        return int(self._state["parameters"].get(
+        """Max Steps fuer Research-Tasks (Bounds-geclampt)."""
+        val = int(self._state["parameters"].get(
             "research_depth_limit", DEFAULTS["research_depth_limit"]
         ))
+        lo, hi = BOUNDS["research_depth_limit"]
+        return max(lo, min(hi, val))
 
     @property
     def output_checkpoint_step(self) -> int:
-        """Ab welchem Step Output geprueft wird."""
-        return int(self._state["parameters"].get(
+        """Ab welchem Step Output geprueft wird (Bounds-geclampt)."""
+        val = int(self._state["parameters"].get(
             "output_checkpoint_step", DEFAULTS["output_checkpoint_step"]
         ))
+        lo, hi = BOUNDS["output_checkpoint_step"]
+        return max(lo, min(hi, val))
 
     def get_parameter_summary(self) -> str:
         """Kompakte Zusammenfassung fuer System-Prompt / Logging."""
