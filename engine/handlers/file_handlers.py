@@ -38,7 +38,7 @@ def handle_read_file(ctx: ToolContext, tool_input: dict) -> str:
     return ctx.actions.read_file(
         tool_input["path"],
         offset=tool_input.get("offset", 0),
-        max_chars=tool_input.get("max_chars", 8000),
+        max_chars=tool_input.get("max_chars", 16000),
     )
 
 

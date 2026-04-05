@@ -2189,10 +2189,17 @@ SEQUENZ-PLANUNG: Nutze write_sequence_plan am Anfang — plane dein Ziel, Exit-K
             outcome_positive,
             context=summary[:200],
         )
-        self.beliefs["formed_from_experience"] = validated[-30:]
-
-        # Challenged Beliefs wurden entfernt — melden wenn welche rausgeflogen sind
+        # Hard-Cap: Max 3 Beliefs pro Sequenz entfernen
+        # Verhindert Belief-Extinction bei Todes-Spiralen (viele schlechte Sequenzen)
         removed_count = before_count - len(validated)
+        if removed_count > 3:
+            # Zu viele entfernt → nur die 3 mit niedrigster Confidence behalten
+            # Rest aus dem Original zurueckholen
+            original = self.beliefs.get("formed_from_experience", [])
+            kept_back = [b for b in original if b not in validated][:removed_count - 3]
+            validated = validated + kept_back
+            removed_count = before_count - len(validated)
+        self.beliefs["formed_from_experience"] = validated[-30:]
         challenged = [b for b in self.beliefs.get("formed_from_experience", [])
                       if self.strategies.get_belief_meta(b).get("status") == "challenged"]
         self.narrator.belief_update(removed_count, len(challenged))
@@ -3067,6 +3074,27 @@ Antworte als JSON:
             self.seq_intel._meta_rules.check_subgoal_stuck(
                 focus.split("\n")[0][:50], consecutive
             )
+        # Hard-Intervention: Ab 5 Sequenzen auf demselben Fokus → SubGoal failen
+        if consecutive >= 5:
+            try:
+                active = self.goal_stack.goals.get("active", [])
+                for gi, goal in enumerate(active):
+                    for si, sg in enumerate(goal.get("sub_goals", [])):
+                        if sg.get("status") == "in_progress":
+                            result = self.goal_stack.fail_subgoal(
+                                gi, si,
+                                reason=f"Automatisch gescheitert: {consecutive} Sequenzen ohne Fortschritt",
+                                approach_tried=focus.split("\n")[0][:100],
+                            )
+                            logger.info("Subgoal-Stuck Auto-Fail: %s", result)
+                            # Focus-Tracker resetten damit naechstes Goal frisch startet
+                            self.goal_stack._consecutive_count = 0
+                            break
+                    else:
+                        continue
+                    break
+            except Exception as e:
+                logger.warning("Subgoal-Stuck Auto-Fail fehlgeschlagen: %s", e)
 
         # Task-Typ bestimmen (einmal, wird fuer Step-Budget + Tool-Tiers genutzt)
         self._current_task_type = self._classify_task(mode, focus)
@@ -3125,7 +3153,7 @@ Antworte als JSON:
             # Harter Code-Enforcement statt Prompt-Warnung
             ocp = self.actuator.output_checkpoint_step
             if step == ocp and self.seq_intel.metrics.files_written == 0:
-                self.narrator.error_budget(step, 0)  # Nutzt vorhandene Narration
+                self.narrator.output_checkpoint(step)
                 logger.info(
                     "Actuator: Output-Checkpoint bei Step %d — 0 Files → graceful_finish",
                     step,

@@ -158,6 +158,10 @@ class Narrator:
         rate = errors / (step + 1) * 100
         print(f"\n  {YELLOW}Error-Budget: {errors} Fehler in {step + 1} Steps ({rate:.0f}%) — schliesse ab.{RESET}")
 
+    def output_checkpoint(self, step: int):
+        """Actuator Output-Checkpoint — kein Output nach N Steps."""
+        print(f"\n  {YELLOW}Output-Checkpoint: 0 Dateien nach {step + 1} Steps — schliesse ab.{RESET}")
+
     def enforcement(self, rule: str, step: int, limit: int,
                     files: int = 0, errors: int = 0):
         """Meta-Rule Enforcement — automatische Intervention."""

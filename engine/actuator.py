@@ -40,14 +40,15 @@ ADJUSTMENT_COOLDOWN = 5
 DEFAULTS = {
     "step_budget_modifier": 1.0,       # Multiplikator auf Step-Budget (0.3-1.0)
     "research_depth_limit": 25,        # Max Steps fuer Research-Tasks (5-30)
-    "output_checkpoint_step": 12,      # Ab welchem Step Output geprueft wird (5-15)
+    "output_checkpoint_step": 20,      # Ab welchem Step Output geprueft wird (15-25)
 }
 
 # Grenzen fuer Parameter (Sicherheit gegen Spiral)
+# output_checkpoint min=15: Phi braucht ~8 Steps zum Lesen + ~4 Planung + ~3 Schreiben
 BOUNDS = {
     "step_budget_modifier": (0.3, 1.0),
     "research_depth_limit": (5, 30),
-    "output_checkpoint_step": (5, 15),
+    "output_checkpoint_step": (15, 25),
 }
 
 # Wie stark Parameter pro Anpassung geaendert werden
@@ -462,6 +463,17 @@ class BehaviorActuator:
         for key in DEFAULTS:
             if key not in data.get("parameters", {}):
                 data["parameters"][key] = DEFAULTS[key]
+        # Migration: Parameter auf aktuelle Bounds clampen
+        # (verhindert Todes-Spirale wenn Bounds angehoben wurden)
+        for key, (lo, hi) in BOUNDS.items():
+            val = data["parameters"].get(key)
+            if val is not None and (val < lo or val > hi):
+                old = val
+                data["parameters"][key] = max(lo, min(hi, val))
+                logger.info(
+                    "Actuator-Migration: %s geclampt %s → %s (Bounds: %s-%s)",
+                    key, old, data["parameters"][key], lo, hi,
+                )
         return data
 
     def _save(self):
