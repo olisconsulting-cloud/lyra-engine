@@ -317,7 +317,7 @@ class ConsciousnessEngine:
         # Strategischer Kontext — Architektur-Brief + Audit-Findings
         self.perception_pipeline.register_channel(PerceptionChannel(
             name="strategic_context", builder=self._ch_strategic_context,
-            base_weight=0.25, estimated_tokens=300,
+            base_weight=0.25, estimated_tokens=400,
         ))
         self.perception_pipeline.register_channel(PerceptionChannel(
             name="audit_findings", builder=self._ch_audit_findings,
@@ -1310,8 +1310,8 @@ SEQUENZ-PLANUNG: Nutze write_sequence_plan am Anfang — plane dein Ziel, Exit-K
             return ""
         try:
             content = brief_path.read_text(encoding="utf-8").strip()
-            # Hard Cap ~300 Tokens, verhindert Ueberlauf bei wachsender Datei
-            return content[:1200] if content else ""
+            # Hard Cap ~400 Tokens, verhindert Ueberlauf bei wachsender Datei
+            return content[:2000] if content else ""
         except OSError:
             return ""
 

@@ -9,6 +9,7 @@ Eine neue Instanz braucht nur ein leeres data/ Verzeichnis.
 """
 
 import json
+import os
 import re
 import tempfile
 import threading
@@ -52,7 +53,9 @@ ENGINE_PATH = ROOT_PATH / "engine"
 BOOTSTRAP_PATH = ENGINE_PATH / "bootstrap"
 
 # Data = Die Inhalte (persoenlich, austauschbar)
-DATA_PATH = ROOT_PATH / "data"
+# PHI_DATA_PATH Env-Variable erlaubt Metatron-Multi-Instanz-Betrieb
+_data_override = os.environ.get("PHI_DATA_PATH")
+DATA_PATH = Path(_data_override) if _data_override else ROOT_PATH / "data"
 
 # Sub-Pfade innerhalb von data/
 CONSCIOUSNESS_PATH = DATA_PATH / "consciousness"
@@ -67,7 +70,8 @@ SKILLS_PATH = DATA_PATH / "skills"
 GENESIS_PATH = DATA_PATH / "genesis.json"
 MISSION_PATH = DATA_PATH / "mission.md"
 PREFERENCES_PATH = DATA_PATH / "preferences.json"
-ENV_PATH = ROOT_PATH / ".env"
+# .env neben data/ wenn PHI_DATA_PATH gesetzt, sonst Root
+ENV_PATH = DATA_PATH.parent / ".env" if _data_override else ROOT_PATH / ".env"
 
 
 # Thread-Locks pro Dateipfad — schuetzt gegen Race Conditions innerhalb eines Prozesses
