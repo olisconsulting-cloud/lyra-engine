@@ -1842,9 +1842,12 @@ SEQUENZ-PLANUNG: Nutze write_sequence_plan am Anfang — plane dein Ziel, Exit-K
                       if self.strategies.get_belief_meta(b).get("status") == "challenged"]
         self.narrator.belief_update(removed_count, len(challenged))
 
-        # Prozess-Metriken automatisch berechnen
-        output_count = self.seq_intel.metrics.files_written + self.seq_intel.metrics.tools_built
-        total_steps = max(self.seq_intel.metrics.step_count, 1)
+        # Prozess-Metriken: .md-Dateien zaehlen nur 0.3x (Busywork-Spirale verhindern)
+        sm = self.seq_intel.metrics
+        _md_count = sum(1 for p in sm.written_paths if p.endswith(".md"))
+        _code_count = sm.files_written - _md_count
+        output_count = _code_count + (_md_count * 0.3) + sm.tools_built
+        total_steps = max(sm.step_count, 1)
         efficiency_ratio = round(output_count / total_steps, 3)
 
         # Valenz aus Performance-Rating ableiten (nicht mehr hardcoded 0.7)
@@ -1931,11 +1934,16 @@ SEQUENZ-PLANUNG: Nutze write_sequence_plan am Anfang — plane dein Ziel, Exit-K
 
         # Kumulative SubGoal-Metriken aktualisieren
         try:
+            _paths = sm.written_paths
+            _md_only = (
+                all(p.endswith(".md") for p in _paths) if _paths else False
+            )
             self.goal_stack.record_subgoal_attempt(
                 steps_used=sm.step_count,
                 files_written=sm.files_written,
                 errors=sm.errors,
                 efficiency_ratio=eff_ratio,
+                md_only=_md_only,
             )
         except Exception as e:
             logger.warning("SubGoal-Metriken fehlgeschlagen: %s", e)
@@ -2898,10 +2906,14 @@ Antworte als JSON:
                 finished = True
                 break
 
-            # Actuator Output-Checkpoint: Kein Output nach N Steps → Sequenz beenden
-            # Harter Code-Enforcement statt Prompt-Warnung
+            # Actuator Output-Checkpoint: Kein Code-Output nach N Steps → Sequenz beenden
+            # .md-Dateien zaehlen nicht als echtes Output — verhindert Busywork-Spirale
             ocp = self.actuator.output_checkpoint_step
-            if step == ocp and self.seq_intel.metrics.files_written == 0:
+            _code_files = sum(
+                1 for p in self.seq_intel.metrics.written_paths
+                if not p.endswith(".md")
+            )
+            if step == ocp and _code_files == 0:
                 self.narrator.output_checkpoint(step)
                 logger.info(
                     "Actuator: Output-Checkpoint bei Step %d — 0 Files → graceful_finish",

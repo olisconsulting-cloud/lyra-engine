@@ -212,11 +212,13 @@ class GoalStack:
     def record_subgoal_attempt(
         self, steps_used: int, files_written: int,
         errors: int, efficiency_ratio: float,
+        md_only: bool = False,
     ):
         """Akkumuliert Metriken fuer das aktive SubGoal.
 
         Wird nach jeder Sequenz aufgerufen — unabhaengig ob konsekutiv.
         Ermoeglicht Erkennung von Spin-Loops die zwischen Goals alternieren.
+        md_only=True wenn alle geschriebenen Dateien .md waren (Busywork-Indikator).
         """
         sg = self._find_active_subgoal()
         if not sg:
@@ -232,6 +234,7 @@ class GoalStack:
             "total_errors": 0,
             "total_files": 0,
             "last_efficiency": 0.0,
+            "md_only_sequences": 0,
         })
         wasted = max(0, steps_used - files_written * 3)  # Heuristik: 3 Steps/Datei = produktiv
         stats["total_sequences"] += 1
@@ -239,6 +242,8 @@ class GoalStack:
         stats["total_errors"] += errors
         stats["total_files"] += files_written
         stats["last_efficiency"] = efficiency_ratio
+        if md_only:
+            stats["md_only_sequences"] = stats.get("md_only_sequences", 0) + 1
         self._save()
 
     def check_subgoal_viability(self) -> str:
@@ -265,8 +270,13 @@ class GoalStack:
         avg_files = total_files / total_seq
         avg_errors = total_errors / total_seq
 
-        # Unviable: 8+ Sequenzen und weniger als 1 Datei/Seq im Schnitt
-        if total_seq >= 8 and avg_files < 1.0:
+        # Busywork-Falle: 80%+ der Sequenzen nur .md-Output → unviable
+        md_only_seqs = stats.get("md_only_sequences", 0)
+        if total_seq >= 3 and md_only_seqs >= total_seq * 0.8:
+            return "unviable"
+
+        # Unviable: 5+ Sequenzen und weniger als 1 Datei/Seq im Schnitt
+        if total_seq >= 5 and avg_files < 1.0:
             return "unviable"
 
         # Unviable: 5+ Sequenzen und mehr Fehler als Dateien

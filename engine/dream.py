@@ -114,7 +114,7 @@ Du bekommst den aktuellen Stand aller Memory-Dateien. Deine Aufgabe:
 5. ZUSAMMENFASSUNG: Was hat Lyra in letzter Zeit gelernt? Ein Absatz.
 6. PROZESS-ANALYSE: Analysiere die Metacognition-Eintraege. Welche Engpaesse wiederholen sich? Welche Sequenzen hatten hohe Effizienz (viel Output pro Step) und was war anders? Welche Arbeitsgewohnheiten sind gut, welche schlecht?
 7. META-SKILLS: Wie arbeitet Lyra? Beschreibe den Arbeitsstil — plant sie gut? Fuehrt sie effizient aus? Springt sie zwischen Aufgaben? Nutzt sie finish_sequence rechtzeitig?
-8. RECOMMENDATIONS: Max 2 Empfehlungen, JEDE mit 2-3 konkreten Sub-Goals. Jedes Sub-Goal muss ein messbarer, ausfuehrbarer Schritt sein — keine Absichtserklaerungen.
+8. RECOMMENDATIONS: Max 2 Empfehlungen, JEDE mit 2-3 konkreten Sub-Goals. Jedes Sub-Goal muss ein messbarer, ausfuehrbarer Schritt sein — keine Absichtserklaerungen. HARD RULE: Jede Empfehlung MUSS ein konkretes CODE-ARTEFAKT als Ergebnis haben (Python-Modul, Tool, Script, Test). Reine Analyse/Dokumentation wird automatisch geloescht.
 9. TOOL-OEKOSYSTEM: Analysiere die selbstgebauten Tools. Welche sind wertvoll und sollten behalten werden? Welche verfallen (nie genutzt, niedrige Success-Rate)? Gibt es Luecken — Tools die fehlen? Gibt es aehnliche Tools die konsolidiert werden sollten?
 10. ACTUATOR-ANALYSE: Analysiere die Behavior-Actuator-Daten. Welche Parameteraenderungen haben geholfen (Effizienz gestiegen)? Welche wurden revertiert und warum? Gibt es Parameter die zu aggressiv oder zu konservativ eingestellt sind? Formuliere max 3 konkrete Empfehlungen fuer Parameteranpassungen.
 11. GOAL-ANALYSE: Fuer jedes aktive SubGoal mit _attempt_stats (mehr als 3 Sequenzen):
@@ -593,6 +593,37 @@ Antworte als JSON:
         from .config import is_meta_goal
         return is_meta_goal(title)
 
+    # Artifact Gate: Sub-Goals muessen Code-Artefakte produzieren, nicht nur analysieren
+    _ARTIFACT_VERBS = (
+        "erstell", "bau", "implement", "build", "create", "deploy",
+        "generi", "integrier", "refactor", "test", "fixe", "migrat",
+        "schreib code", "programmier", "entwickl",
+    )
+    _ANALYSIS_ONLY_VERBS = (
+        "analysier", "dokumentier", "beschreib", "zusammenfass",
+        "vergleich", "pruefe", "review", "untersuche", "recherchier",
+        "evaluier", "identifizier",
+    )
+
+    @classmethod
+    def _filter_artifact_subgoals(cls, sub_goals: list[str]) -> list[str]:
+        """Filtert Sub-Goals: Behaelt nur solche mit Code-Artefakt-Verben.
+
+        Verhindert Busywork-Spirale: Goals die nur Analyse/Dokumentation
+        beschreiben werden nicht erstellt.
+        """
+        artifact_sgs = []
+        for sg in sub_goals:
+            sg_lower = sg.lower()
+            has_artifact = any(v in sg_lower for v in cls._ARTIFACT_VERBS)
+            has_only_analysis = (
+                any(v in sg_lower for v in cls._ANALYSIS_ONLY_VERBS)
+                and not has_artifact
+            )
+            if not has_only_analysis:
+                artifact_sgs.append(sg)
+        return artifact_sgs
+
     def _apply_recommendations(self, result: dict, goal_stack=None) -> str:
         """Wandelt Dream-Empfehlungen in Goals um (max 2 pro Dream).
 
@@ -681,6 +712,16 @@ Antworte als JSON:
                         break
                 if domain_blocked:
                     continue
+
+                # ARTIFACT GATE: Sub-Goals ohne Code-Artefakte filtern
+                if sub_goals:
+                    sub_goals = self._filter_artifact_subgoals(sub_goals)
+                    if not sub_goals:
+                        logger.info(
+                            "Artifact-Gate: Goal geblockt (nur Analyse/Doku): %s",
+                            title[:60],
+                        )
+                        continue
 
                 goal_stack.create_goal(
                     title=title,
