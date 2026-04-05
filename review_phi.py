@@ -317,6 +317,25 @@ def run():
     else:
         check("WARN", "Virtual Environment", "venv nicht gefunden")
 
+    # === 15. TELEMETRY ===
+    telemetry_mod = ENGINE / "telemetry.py"
+    telemetry_dir = DATA / "telemetry"
+    if not telemetry_mod.exists():
+        check("WARN", "Telemetry", "engine/telemetry.py fehlt")
+    else:
+        try:
+            from engine.telemetry import telemetry as _tel
+            log_path = _tel.get_log_path()
+            if log_path.exists():
+                size_kb = log_path.stat().st_size / 1024
+                stats = _tel.get_today_stats()
+                check("PASS", f"Telemetry ({stats['sequences']} Seq heute, "
+                      f"${stats['total_cost']:.3f}, {size_kb:.0f} KB)")
+            else:
+                check("INFO", "Telemetry (noch keine Daten heute)")
+        except Exception as e:
+            check("WARN", "Telemetry", f"Import-Fehler: {e}")
+
     return _print_results(results)
 
 

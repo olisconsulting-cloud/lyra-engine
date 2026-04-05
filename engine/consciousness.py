@@ -67,6 +67,7 @@ from .episodic_bridge import EpisodicBridge
 from .actuator import BehaviorActuator
 from .skill_enricher import SkillEnricher
 from .sequence_runner import SequenceRunner
+from .telemetry import telemetry
 # SequenceFinisher entfernt — Logik bleibt in _handle_finish_sequence
 from . import config
 from .config import safe_json_write, safe_json_read
@@ -3106,6 +3107,12 @@ Antworte als JSON:
         self.narrator.sequence_start(
             self.sequences_total + 1, focus, mode.get("mode", "standard"), step_budget
         )
+        # Telemetry: Sequenz-Kontext + Start-Event
+        telemetry.set_sequence(self.sequences_total + 1)
+        telemetry.log_sequence_start(
+            focus=focus, mode=mode.get("mode", "standard"),
+            step_budget=step_budget, task_type=self._current_task_type,
+        )
 
         # Actuator-Status anzeigen (nur wenn Parameter angepasst)
         actuator_summary = self.actuator.get_parameter_summary()
@@ -3234,6 +3241,7 @@ Antworte als JSON:
                     if "tool_result" in error_msg or "tool_use" in error_msg:
                         logger.error("Message sync lost: %s", error_msg)
                         self.narrator.emergency("Nachrichten-Sync verloren — starte neue Sequenz")
+                        telemetry.log_error("message_sync", error_msg[:200])
                         break  # Nicht retrybar
 
                     # Cascade-Failure: Alle Provider tot → sofort Sequenz beenden
@@ -3243,6 +3251,7 @@ Antworte als JSON:
                             self.narrator.emergency(
                                 f"API-Kaskade {self._cascade_failures}x gescheitert — Sequenz beendet"
                             )
+                            telemetry.log_error("cascade_failure", f"{self._cascade_failures}x alle Provider tot")
                             logger.error("Cascade-Failure %d — Sequenz-Abbruch", self._cascade_failures)
                             break
                         logger.warning("Cascade-Failure %d — letzter Retry", self._cascade_failures)
@@ -3335,11 +3344,18 @@ Antworte als JSON:
 
                         # Ebene 3: Tool-Blocker — 3x gleicher Fehler → nicht ausfuehren
                         is_error = False  # Reset — verhindert stale state vom vorherigen Loop
+                        _tool_t0 = time.monotonic()
+                        telemetry.set_step(step)
                         pre_check = self.seq_intel.check_blocked(block.name, block.input, goal_context=focus)
                         if pre_check.blocked:
                             result_str = pre_check.guidance
                             is_error = True
                             atr = pre_check  # pre_check IST ein AfterToolResult
+                            telemetry.log_tool_call(
+                                tool=block.name, success=False,
+                                latency_ms=int((time.monotonic() - _tool_t0) * 1000),
+                                is_blocked=True, stuck_count=atr.stuck_count if atr.is_stuck else 0,
+                            )
                             # Lerneffekt: Blockade nur 1x pro Tool+Input in failure_memory
                             block_key = f"{block.name}:{str(block.input)[:80]}"
                             if block_key not in _blocked_recorded:
@@ -3365,6 +3381,12 @@ Antworte als JSON:
                             atr = self.seq_intel.after_tool(block.name, block.input, result_str, is_error, goal_context=focus)
                             if atr.guidance:
                                 result_str += atr.guidance
+                            telemetry.log_tool_call(
+                                tool=block.name, success=not is_error,
+                                latency_ms=int((time.monotonic() - _tool_t0) * 1000),
+                                error=result_str[:200] if is_error else "",
+                                stuck_count=atr.stuck_count if atr.is_stuck else 0,
+                            )
 
                         if is_error:
                             error_preview = result_str.replace("\n", " ")[:120]
@@ -3423,6 +3445,10 @@ Antworte als JSON:
                     self.narrator.enforcement(
                         "auto_finish", step, enforcement_limit,
                         files=m.files_written, errors=m.errors,
+                    )
+                    telemetry.log_enforcement(
+                        rule="auto_finish", step=step,
+                        reason=f"limit={enforcement_limit}, files={m.files_written}, errors={m.errors}",
                     )
                     # MetaCognition: Enforcement loggen (Lern-Feedback)
                     self.metacognition.record(
@@ -3580,6 +3606,18 @@ Antworte als JSON:
         self.narrator.sequence_end(
             step_count, seq_duration, self.seq_intel.metrics.errors,
             self.seq_intel.metrics.files_written,
+        )
+        # Telemetry: Sequenz-Ende mit Gesamt-Metriken
+        telemetry.log_sequence_end(
+            steps=step_count, duration_s=seq_duration,
+            errors=self.seq_intel.metrics.errors,
+            files_written=self.seq_intel.metrics.files_written,
+            tools_built=self.seq_intel.metrics.tools_built,
+            input_tokens=self.sequence_input_tokens,
+            output_tokens=self.sequence_output_tokens,
+            cost_usd=seq_cost,
+            finish_reason="finished" if finished else "max_steps",
+            rating=0,
         )
 
         # Stille-Fehler nur wenn vorhanden

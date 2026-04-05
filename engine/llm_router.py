@@ -31,6 +31,8 @@ logger = logging.getLogger(__name__)
 import httpx
 from anthropic import Anthropic
 
+from .telemetry import telemetry as _telemetry
+
 
 # === Modell-Konfiguration ===
 
@@ -404,10 +406,22 @@ class LLMRouter:
             )
 
         # Primaerer Call
+        _t0 = time.monotonic()
         try:
             result = self._dispatch_call(model_key, system, messages, tools, max_tokens)
             if health:
                 health.record_success()
+            # Telemetry: Erfolgreicher LLM-Call
+            usage = result.get("usage", {})
+            _cost = self._calc_cost(model_key, usage.get("input_tokens", 0), usage.get("output_tokens", 0))
+            _telemetry.log_llm_call(
+                model=model_key, task=task,
+                input_tokens=usage.get("input_tokens", 0),
+                output_tokens=usage.get("output_tokens", 0),
+                cost_usd=_cost,
+                latency_ms=int((time.monotonic() - _t0) * 1000),
+                cache_hit=usage.get("cache_creation_input_tokens", 0) > 0,
+            )
             return result
         except Exception as primary_error:
             # Fehler klassifizieren + Health aktualisieren
@@ -415,6 +429,13 @@ class LLMRouter:
             error_type = _classify_error(primary_error, status_code)
             if health:
                 health.record_failure(status_code, error_type)
+            # Telemetry: Fehlgeschlagener LLM-Call
+            _telemetry.log_llm_call(
+                model=model_key, task=task,
+                input_tokens=0, output_tokens=0, cost_usd=0.0,
+                latency_ms=int((time.monotonic() - _t0) * 1000),
+                success=False, error=f"{error_type} HTTP {status_code}: {str(primary_error)[:100]}",
+            )
 
             logger.warning(
                 "Modell %s fehlgeschlagen (%s, HTTP %d) → Fallback-Kette",
@@ -500,11 +521,23 @@ class LLMRouter:
                     on_fallback(skip_model, fb_key)
                 except Exception:
                     pass  # UI-Callback darf nie den Call blockieren
+            _telemetry.log_fallback(from_model=skip_model, to_model=fb_key)
 
+            _fb_t0 = time.monotonic()
             try:
                 result = self._dispatch_call(fb_key, system, messages, tools, max_tokens)
                 if fb_health:
                     fb_health.record_success()
+                # Telemetry: Erfolgreicher Fallback-Call
+                usage = result.get("usage", {})
+                _cost = self._calc_cost(fb_key, usage.get("input_tokens", 0), usage.get("output_tokens", 0))
+                _telemetry.log_llm_call(
+                    model=fb_key, task=original_task,
+                    input_tokens=usage.get("input_tokens", 0),
+                    output_tokens=usage.get("output_tokens", 0),
+                    cost_usd=_cost,
+                    latency_ms=int((time.monotonic() - _fb_t0) * 1000),
+                )
                 logger.info("Fallback %s erfolgreich (Task: %s)", fb_key, original_task)
                 return result
             except Exception as fb_error:
@@ -512,6 +545,12 @@ class LLMRouter:
                 error_type = _classify_error(fb_error, status_code)
                 if fb_health:
                     fb_health.record_failure(status_code, error_type)
+                _telemetry.log_llm_call(
+                    model=fb_key, task=original_task,
+                    input_tokens=0, output_tokens=0, cost_usd=0.0,
+                    latency_ms=int((time.monotonic() - _fb_t0) * 1000),
+                    success=False, error=f"{error_type}: {str(fb_error)[:100]}",
+                )
                 logger.warning("Fallback %s fehlgeschlagen: %s", fb_key, fb_error)
                 continue
 
@@ -1275,11 +1314,16 @@ class LLMRouter:
 
     # === Kosten-Tracking ===
 
+    @staticmethod
+    def _calc_cost(model_key: str, input_tokens: int, output_tokens: int) -> float:
+        """Berechnet Kosten ohne Side-Effects (fuer Telemetry)."""
+        model = MODELS.get(model_key, {})
+        return (input_tokens * model.get("input_cost", 0) +
+                output_tokens * model.get("output_cost", 0)) / 1_000_000
+
     def _track_cost(self, model_key: str, input_tokens: int, output_tokens: int):
         """Trackt Kosten pro Modell und gesamt (thread-safe)."""
-        model = MODELS.get(model_key, {})
-        cost = (input_tokens * model.get("input_cost", 0) +
-                output_tokens * model.get("output_cost", 0)) / 1_000_000
+        cost = self._calc_cost(model_key, input_tokens, output_tokens)
 
         with self._cost_lock:
             self.session_costs["input_tokens"] += input_tokens
