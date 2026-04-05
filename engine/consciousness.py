@@ -1310,8 +1310,8 @@ SEQUENZ-PLANUNG: Nutze write_sequence_plan am Anfang — plane dein Ziel, Exit-K
             return ""
         try:
             content = brief_path.read_text(encoding="utf-8").strip()
-            # Hard Cap ~400 Tokens, verhindert Ueberlauf bei wachsender Datei
-            return content[:2000] if content else ""
+            # Kein Hard-Cap — Pipeline-Budget regelt Token-Kontrolle
+            return content if content else ""
         except OSError:
             return ""
 
