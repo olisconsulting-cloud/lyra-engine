@@ -10,7 +10,7 @@ subsymbolische LLMs — der vielversprechendste AGI-Ansatz (Kersting, Hassabis, 
 ```
 engine/                    Code (Git-tracked)
   consciousness.py           Agentic Loop — Perception → LLM → Tools → State
-  llm_router.py              Multi-Provider: Gemma 4 80%, Fallback-Kette 4-stufig
+  llm_router.py              Multi-Provider: DeepSeek V3.2 Primary, Fallback-Kette 4-stufig
   goal_stack.py              Hierarchische Goals + Sub-Goals + Spin-Erkennung
   intelligence.py            SemanticMemory (TF-IDF), Skills, Strategies
   evolution.py               AdaptiveRhythm, ToolFoundry, MetaCognition
