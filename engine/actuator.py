@@ -192,10 +192,23 @@ class BehaviorActuator:
 
         return "\n".join(lines)
 
+    # === Public API: Goal-Aktionen ===
+
+    def get_pending_goal_actions(self) -> list[dict]:
+        """Gibt ausstehende Goal-Aktionen zurueck und leert die Queue.
+
+        Wird von consciousness.py beim Sequenz-Start konsumiert.
+        Jede Aktion wird nur einmal zurueckgegeben (einmal lesen = verbraucht).
+        """
+        actions = self._state.pop("pending_goal_actions", [])
+        if actions:
+            self._save()
+        return actions
+
     # === Public API: Dream-Integration ===
 
     def learn_from_dream(self, dream_result: dict):
-        """Empfaengt Dream-Insights und leitet Parameter-Signale ab.
+        """Empfaengt Dream-Insights und leitet Parameter- und Goal-Signale ab.
 
         Dream-Insights sind INPUT, kein Override.
         ActuatorMeta behaelt das letzte Wort (kann reverten).
@@ -203,8 +216,25 @@ class BehaviorActuator:
 
         Args:
             dream_result: Geparstes Dream-Ergebnis (aus dream_log.json).
-                Relevanter Key: actuator_recommendations
+                Relevante Keys: actuator_recommendations, goal_recommendations
         """
+        # Goal-Recommendations speichern (werden beim naechsten Sequenz-Start konsumiert)
+        goal_recs = dream_result.get("goal_recommendations", [])
+        if goal_recs:
+            valid_actions = {"abort", "simplify", "decompose", "continue"}
+            pending = [
+                rec for rec in goal_recs[:5]
+                if rec.get("action") in valid_actions and rec.get("action") != "continue"
+            ]
+            if pending:
+                self._state.setdefault("pending_goal_actions", []).extend(pending)
+                self._save()
+                logger.info(
+                    "Actuator: %d Goal-Empfehlungen gespeichert: %s",
+                    len(pending),
+                    [f"{r['action']}:{r.get('subgoal', '?')[:30]}" for r in pending],
+                )
+
         recommendations = dream_result.get("actuator_recommendations", [])
         if not recommendations:
             return

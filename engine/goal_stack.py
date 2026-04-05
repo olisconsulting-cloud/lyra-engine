@@ -190,6 +190,90 @@ class GoalStack:
         self._save()
         return self._consecutive_count
 
+    # === Kumulative SubGoal-Metriken ===
+
+    def record_subgoal_attempt(
+        self, steps_used: int, files_written: int,
+        errors: int, efficiency_ratio: float,
+    ):
+        """Akkumuliert Metriken fuer das aktive SubGoal.
+
+        Wird nach jeder Sequenz aufgerufen — unabhaengig ob konsekutiv.
+        Ermoeglicht Erkennung von Spin-Loops die zwischen Goals alternieren.
+        """
+        sg = self._find_active_subgoal()
+        if not sg:
+            return
+
+        stats = sg.setdefault("_attempt_stats", {
+            "total_sequences": 0,
+            "total_wasted_steps": 0,
+            "total_errors": 0,
+            "total_files": 0,
+            "last_efficiency": 0.0,
+        })
+        wasted = max(0, steps_used - files_written * 3)  # Heuristik: 3 Steps/Datei = produktiv
+        stats["total_sequences"] += 1
+        stats["total_wasted_steps"] += wasted
+        stats["total_errors"] += errors
+        stats["total_files"] += files_written
+        stats["last_efficiency"] = efficiency_ratio
+        self._save()
+
+    def check_subgoal_viability(self) -> str:
+        """Prueft ob das aktive SubGoal noch machbar ist.
+
+        Basiert auf kumulativen Metriken, nicht nur konsekutiven Sequenzen.
+        Erkennt Spin-Loops die track_focus() nicht sieht (Goal-Alternierung).
+
+        Returns:
+            'viable' | 'struggling' | 'unviable'
+        """
+        sg = self._find_active_subgoal()
+        if not sg:
+            return "viable"
+
+        stats = sg.get("_attempt_stats", {})
+        total_seq = stats.get("total_sequences", 0)
+        total_files = stats.get("total_files", 0)
+        total_errors = stats.get("total_errors", 0)
+
+        if total_seq < 3:
+            return "viable"  # Zu wenig Daten
+
+        avg_files = total_files / total_seq
+        avg_errors = total_errors / total_seq
+
+        # Unviable: 8+ Sequenzen und weniger als 1 Datei/Seq im Schnitt
+        if total_seq >= 8 and avg_files < 1.0:
+            return "unviable"
+
+        # Unviable: 5+ Sequenzen und mehr Fehler als Dateien
+        if total_seq >= 5 and avg_errors > avg_files and avg_files < 2.0:
+            return "unviable"
+
+        # Struggling: 5+ Sequenzen mit unterdurchschnittlicher Effizienz
+        if total_seq >= 5 and avg_files < 2.0:
+            return "struggling"
+
+        return "viable"
+
+    def _find_active_subgoal(self) -> dict | None:
+        """Findet das aktuell aktive (in_progress) SubGoal."""
+        for goal in self.goals.get("active", []):
+            for sg in goal.get("sub_goals", []):
+                if sg.get("status") == "in_progress":
+                    return sg
+        return None
+
+    def get_active_subgoal_indices(self) -> tuple[int, int] | None:
+        """Gibt (goal_index, subgoal_index) des aktiven SubGoals zurueck."""
+        for gi, goal in enumerate(self.goals.get("active", [])):
+            for si, sg in enumerate(goal.get("sub_goals", [])):
+                if sg.get("status") == "in_progress":
+                    return (gi, si)
+        return None
+
     # === Ziel erstellen ===
 
     def _find_similar_goal(self, title: str) -> Optional[tuple[int, dict]]:

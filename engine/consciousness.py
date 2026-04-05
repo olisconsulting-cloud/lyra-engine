@@ -2289,6 +2289,17 @@ SEQUENZ-PLANUNG: Nutze write_sequence_plan am Anfang — plane dein Ziel, Exit-K
         except Exception as e:
             logger.warning("Actuator-Feedback fehlgeschlagen: %s", e)
 
+        # Kumulative SubGoal-Metriken aktualisieren
+        try:
+            self.goal_stack.record_subgoal_attempt(
+                steps_used=sm.step_count,
+                files_written=sm.files_written,
+                errors=sm.errors,
+                efficiency_ratio=eff_ratio,
+            )
+        except Exception as e:
+            logger.warning("SubGoal-Metriken fehlgeschlagen: %s", e)
+
         # MetaCognition-Muster → Process-Regeln
         try:
             meta_alerts = self.metacognition.analyze_patterns()
@@ -2638,7 +2649,8 @@ Antworte als JSON:
                         result_full = str(result)
                         result_content = result_full[:trunc]
                         if len(result_full) > trunc:
-                            result_content += f"\n[GEKUERZT: {len(result_full)} Zeichen gesamt, erste {trunc} gezeigt. Nutze offset/max_chars fuer den Rest.]"
+                            hint = " Nutze offset/max_chars fuer den Rest." if block.name == "read_file" else ""
+                            result_content += f"\n[GEKUERZT: {len(result_full)} Zeichen gesamt, erste {trunc} gezeigt.{hint}]"
                         tool_results.append({
                             "type": "tool_result",
                             "tool_use_id": block.id,
@@ -3104,6 +3116,64 @@ Antworte als JSON:
             except Exception as e:
                 logger.warning("Subgoal-Stuck Auto-Fail fehlgeschlagen: %s", e)
 
+        # Kumulative Viability-Pruefung (erkennt Spin-Loops bei Goal-Alternierung)
+        viability = self.goal_stack.check_subgoal_viability()
+        if viability == "unviable":
+            indices = self.goal_stack.get_active_subgoal_indices()
+            if indices:
+                gi, si = indices
+                sg = self.goal_stack.goals["active"][gi]["sub_goals"][si]
+                stats = sg.get("_attempt_stats", {})
+                try:
+                    result = self.goal_stack.fail_subgoal(
+                        gi, si,
+                        reason=(
+                            f"Kumulativ unviable: {stats.get('total_sequences', 0)} Sequenzen, "
+                            f"{stats.get('total_files', 0)} Dateien, "
+                            f"{stats.get('total_errors', 0)} Fehler"
+                        ),
+                        approach_tried=focus.split("\n")[0][:100],
+                    )
+                    logger.info("Kumulative Viability Auto-Fail: %s", result)
+                    self.narrator.show(f"  ⚠ SubGoal als unviable erkannt und auto-gefailt")
+                except Exception as e:
+                    logger.warning("Kumulative Viability Auto-Fail fehlgeschlagen: %s", e)
+
+        # Dream-basierte Goal-Aktionen verarbeiten (abort/simplify/decompose)
+        try:
+            for action in self.actuator.get_pending_goal_actions():
+                act_type = action.get("action", "")
+                subgoal_title = action.get("subgoal", "")
+                reason = action.get("reason", "Dream-Empfehlung")
+
+                # Guard: Kein aktives SubGoal mehr (z.B. durch Viability-Fail davor)
+                if not self.goal_stack.get_active_subgoal_indices():
+                    logger.info("Dream Goal-Aktion uebersprungen: kein aktives SubGoal")
+                    break
+
+                if act_type == "abort":
+                    indices = self.goal_stack.get_active_subgoal_indices()
+                    if indices:
+                        gi, si = indices
+                        result = self.goal_stack.fail_subgoal(
+                            gi, si,
+                            reason=f"Dream-Empfehlung: {reason}",
+                            approach_tried=subgoal_title[:100],
+                        )
+                        logger.info("Dream Goal-Abort: %s", result)
+                        self.narrator.show(f"  ⚠ Dream empfiehlt Goal-Abbruch: {reason[:60]}")
+                elif act_type in ("simplify", "decompose"):
+                    # Nur loggen — strukturelle Goal-Aenderung braucht LLM
+                    logger.info(
+                        "Dream Goal-%s: %s — %s",
+                        act_type, subgoal_title[:50], reason[:100],
+                    )
+                    self.narrator.show(
+                        f"  💡 Dream empfiehlt Goal-{act_type}: {action.get('suggestion', reason)[:60]}"
+                    )
+        except Exception as e:
+            logger.warning("Dream Goal-Aktionen fehlgeschlagen: %s", e)
+
         # Task-Typ bestimmen (einmal, wird fuer Step-Budget + Tool-Tiers genutzt)
         self._current_task_type = self._classify_task(mode, focus)
 
@@ -3380,7 +3450,8 @@ Antworte als JSON:
                             result_full = str(result)
                             result_str = result_full[:trunc]
                             if len(result_full) > trunc:
-                                result_str += f"\n[GEKUERZT: {len(result_full)} Zeichen gesamt, erste {trunc} gezeigt. Nutze offset/max_chars fuer den Rest.]"
+                                hint = " Nutze offset/max_chars fuer den Rest." if block.name == "read_file" else ""
+                                result_str += f"\n[GEKUERZT: {len(result_full)} Zeichen gesamt, erste {trunc} gezeigt.{hint}]"
                             is_error = (
                                 result_str.startswith("FEHLER")
                                 or result_str.startswith("WARNUNG")

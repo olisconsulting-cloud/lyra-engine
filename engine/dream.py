@@ -100,6 +100,11 @@ Du bekommst den aktuellen Stand aller Memory-Dateien. Deine Aufgabe:
 8. RECOMMENDATIONS: Max 2 Empfehlungen, JEDE mit 2-3 konkreten Sub-Goals. Jedes Sub-Goal muss ein messbarer, ausfuehrbarer Schritt sein — keine Absichtserklaerungen.
 9. TOOL-OEKOSYSTEM: Analysiere die selbstgebauten Tools. Welche sind wertvoll und sollten behalten werden? Welche verfallen (nie genutzt, niedrige Success-Rate)? Gibt es Luecken — Tools die fehlen? Gibt es aehnliche Tools die konsolidiert werden sollten?
 10. ACTUATOR-ANALYSE: Analysiere die Behavior-Actuator-Daten. Welche Parameteraenderungen haben geholfen (Effizienz gestiegen)? Welche wurden revertiert und warum? Gibt es Parameter die zu aggressiv oder zu konservativ eingestellt sind? Formuliere max 3 konkrete Empfehlungen fuer Parameteranpassungen.
+11. GOAL-ANALYSE: Fuer jedes aktive SubGoal mit _attempt_stats (mehr als 3 Sequenzen):
+   Format: _attempt_stats: {total_sequences: int, total_wasted_steps: int, total_errors: int, total_files: int, last_efficiency: float}
+   - Ist die Schwierigkeit angemessen fuer Lyras aktuelle Skills?
+   - Zeigen die Metriken Fortschritt (steigende Files, sinkende Errors) oder Stagnation?
+   - Empfehlung: "continue" (Fortschritt sichtbar), "simplify" (zu komplex, aber lernbar mit einfacherem Ansatz), "abort" (ueber Skill-Level, Waste > 70%), "decompose" (zu gross, in kleinere Sub-Goals zerlegen).
 
 Antworte als JSON:
 {
@@ -114,7 +119,8 @@ Antworte als JSON:
   "process_insights": "Was Lyra ueber ihren ARBEITSSTIL gelernt hat — nicht Aufgaben, sondern WIE sie arbeitet",
   "efficiency_patterns": ["Konkrete Beobachtungen ueber Produktivitaet und Effizienz"],
   "tool_insights": "Analyse des Tool-Oekosystems: Was ist wertvoll, was verfaellt, was fehlt?",
-  "actuator_recommendations": [{"parameter": "step_budget_modifier|research_depth_limit|output_checkpoint_step", "direction": "increase|decrease", "reason": "Begruendung"}]
+  "actuator_recommendations": [{"parameter": "step_budget_modifier|research_depth_limit|output_checkpoint_step", "direction": "increase|decrease", "reason": "Begruendung"}],
+  "goal_recommendations": [{"subgoal": "Titel des SubGoals", "action": "continue|simplify|abort|decompose", "reason": "Begruendung", "suggestion": "Nur bei simplify/decompose: konkreter Vorschlag"}]
 }"""
 
         try:
