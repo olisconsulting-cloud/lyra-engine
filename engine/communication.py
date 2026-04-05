@@ -34,11 +34,13 @@ class CommunicationEngine:
         self.outbox_path.mkdir(parents=True, exist_ok=True)
         self.journal_path.mkdir(parents=True, exist_ok=True)
 
-        # Telegram-Bridge initialisieren (falls konfiguriert)
+        # Telegram-Bridge initialisieren (falls konfiguriert UND aktiviert)
+        # PHI_TELEGRAM_ENABLED=false in .env deaktiviert Polling fuer sekundaere Instanzen
         self.telegram: Optional[TelegramBridge] = None
+        tg_enabled = os.getenv("PHI_TELEGRAM_ENABLED", "true").strip().lower()
         tg_token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
         tg_chat_id = os.getenv("TELEGRAM_CHAT_ID", "").strip()
-        if tg_token and tg_chat_id:
+        if tg_enabled in ("true", "1", "yes") and tg_token and tg_chat_id:
             self.telegram = TelegramBridge(tg_token, tg_chat_id, self.inbox_path)
 
     @property
