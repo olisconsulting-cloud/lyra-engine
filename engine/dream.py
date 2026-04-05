@@ -94,7 +94,7 @@ Du bekommst den aktuellen Stand aller Memory-Dateien. Deine Aufgabe:
 Antworte als JSON:
 {
   "consolidated_beliefs": ["Liste der 10-15 wichtigsten Ueberzeugungen"],
-  "obsolete_beliefs": ["Beliefs die geloescht werden sollen"],
+  "obsolete_beliefs": ["Beliefs die ueberholt sind — werden nicht geloescht sondern als Wisdom-Lektionen archiviert (max 3)"],
   "strategy_updates": [{"rule": "...", "action": "keep|delete|update", "reason": "..."}],
   "skill_notes": "Freitext-Analyse der Skills",
   "memory_summary": "Was Lyra in letzter Zeit gelernt hat — 2-3 Saetze",
@@ -292,56 +292,84 @@ Antworte als JSON:
         """Wendet die Dream-Ergebnisse an."""
         applied = []
 
-        # Beliefs konsolidieren (Guard: nie leere Liste uebernehmen + Schema-Validierung)
+        # Beliefs konsolidieren — MERGE statt Replace
+        # Neue Beliefs werden zu bestehenden HINZUGEFUEGT, nicht ersetzt.
+        # Duplikate werden gefiltert, max 30 Beliefs insgesamt.
         new_beliefs = result.get("consolidated_beliefs", [])
         if new_beliefs and len(new_beliefs) >= 3:
             beliefs_path = self.consciousness_path / "beliefs.json"
             try:
                 beliefs = self._safe_load_json(beliefs_path) or {}
-                # Schema-Validierung: Nur Strings akzeptieren, max 30
                 validated = [b for b in new_beliefs if isinstance(b, str) and len(b) > 5][:30]
                 if len(validated) >= 3:
-                    # Bekannte Kategorie-Keys erhalten, nur formed_from_experience updaten
-                    _KNOWN_KEYS = {"about_self", "about_world", "about_oliver", "formed_from_experience"}
+                    _KNOWN_KEYS = {"about_self", "about_world", "about_oliver",
+                                   "formed_from_experience", "wisdom"}
                     for key in _KNOWN_KEYS:
                         if key not in beliefs:
                             beliefs[key] = []
-                    # Deduplikation: Nur Beliefs aufnehmen die nicht schon existieren
                     existing = beliefs.get("formed_from_experience", [])
-                    deduplicated = []
+                    # Neue Beliefs zu bestehenden HINZUFUEGEN (nicht ersetzen)
+                    merged = list(existing)
+                    added = 0
                     for b in validated:
-                        if not self._is_belief_duplicate(b, deduplicated + existing):
-                            deduplicated.append(b)
-                    beliefs["formed_from_experience"] = deduplicated
+                        if not self._is_belief_duplicate(b, merged):
+                            merged.append(b)
+                            added += 1
+                    # Max 30 Beliefs — aelteste zuerst in Wisdom destillieren
+                    if len(merged) > 30:
+                        overflow = merged[:len(merged) - 30]
+                        merged = merged[len(merged) - 30:]
+                        # Ueberlauf → Wisdom-Archiv (destilliert, nie geloescht)
+                        wisdom = beliefs.get("wisdom", [])
+                        for old_belief in overflow:
+                            text = old_belief if isinstance(old_belief, str) else old_belief.get("text", "")
+                            if text and not self._is_belief_duplicate(text, wisdom):
+                                wisdom.append(text)
+                        beliefs["wisdom"] = wisdom[-50:]  # Max 50 Wisdom-Eintraege
+                    beliefs["formed_from_experience"] = merged
                     with open(beliefs_path, "w", encoding="utf-8") as f:
                         json.dump(beliefs, f, indent=2, ensure_ascii=False)
-                    applied.append(f"Beliefs: {len(validated)} konsolidiert")
+                    applied.append(f"Beliefs: {added} neu, {len(merged)} total")
                 else:
                     applied.append(f"Beliefs: Validierung fehlgeschlagen ({len(validated)} von {len(new_beliefs)} gueltig)")
             except (OSError, json.JSONDecodeError) as e:
                 applied.append(f"Beliefs-Update fehlgeschlagen: {e}")
 
-        # Obsolete Beliefs entfernen (Dual-Loop — war bisher toter Code)
+        # Obsolete Beliefs → Wisdom destillieren (nie loeschen, immer lernen)
+        # Max 3 pro Dream-Zyklus — verhindert Belief-Extinction
         obsolete = result.get("obsolete_beliefs", [])
         if obsolete:
             beliefs_path = self.consciousness_path / "beliefs.json"
             try:
                 beliefs = self._safe_load_json(beliefs_path) or {}
                 formed = beliefs.get("formed_from_experience", [])
+                wisdom = beliefs.get("wisdom", [])
                 before_count = len(formed)
-                # Entferne Beliefs die als obsolet markiert wurden
                 obsolete_lower = {o.lower().strip() for o in obsolete if isinstance(o, str)}
-                formed = [
-                    b for b in formed
-                    if (b if isinstance(b, str) else b.get("text", "")).lower().strip()
-                    not in obsolete_lower
-                ]
-                removed = before_count - len(formed)
-                if removed > 0:
-                    beliefs["formed_from_experience"] = formed
+                # Maximal 3 Beliefs pro Zyklus als obsolet markieren
+                removed_beliefs = []
+                kept = []
+                for b in formed:
+                    text = (b if isinstance(b, str) else b.get("text", "")).lower().strip()
+                    if text in obsolete_lower and len(removed_beliefs) < 3:
+                        removed_beliefs.append(b)
+                    else:
+                        kept.append(b)
+                # Entfernte Beliefs → Wisdom-Archiv mit Kontext
+                for old in removed_beliefs:
+                    text = old if isinstance(old, str) else old.get("text", "")
+                    lesson = f"[ueberholt] {text}"
+                    if not self._is_belief_duplicate(lesson, wisdom):
+                        wisdom.append(lesson)
+                if removed_beliefs:
+                    beliefs["formed_from_experience"] = kept
+                    beliefs["wisdom"] = wisdom[-50:]
                     with open(beliefs_path, "w", encoding="utf-8") as f:
                         json.dump(beliefs, f, indent=2, ensure_ascii=False)
-                    applied.append(f"Obsolete Beliefs: {removed} entfernt")
+                    applied.append(
+                        f"Beliefs destilliert: {len(removed_beliefs)} → Wisdom "
+                        f"(max 3/Zyklus, {len(kept)} aktiv, {len(wisdom)} Wisdom)"
+                    )
             except (OSError, json.JSONDecodeError):
                 pass
 
