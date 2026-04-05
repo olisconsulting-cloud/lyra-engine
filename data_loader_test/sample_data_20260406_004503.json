@@ -1,0 +1,62 @@
+{
+  "Name": [
+    "Alice",
+    "Bob",
+    "Charlie",
+    "Diana",
+    "Eve",
+    "Frank",
+    "Grace",
+    "Henry",
+    "Iris",
+    "Jack"
+  ],
+  "Age": [
+    28,
+    35,
+    42,
+    31,
+    29,
+    45,
+    38,
+    27,
+    33,
+    50
+  ],
+  "Salary": [
+    45000,
+    55000,
+    65000,
+    52000,
+    48000,
+    72000,
+    60000,
+    42000,
+    58000,
+    80000
+  ],
+  "Department": [
+    "Marketing",
+    "Sales",
+    "Engineering",
+    "Marketing",
+    "HR",
+    "Engineering",
+    "Sales",
+    "HR",
+    "Marketing",
+    "Engineering"
+  ],
+  "Experience": [
+    3,
+    8,
+    15,
+    5,
+    4,
+    20,
+    12,
+    2,
+    7,
+    25
+  ]
+}

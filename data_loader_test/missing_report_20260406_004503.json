@@ -1,0 +1,38 @@
+{
+  "overall_missing": {
+    "total_missing_cells": 0,
+    "missing_percentage": 0.0
+  },
+  "by_column": {
+    "Name": {
+      "missing_count": 0,
+      "missing_percentage": 0.0,
+      "non_missing_count": 10
+    },
+    "Age": {
+      "missing_count": 0,
+      "missing_percentage": 0.0,
+      "non_missing_count": 10
+    },
+    "Salary": {
+      "missing_count": 0,
+      "missing_percentage": 0.0,
+      "non_missing_count": 10
+    },
+    "Department": {
+      "missing_count": 0,
+      "missing_percentage": 0.0,
+      "non_missing_count": 10
+    },
+    "Experience": {
+      "missing_count": 0,
+      "missing_percentage": 0.0,
+      "non_missing_count": 10
+    }
+  },
+  "patterns": {
+    "rows_by_missing_count": {
+      "0": 10
+    }
+  }
+}

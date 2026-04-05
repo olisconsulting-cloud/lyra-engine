@@ -1,0 +1,51 @@
+{
+  "column_details": {
+    "Name": {
+      "dtype": "str",
+      "unique_values": 10,
+      "null_count": 0,
+      "memory_usage_bytes": 668
+    },
+    "Age": {
+      "dtype": "int64",
+      "unique_values": 10,
+      "null_count": 0,
+      "memory_usage_bytes": 212
+    },
+    "Salary": {
+      "dtype": "int64",
+      "unique_values": 10,
+      "null_count": 0,
+      "memory_usage_bytes": 212
+    },
+    "Department": {
+      "dtype": "str",
+      "unique_values": 4,
+      "null_count": 0,
+      "memory_usage_bytes": 696
+    },
+    "Experience": {
+      "dtype": "int64",
+      "unique_values": 10,
+      "null_count": 0,
+      "memory_usage_bytes": 212
+    }
+  },
+  "memory_usage": {
+    "total_memory_bytes": 1472,
+    "per_column": {
+      "Index": 132,
+      "Name": 536,
+      "Age": 80,
+      "Salary": 80,
+      "Department": 564,
+      "Experience": 80
+    }
+  },
+  "shape_analysis": {
+    "rows": 10,
+    "columns": 5,
+    "total_cells": 50,
+    "density_percentage": 100.0
+  }
+}

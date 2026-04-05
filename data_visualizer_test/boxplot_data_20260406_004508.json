@@ -1,0 +1,29 @@
+{
+  "Age": {
+    "q1": 29.5,
+    "median": 34.0,
+    "q3": 41.0,
+    "iqr": 11.5,
+    "lower_whisker": 27.0,
+    "upper_whisker": 50.0,
+    "outliers": []
+  },
+  "Salary": {
+    "q1": 49000.0,
+    "median": 56500.0,
+    "q3": 63750.0,
+    "iqr": 14750.0,
+    "lower_whisker": 42000.0,
+    "upper_whisker": 80000.0,
+    "outliers": []
+  },
+  "Experience": {
+    "q1": 4.25,
+    "median": 7.5,
+    "q3": 14.25,
+    "iqr": 10.0,
+    "lower_whisker": 2.0,
+    "upper_whisker": 25.0,
+    "outliers": []
+  }
+}
