@@ -203,7 +203,7 @@ class ActionEngine:
         # Warnungen anzeigen (aber ausfuehren)
         warning_prefix = ""
         if code_check["warnings"]:
-            warning_prefix = f"WARNUNGEN: {'; '.join(code_check['warnings'][:3])}\n---\n"
+            warning_prefix = f"[Security-Hinweise: {'; '.join(code_check['warnings'][:3])}]\n---\n"
 
         venv_python = Path(config.ROOT_PATH) / "venv" / "Scripts" / "python.exe"
         python_cmd = str(venv_python) if venv_python.exists() else sys.executable

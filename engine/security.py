@@ -65,11 +65,10 @@ HARD_BLOCKED_PATTERNS = {
 }
 
 # SOFT WARNING: Warnung ausgeben, aber nicht blockieren
+# HINWEIS: exec/eval/compile werden NICHT per String gematcht (False Positives!),
+# sondern AST-basiert in _analyze_ast() — nur echte Funktionsaufrufe warnen.
 SOFT_WARNING_PATTERNS = {
-    "eval": "eval() ist unsicher — nutze json.loads() oder ast.literal_eval()",
-    "exec(": "exec() fuehrt beliebigen Code aus — nutze spezifischere Alternativen",
     "__import__": "__import__() ist unueblich — nutze regulaere imports",
-    "compile": "compile() + exec ist ein Umweg um exec — wirklich noetig?",
     "getattr(__builtins__": "Zugriff auf __builtins__ ist verdaechtig",
     "subprocess.run": "subprocess.run — stelle sicher dass shell=False ist",
     "subprocess.call": "subprocess.call — nutze subprocess.run stattdessen",
@@ -214,6 +213,17 @@ class SecurityGateway:
 
                 elif func_name in ("os.system", "os.popen"):
                     hard.append(f"BLOCKIERT: {func_name}() — Shell-Ausfuehrung")
+
+                # exec/eval/compile: AST-basiert statt String-Match (keine False Positives)
+                elif func_name in ("exec", "eval", "builtins.exec", "builtins.eval"):
+                    soft.append(
+                        f"WARNUNG: {func_name}() — unsicher, "
+                        f"nutze ast.literal_eval() oder subprocess stattdessen"
+                    )
+                elif func_name in ("compile", "builtins.compile"):
+                    soft.append(
+                        "WARNUNG: compile() + exec ist ein Umweg — wirklich noetig?"
+                    )
 
             # Import von verdaechtigen Modulen
             if isinstance(node, ast.Import):
