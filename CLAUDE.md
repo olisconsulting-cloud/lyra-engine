@@ -104,9 +104,9 @@ python review_phi.py         # Regressions-Gate (17 Checks)
 
 - **DeepSeek V3.2**: 80% — Primary, Coding, Tool-Use ($0.14/$0.28, Cache $0.028)
 - **Kimi K2.5** (NVIDIA): Fallback Stufe 1 — bewaehrt ($0, Credit-basiert)
-- **GPT-4.1-mini**: Fallback Stufe 2 + Dream — JSON-Garantie ($0.40/$1.60)
+- **GPT-4.1-mini**: Fallback Stufe 2 — JSON-Garantie ($0.40/$1.60)
 - **Sonnet 4.6**: Letzter Fallback — nativer Tool-Use
-- **Opus 4.6**: Audit, Result-Validation — keine Abstriche
+- **Opus 4.6**: Audit, Code-Review, Dream, Result-Validation — keine Abstriche
 - Fallback-Kette: Kimi → GPT-4.1-mini → Sonnet
 - `TASK_MODEL_MAP` in `llm_router.py` = EINZIGE Stelle fuer Modell-Zuordnung
 

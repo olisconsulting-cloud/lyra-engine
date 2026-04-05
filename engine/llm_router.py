@@ -4,9 +4,9 @@ Multi-LLM Router — Waehlt das optimale Modell je nach Aufgabe.
 Aufstellung:
 - DeepSeek V3.2: Haupt-Arbeit (80%) — bestes P/L ($0.14/$0.28, Cache $0.028)
 - Kimi K2.5 (NVIDIA): Fallback-Stufe 1 ($0 auf NIM, Credit-basiert)
-- GPT-4.1-mini (OpenAI): Fallback-Stufe 2 + Dream (JSON-Garantie)
+- GPT-4.1-mini (OpenAI): Fallback-Stufe 2 (JSON-Garantie)
 - Claude Sonnet 4.6: Letzter Fallback — nativer Tool-Use
-- Claude Opus 4.6: Audit, Result-Validation — Tiefenanalyse
+- Claude Opus 4.6: Audit, Code-Review, Dream, Result-Validation — Tiefenanalyse
 - Gemma 4 31B: Wartet auf Self-Hosting (Cloud ueberall Tool-Use-Limits)
 
 Fallback-Kette: Kimi K2.5 → GPT-4.1-mini → Sonnet 4.6
@@ -14,7 +14,7 @@ Fallback-Kette: Kimi K2.5 → GPT-4.1-mini → Sonnet 4.6
 TASK_MODEL_MAP ist die EINZIGE Stelle fuer Modell-Zuordnung.
 Alle Module importieren von hier — keine hardcodierten Modell-IDs.
 
-Kosten: ~$1-3/Tag (DeepSeek Primary, Cache-Hits fast gratis)
+Kosten: ~$5-8/Tag (DeepSeek Primary + Opus fuer Review/Dream/Audit)
 """
 
 import copy
@@ -59,7 +59,7 @@ MODELS = {
         "input_cost": 5.00,
         "output_cost": 25.00,
         "max_output_tokens": 16384,
-        "use_for": "Kritische Selbstverbesserung, Audit",
+        "use_for": "Audit, Code-Review, Dream, Result-Validation — Tiefenanalyse",
     },
     "claude_sonnet": {
         "provider": "anthropic",
@@ -106,11 +106,11 @@ MODELS = {
 # Welches Modell fuer welche Aufgabe — EINZIGE Stelle fuer Modell-Zuordnung
 TASK_MODEL_MAP = {
     "main_work": "deepseek_v3",            # DeepSeek V3.2 — Primary ($0.14/$0.28, Cache fast gratis)
-    "code_review": "deepseek_v3",          # DeepSeek — Code-Review (guenstig + stark)
+    "code_review": "claude_opus",           # Opus 4.6 — Gatekeeper muss der Beste sein
     "audit_primary": "claude_opus",        # Opus 4.6 — Tiefenanalyse (hier keine Abstriche)
     "audit_secondary": "deepseek_v3",      # DeepSeek — Gegenpruefung (guenstig)
     "telegram_reply": "deepseek_v3",       # DeepSeek — Sofort-Antwort
-    "dream": "gpt4_1_mini",                # GPT-4.1-mini — Memory-Konsolidierung (JSON-Garantie)
+    "dream": "claude_opus",                 # Opus 4.6 — Wissens-Konsolidierung (laeuft selten, Qualitaet > Speed)
     "tool_generation": "deepseek_v3",      # DeepSeek — Tool-Generierung
     "goal_planning": "deepseek_v3",        # DeepSeek — Goal-Planning
     "result_validation": "claude_opus",    # Opus 4.6 — Ergebnis-Pruefung (kritisch)
