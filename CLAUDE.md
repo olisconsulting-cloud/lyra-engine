@@ -86,22 +86,29 @@ python review_phi.py         # Regressions-Gate (14 Checks)
 - System-Prompt Metadaten konditionalisieren (Backlog T4)
 - Offene Backlog-Items: `.audit/BACKLOG.md`
 
-## Offene AGI-Luecken
-> Tiefenanalyse: `.planning/META.md` (Flywheel-Luecken L1-L4)
+## AGI-Roadmap: 7 Hebel zum Self-Sustaining Learner
+> Detail-Plan: `.planning/AGI-ROADMAP.md` | Forschungsbasis: 60+ Quellen (2023-2026)
+> Kern-Erkenntnis: Struktur > Skalierung. Alle Teile existieren — der Hebel ist der Loop.
 
-- **Evaluations-Framework**: Kein systematischer Weg, Fortschritt zu messen
-- **Alignment-Layer**: Anti-Loop ist Symptom, kein Werte-Gate VOR Goal-Ausfuehrung
-- **ARC-Benchmark**: Chollet-Test fuer Transferlernen — DER AGI-Massstab
-- **Consensus-Voting**: Bei kritischen Entscheidungen Multi-LLM-Vote
+| # | Hebel | Status | Kern-Idee |
+|---|-------|--------|-----------|
+| 1 | **EVALUATION** | LIVE | Messen = Sehen. Score 0-100, Checkpoints, Alerts |
+| 2 | **REFINEMENT LOOPS** | OFFEN | Generate→Evaluate→Refine statt Single-Shot |
+| 3 | **META-LEARNING** | OFFEN | Von Reflexion zu echtem Learning-to-Learn |
+| 4 | **AUTOMATIC CURRICULUM** | OFFEN | Phi generiert sich selbst Uebungsaufgaben |
+| 5 | **HINDSIGHT LEARNING** | OFFEN | Gescheiterte Versuche = Loesungen fuer andere Probleme |
+| 6 | **CONSTITUTIONAL** | OFFEN | Verfassung die nicht umgangen werden kann |
+| 7 | **STRUCTURED MEMORY** | OFFEN | Von TF-IDF zu Wissensgraph mit Kausalitaet |
+
+**Kipppunkt:** Nach Hebel 1-3 traegt sich der Self-Improvement-Loop selbst.
 
 ## Aktive Projekte
 
 > Bei jeder Session pruefen: Gibt es offene Aufgaben in diesen Projekten?
-> Entry-Point lesen, BACKLOG.md pruefen, weitermachen wo aufgehoert wurde.
+> Entry-Point lesen, weitermachen wo aufgehoert wurde.
 
-- **Unified Memory** — `evolution/unified-memory/CLAUDE.md`
-  Phis 5 Lern-Systeme vereinen. Phase 1 aktiv (Baselines + Quick Wins).
-  Naechste Aktion: baseline_metrics.json auswerten, dann UM-Q2 + UM-Q3.
+- **AGI-Roadmap** — `.planning/AGI-ROADMAP.md` — Hebel 1 LIVE, Hebel 2 als naechstes
+- **Unified Memory** — `evolution/unified-memory/CLAUDE.md` — Phase 1 aktiv
 
 ## Referenzen
 
