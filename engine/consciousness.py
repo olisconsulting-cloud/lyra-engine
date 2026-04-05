@@ -2798,6 +2798,7 @@ Antworte als JSON:
 
                 # Dream-Konsolidierung (alle 10 Sequenzen)
                 if self.dream.should_dream(self._sequences_since_dream):
+                    _dream_t0 = time.monotonic()
                     self.narrator.dream_start()
                     result = self.dream.dream()
                     # Dream-Empfehlungen als Goals (Feedback-Loop schliessen)
@@ -2829,6 +2830,7 @@ Antworte als JSON:
                         logger.warning("Tool-Housekeeping fehlgeschlagen: %s", e)
 
                     self.narrator.dream_end(result)
+                    telemetry.log_dream(duration_s=time.monotonic() - _dream_t0)
                     self._sequences_since_dream = 0
 
                 # Selbst-Audit (alle 15 Sequenzen)

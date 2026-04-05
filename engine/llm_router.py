@@ -420,7 +420,7 @@ class LLMRouter:
                 output_tokens=usage.get("output_tokens", 0),
                 cost_usd=_cost,
                 latency_ms=int((time.monotonic() - _t0) * 1000),
-                cache_hit=usage.get("cache_creation_input_tokens", 0) > 0,
+                cache_hit=usage.get("cache_read_input_tokens", 0) > 0,
             )
             return result
         except Exception as primary_error:

@@ -240,7 +240,7 @@ class Telemetry:
                     event_type = ev.get("event")
                     if event_type == "sequence_end":
                         stats["sequences"] += 1
-                        stats["total_cost"] += ev.get("cost_usd", 0)
+                        # Kosten NICHT aus sequence_end — sonst doppelt mit llm_call
                     elif event_type == "llm_call":
                         stats["total_input_tokens"] += ev.get("input_tokens", 0)
                         stats["total_output_tokens"] += ev.get("output_tokens", 0)
@@ -275,8 +275,9 @@ class Telemetry:
         """Schreibt ein Event als JSON-Zeile (thread-safe, append-only)."""
         now = datetime.now(timezone.utc)
         event["timestamp"] = now.isoformat()
-        event["seq"] = self._sequence_num
-        event["step"] = self._step_num
+        # seq/step nur setzen wenn nicht bereits im Event (log_enforcement setzt eigenen step)
+        event.setdefault("seq", self._sequence_num)
+        event.setdefault("step", self._step_num)
 
         line = json.dumps(event, ensure_ascii=False, separators=(",", ":"))
 
