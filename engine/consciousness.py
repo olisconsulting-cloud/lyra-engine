@@ -518,7 +518,9 @@ class ConsciousnessEngine:
         self.state["awake_since"] = datetime.now(timezone.utc).isoformat()
         self.sequences_total = self.state.get("sequences_total", 0)
         self._installed_packages = set(self.state.get("installed_packages", []))
-        self._approved_packages = set(self.state.get("approved_packages", []))
+        from .bootstrap import load_approved_packages
+        instance_approved = set(self.state.get("approved_packages", []))
+        self._approved_packages = load_approved_packages(instance_approved)
         # Provider-Health aus State laden (ueberlebt Neustarts)
         health_state = self.state.get("provider_health", {})
         if health_state:
@@ -1702,7 +1704,11 @@ SEQUENZ-PLANUNG: Nutze write_sequence_plan am Anfang — plane dein Ziel, Exit-K
             if name == "pip_install":
                 pkg = tool_input["package"].lower()
                 if pkg in self._approved_packages:
-                    pass  # Bereits genehmigt — nicht nochmal fragen
+                    pass  # Bereits genehmigt oder auf Bootstrap-Allowlist
+                elif os.environ.get("PHI_UNATTENDED"):
+                    # Unattended-Modus: Unbekanntes Paket loggen und ablehnen
+                    logger.warning(f"UNATTENDED: pip_install '{pkg}' nicht auf Allowlist — abgelehnt")
+                    return f"FEHLER: Paket '{pkg}' nicht auf der Allowlist. Im Unattended-Modus nur Allowlist-Pakete erlaubt."
                 elif self._request_approval(name, tool_input):
                     self._approved_packages.add(pkg)
                     self._save_all()  # Genehmigung sofort persistieren

@@ -1,0 +1,15 @@
+{
+  "_bootstrap_version": 1,
+  "_description": "Kuratierte Allowlist sicherer pip-Pakete fuer autonomen Betrieb.",
+  "packages": [
+    "pandas", "numpy", "matplotlib", "seaborn", "scipy",
+    "scikit-learn", "pillow", "requests", "beautifulsoup4",
+    "lxml", "jinja2", "pyyaml", "toml", "python-dotenv",
+    "rich", "tqdm", "httpx", "aiohttp",
+    "pydantic", "click", "pytest",
+    "sympy", "networkx", "plotly",
+    "openpyxl", "tabulate", "markdown",
+    "psutil", "watchdog", "schedule",
+    "chardet", "charset-normalizer"
+  ]
+}

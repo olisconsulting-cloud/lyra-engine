@@ -149,3 +149,19 @@ def load_actuator_defaults() -> dict:
     }
     defaults.update(params)
     return defaults
+
+
+# === Approved Packages Merge ===
+
+def load_approved_packages(instance_approved: set) -> set:
+    """Laedt genehmigte Pakete: Bootstrap-Allowlist + Instanz-Genehmigungen.
+
+    Union aus beiden Quellen. Instanz-Set stammt aus state.json.
+    """
+    bootstrap = _read_bootstrap("approved_packages.json", default={"packages": []})
+    bootstrap_set = {p.lower() for p in bootstrap.get("packages", [])}
+    merged = bootstrap_set | {p.lower() for p in instance_approved}
+    new_from_bootstrap = bootstrap_set - instance_approved
+    if new_from_bootstrap:
+        logger.info(f"Bootstrap: {len(new_from_bootstrap)} Pakete aus Allowlist geladen")
+    return merged
