@@ -166,9 +166,9 @@ class MetaRuleEngine:
                     actions.append("force_finish_partial")
 
             elif rule_type == "detection" and rule["id"] == "zero_output_loop":
-                # Keine Dateien nach 15 Steps → Warnung
-                if step >= 15 and files_written == 0:
-                    actions.append("warn_no_output")
+                # Deaktiviert: BehaviorActuator uebernimmt diesen Check
+                # mit adaptivem output_checkpoint_step (harter Abbruch statt Warnung)
+                pass
 
         return actions
 

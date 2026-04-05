@@ -38,6 +38,7 @@ from .ior import IORTracker
 from .dream import DreamEngine
 from .competence import CompetenceMatrix, SelfAudit
 from .code_review import DualReviewSystem
+from .evaluation import EvaluationEngine
 from .evolution import AdaptiveRhythm, ToolFoundry, ToolCurator, SelfBenchmark, LearningEngine, MetaCognition
 from .self_diagnosis import IntegrationTester, DependencyAnalyzer, SilentFailureDetector
 from .quantum import FailureMemory, CriticAgent, PromptMutator, SkillComposer
@@ -63,6 +64,7 @@ from .unified_memory import (
     failure_adapter, strategy_adapter,
 )
 from .episodic_bridge import EpisodicBridge
+from .actuator import BehaviorActuator
 from .skill_enricher import SkillEnricher
 from .sequence_runner import SequenceRunner
 # SequenceFinisher entfernt — Logik bleibt in _handle_finish_sequence
@@ -641,6 +643,7 @@ class ConsciousnessEngine:
         self.toolchain._metrics_callback = lambda name, ok, err="": \
             self.tool_metrics.record_use(name, ok, error=err)
         self.learning = LearningEngine(config.DATA_PATH)
+        self.evaluation = EvaluationEngine(config.DATA_PATH)
         self.metacognition = MetaCognition(config.DATA_PATH)
         self.failure_memory = FailureMemory(config.DATA_PATH)
         self.critic = CriticAgent()
@@ -663,6 +666,7 @@ class ConsciousnessEngine:
         # Sequenz-Intelligence: Fassade fuer Checkpoint, Planner, Meta-Rules
         from .sequence_intelligence import SequenceIntelligence
         self.seq_intel = SequenceIntelligence(self.consciousness_path)
+        self.actuator = BehaviorActuator(self.consciousness_path)
         self.skill_library = SkillLibrary(config.DATA_PATH)
         self.skill_enricher = SkillEnricher(self.failure_memory)
         self.episodic_bridge = EpisodicBridge(config.DATA_PATH)
@@ -1030,16 +1034,23 @@ class ConsciousnessEngine:
 
     def _get_step_budget(self, mode: dict, focus: str) -> int:
         """
-        Step-Budget = MAX_STEPS_PER_SEQUENCE als Sicherheitsnetz.
+        Step-Budget = MAX_STEPS_PER_SEQUENCE * Actuator-Modifier.
 
         Phi plant selbst wieviele Steps er braucht (write_sequence_plan).
         Die Warnungen kommen aus seinem eigenen Plan + Token-Budget.
-        Das harte Limit hier ist nur der Fallback — nicht die Steuerung.
+        Das harte Limit hier ist der Fallback — der Actuator passt es
+        basierend auf Prediction-Error-Feedback an.
 
         Die Step-History wird weiterhin aufgezeichnet, damit Phi lernt
         wieviele Steps er fuer verschiedene Task-Typen tatsaechlich braucht.
         """
-        return MAX_STEPS_PER_SEQUENCE
+        modifier = self.actuator.step_budget_modifier
+        budget = int(MAX_STEPS_PER_SEQUENCE * modifier)
+        # Research-Tasks: Eigenes Limit aus Actuator
+        task_type = getattr(self, "_current_task_type", "") or ""
+        if "recherche" in task_type.lower():
+            budget = min(budget, self.actuator.research_depth_limit)
+        return max(10, budget)  # Minimum 10 Steps (Sicherheit)
 
     def _get_task_type_history(self, task_type: str) -> list[int]:
         """Holt historische Step-Counts fuer einen Task-Typ.
@@ -1188,6 +1199,7 @@ TASKS: {task_summary}
 SKILLS: {skills_summary}
 KOMPETENZ: {competence_overview} | {training_suggestion}
 LEISTUNG: {rating_trend} | EFFIZIENZ: {efficiency_trend}
+{self.evaluation.get_trend_summary()}
 AUDIT: {last_audit} | REVIEWS: {review_stats}
 BENCHMARKS: {benchmark_trend} | FOUNDRY: {foundry_status} | COMPOUND: {compound_stats}
 {optional_block}
@@ -2249,6 +2261,22 @@ SEQUENZ-PLANUNG: Nutze write_sequence_plan am Anfang — plane dein Ziel, Exit-K
             key_decision=key_decision,
         )
 
+        # Actuator: Prediction-Error-Loop schliessen
+        # Wandelt Bottleneck-Erkenntnisse in harte Parameteraenderungen um
+        try:
+            sm = self.seq_intel.metrics
+            eff_ratio = output_count / max(1, sm.step_count)
+            self.actuator.process_prediction_error(
+                bottleneck=bottleneck,
+                next_time=next_time,
+                seq_num=self.sequences_total,
+                steps_used=sm.step_count,
+                files_written=sm.files_written,
+                efficiency_ratio=eff_ratio,
+            )
+        except Exception as e:
+            logger.warning("Actuator-Feedback fehlgeschlagen: %s", e)
+
         # MetaCognition-Muster → Process-Regeln
         try:
             meta_alerts = self.metacognition.analyze_patterns()
@@ -2971,6 +2999,11 @@ Antworte als JSON:
         if init.meta_injections:
             cached_system_prompt += init.meta_injections
 
+        # Actuator-Kontext: Zeigt Phi aktive Parameteranpassungen
+        actuator_ctx = self.actuator.get_prompt_context()
+        if actuator_ctx:
+            cached_system_prompt += f"\n\n{actuator_ctx}"
+
         # Cross-Sequenz Spin-Guard: Blockierte Aktionen in System-Prompt injizieren
         blocked_actions = [k for k, v in cross_seq_spins.items() if v >= 2]
         if blocked_actions:
@@ -3036,6 +3069,11 @@ Antworte als JSON:
             self.sequences_total + 1, focus, mode.get("mode", "standard"), step_budget
         )
 
+        # Actuator-Status anzeigen (nur wenn Parameter angepasst)
+        actuator_summary = self.actuator.get_parameter_summary()
+        if actuator_summary:
+            print(f"  {actuator_summary}")
+
         # Alle 5 Sequenzen: Gesamtplan mit Checkmarks anzeigen
         if self.sequences_total % 5 == 0:
             self.narrator.goal_summary(self.goal_stack.get_summary())
@@ -3071,6 +3109,23 @@ Antworte als JSON:
                 self.narrator.token_warning(95, "graceful_finish")
                 finish_data = self._graceful_finish(messages, step_count)
                 self._handle_finish_sequence(finish_data)
+                finished = True
+                break
+
+            # Actuator Output-Checkpoint: Kein Output nach N Steps → Sequenz beenden
+            # Harter Code-Enforcement statt Prompt-Warnung
+            ocp = self.actuator.output_checkpoint_step
+            if step == ocp and self.seq_intel.metrics.files_written == 0:
+                self.narrator.error_budget(step, 0)  # Nutzt vorhandene Narration
+                logger.info(
+                    "Actuator: Output-Checkpoint bei Step %d — 0 Files → graceful_finish",
+                    step,
+                )
+                try:
+                    finish_data = self._graceful_finish(messages, step_count)
+                    self._handle_finish_sequence(finish_data)
+                except Exception as e:
+                    logger.warning("Actuator Output-Checkpoint Finish fehlgeschlagen: %s", e)
                 finished = True
                 break
 
@@ -3434,6 +3489,43 @@ Antworte als JSON:
             })
         except Exception as e:
             print(f"  [WARNUNG] IOR nicht gespeichert: {e}")
+
+        # Evaluation: Sequenz-Daten aufzeichnen
+        # Produktive Steps: Dateien + Tools + erfolgreiche Tool-Calls ohne Fehler
+        productive = m.files_written + m.tools_built + max(0, m.tool_calls - m.errors)
+        total = max(m.step_count, 1)
+        try:
+            self.evaluation.record_sequence({
+                "seq_num": self.sequences_total,
+                "tool_calls": m.tool_calls,
+                "errors": m.errors,
+                "files_written": m.files_written,
+                "tools_built": m.tools_built,
+                "goals_completed": 0,  # TODO: aus GoalStack zaehlen
+                "goals_attempted": 0,  # 0/0 → goal_completion deaktiviert bis echte Daten
+                "tokens_used": self.sequence_input_tokens + self.sequence_output_tokens,
+                "cost": round(seq_cost, 4),
+                "productive_steps": min(productive, total),
+                "wasted_steps": max(0, total - productive),
+                "duration_seconds": round(seq_duration, 1),
+            })
+
+            # Checkpoint alle 10 Sequenzen (nicht bei Seq 0)
+            if self.sequences_total > 0 and self.sequences_total % 10 == 0:
+                checkpoint = self.evaluation.checkpoint(self.sequences_total)
+                if checkpoint:
+                    self.narrator.efficiency_alert(
+                        f"EVAL Checkpoint: {checkpoint['score']:.0f}/100 "
+                        f"({checkpoint['trend']})"
+                    )
+
+            # Alerts pruefen
+            eval_alerts = self.evaluation.get_alerts()
+            if eval_alerts:
+                for alert in eval_alerts:
+                    self.narrator.efficiency_alert(f"[EVAL] {alert}")
+        except Exception as e:
+            print(f"  [WARNUNG] Evaluation nicht gespeichert: {e}")
 
         # Efficiency-Trend-Analyse alle 5 Sequenzen
         if self.sequences_total % 5 == 0:
