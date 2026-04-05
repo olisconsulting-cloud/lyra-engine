@@ -622,7 +622,17 @@ Antworte als JSON:
                 # Neues Format: dict mit title + sub_goals
                 if isinstance(rec, dict):
                     title = rec.get("title", "")[:100]
-                    sub_goals = rec.get("sub_goals", [])
+                    raw_sgs = rec.get("sub_goals", [])
+                    # Sub-Goal-Validierung: nur Strings, max 5, keine leeren
+                    if isinstance(raw_sgs, list):
+                        sub_goals = [
+                            str(sg).strip()[:200]
+                            for sg in raw_sgs
+                            if sg and isinstance(sg, (str, int, float))
+                            and str(sg).strip()
+                        ][:5]
+                    else:
+                        sub_goals = []
                     if not title or len(title) < 10:
                         continue
                 elif isinstance(rec, str) and len(rec) >= 10:
@@ -664,11 +674,14 @@ Antworte als JSON:
     def _is_goal_duplicate(title: str, existing_goals: list,
                            threshold: float = 0.6) -> bool:
         """Prueft ob ein Goal-Titel semantisch zu einem bestehenden passt."""
-        new_words = set(title.lower().split())
+        import re
+        new_words = set(re.split(r"[\W_]+", title.lower()))
+        new_words.discard("")
         if len(new_words) < 3:
             return False
         for goal in existing_goals:
-            ex_words = set(goal.get("title", "").lower().split())
+            ex_words = set(re.split(r"[\W_]+", goal.get("title", "").lower()))
+            ex_words.discard("")
             if len(ex_words) < 3:
                 continue
             overlap = len(new_words & ex_words)

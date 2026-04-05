@@ -2759,7 +2759,7 @@ Antworte als JSON:
                             result = self.goal_stack.fail_subgoal(
                                 gi, si,
                                 reason=f"Automatisch gescheitert: {consecutive} Sequenzen ohne Fortschritt",
-                                approach_tried=focus.split("\n")[0][:100],
+                                approach_tried=sg.get("title", "?")[:100],
                             )
                             logger.info("Subgoal-Stuck Auto-Fail: %s", result)
                             # Focus-Tracker resetten damit naechstes Goal frisch startet
@@ -2787,7 +2787,7 @@ Antworte als JSON:
                             f"{stats.get('total_files', 0)} Dateien, "
                             f"{stats.get('total_errors', 0)} Fehler"
                         ),
-                        approach_tried=focus.split("\n")[0][:100],
+                        approach_tried=sg.get("title", "?")[:100],
                     )
                     logger.info("Kumulative Viability Auto-Fail: %s", result)
                     self.narrator.show(f"  ⚠ SubGoal als unviable erkannt und auto-gefailt")

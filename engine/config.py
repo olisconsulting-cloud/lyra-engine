@@ -34,6 +34,11 @@ META_GOAL_KEYWORDS = frozenset((
     "finish_sequence", "konsisten", "fruehzeitig", "steps aufrufen",
     "tracking-system", "alert-mechanis", "uebungssequenz", "skill erweit",
     "self-diagnose", "speichermanagement", "reflexion", "routine",
+    # Erweitert: Patterns die Dream als Meta-Goals tarnt
+    "selbstbewertung", "workflow optim", "monitoring implement",
+    "eigene leistung", "sequenz-abschluss", "tool-management",
+    "prozess-management", "effizienz steiger", "eigenen code",
+    "selbstverbesser", "meta-lern", "engine-architektur",
 ))
 
 

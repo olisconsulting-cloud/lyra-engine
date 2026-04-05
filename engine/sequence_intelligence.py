@@ -219,7 +219,10 @@ class SequenceIntelligence:
 
         # Fortschritts-Puls: Erkennt Schleifen ohne neue Information
         if step > 0 and step % 5 == 0:
-            novelty = len(self._metrics.read_paths) + len(set(self._metrics.written_paths))
+            read_novelty = len(self._metrics.read_paths)
+            write_novelty = len(set(self._metrics.written_paths))
+            # Writes zaehlen 3x — Lesen allein ist kein Output
+            novelty = read_novelty + write_novelty * 3
             delta = novelty - self._metrics._last_pulse_snapshot
             self._metrics._last_pulse_snapshot = novelty
 
@@ -227,6 +230,14 @@ class SequenceIntelligence:
                 self._stagnant_checks += 1
             else:
                 self._stagnant_checks = 0
+
+            # Read-only Spin: Viele Dateien gelesen, nichts geschrieben
+            if write_novelty == 0 and read_novelty > 5 and step >= 10:
+                parts.append(
+                    "\n\n⚠ READ-ONLY SPIN: Du hast viele Dateien gelesen aber "
+                    "nichts geschrieben. Lesen ohne Output ist kein Fortschritt. "
+                    "Schreibe JETZT ein Ergebnis oder rufe finish_sequence auf."
+                )
 
             if self._stagnant_checks >= 3:  # 20 Steps ohne Neuheit (3 Checks * 5 Steps + 5 Offset)
                 parts.append(

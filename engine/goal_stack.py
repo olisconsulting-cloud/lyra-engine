@@ -455,6 +455,26 @@ class GoalStack:
         })
         self._save()
 
+        # Kaskaden-Fail: Pending SubGoals deren ALLE Vorgaenger failed sind
+        # (z.B. "Unit-Tests schreiben" wenn Module nie gebaut wurden)
+        cascade_count = 0
+        for later_sg in sgs[subgoal_index + 1:]:
+            if later_sg["status"] != "pending":
+                continue
+            prior_sgs = [s for s in sgs[:sgs.index(later_sg)]
+                         if s["status"] != "pending"]
+            if prior_sgs and all(s["status"] == "failed" for s in prior_sgs):
+                later_sg["status"] = "failed"
+                later_sg["failure_reason"] = "Abhaengigkeit gescheitert"
+                later_sg["failed_at"] = datetime.now(timezone.utc).isoformat()
+                cascade_count += 1
+        if cascade_count:
+            goal.setdefault("progress_log", []).append({
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "event": f"{cascade_count} abhaengige Sub-Goals kaskaden-gescheitert",
+            })
+            self._save()
+
         # Keine offenen Sub-Goals mehr? → Entscheiden ob done oder abandoned
         remaining = [s for s in sgs if s["status"] in ("pending", "in_progress")]
         if not remaining and sgs:
