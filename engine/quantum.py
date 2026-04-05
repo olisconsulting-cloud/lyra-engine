@@ -63,8 +63,44 @@ class FailureMemory:
     def _save(self):
         safe_json_write(self.failures_path, self.failures[-100:])
 
+    @staticmethod
+    def _compute_fingerprint(error: str, approach: str = "") -> str:
+        """Berechnet einen Error-Fingerprint fuer Cross-Kontext-Matching.
+
+        Der Fingerprint extrahiert die technischen Kernwoerter aus dem Fehler,
+        sodass dasselbe Problem erkannt wird — egal wie das Goal formuliert ist.
+        z.B. 'exec() + __file__ + NameError' → gleicher Fingerprint ob bei
+        data-insights oder time-series-analysis.
+        """
+        text = f"{error} {approach}".lower()
+        # Technische Schluesselwoerter extrahieren
+        tech_words = set()
+        # Bekannte Error-Marker
+        markers = [
+            "__file__", "__name__", "exec(", "encoding", "utf-8", "charmap",
+            "shutil.rmtree", "os.rmdir", "relative import", "modulenotfound",
+            "importerror", "nameerror", "typeerror", "valueerror", "keyerror",
+            "filenotfound", "permissionerror", "syntaxerror", "indentationerror",
+            "blockiert", "security", "timeout", "connection", "429", "503",
+            "json.decode", "unicodedecodeerror", "unicodeencodeerror",
+        ]
+        for marker in markers:
+            if marker in text:
+                tech_words.add(marker)
+
+        # Tool-Namen extrahieren (read_file, write_file, execute_python, etc.)
+        for word in text.split():
+            if "_" in word and len(word) > 4 and word.replace("_", "").isalpha():
+                tech_words.add(word)
+
+        if not tech_words:
+            return ""
+        # Sortiert fuer deterministische Fingerprints
+        return "|".join(sorted(tech_words))
+
     def record(self, goal: str, approach: str, error: str, lesson: str):
-        """Speichert einen strukturierten Fehler."""
+        """Speichert einen strukturierten Fehler mit Error-Fingerprint."""
+        fingerprint = self._compute_fingerprint(error, approach)
         self.failures.append({
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "type": "failure",
@@ -72,6 +108,7 @@ class FailureMemory:
             "approach": approach[:200],
             "error": error[:300],
             "lesson": lesson[:200],
+            "fingerprint": fingerprint,
         })
         self._save()
 
@@ -86,13 +123,15 @@ class FailureMemory:
         })
         self._save()
 
-    def check(self, goal: str) -> str:
+    def check(self, goal: str, error_context: str = "") -> str:
         """
         Prueft ob es bekannte Fehler fuer ein aehnliches Ziel gibt.
 
-        Matching-Strategie:
-        1. Tool-Name Match (approach enthält den Tool-Namen)
-        2. Wort-Overlap (mindestens 1 gemeinsames Wort reicht)
+        Matching-Strategie (3 Ebenen):
+        1. Fingerprint-Match — erkennt dasselbe technische Problem ueber
+           verschiedene Goals hinweg (z.B. __file__ in exec())
+        2. Tool-Name Match (approach enthaelt den Tool-Namen)
+        3. Wort-Overlap (mindestens 2 gemeinsame Woerter)
         """
         if not self.failures:
             return ""
@@ -108,22 +147,36 @@ class FailureMemory:
         goal_lower = goal.lower()
         goal_words = set(goal_lower.split()) - stopwords
         matches = []
+        seen_fingerprints: set[str] = set()
 
-        if not goal_words:
-            return ""
+        # Fingerprint fuer aktuellen Kontext berechnen (wenn vorhanden)
+        current_fp = self._compute_fingerprint(error_context, goal) if error_context else ""
 
         for failure in self.failures:
-            # Nur echte Failures matchen (Successes haben kein error/lesson)
             if failure.get("type") == "success":
                 continue
 
-            # Match 1: Tool-Name im Ziel enthalten
+            # Match 1: Fingerprint-Match (staerkster Match — Cross-Kontext)
+            fp = failure.get("fingerprint", "")
+            if fp and current_fp:
+                # Overlap der Fingerprint-Teile pruefen (min 2 fuer Praezision)
+                fp_parts = set(fp.split("|"))
+                current_parts = set(current_fp.split("|"))
+                if len(fp_parts & current_parts) >= 2:
+                    if fp not in seen_fingerprints:
+                        matches.append(failure)
+                        seen_fingerprints.add(fp)
+                    continue
+
+            # Match 2: Tool-Name im Ziel enthalten
             approach = failure.get("approach", "").lower()
             if approach and approach in goal_lower:
                 matches.append(failure)
                 continue
 
-            # Match 2: Wort-Overlap (ohne Stoppwoerter, min 2 Woerter)
+            # Match 3: Wort-Overlap (ohne Stoppwoerter, min 2 Woerter)
+            if not goal_words:
+                continue
             failure_goal = failure.get("goal", "").lower()
             failure_words = set(failure_goal.split()) - stopwords
             failure_words.update(set(approach.split()) - stopwords)

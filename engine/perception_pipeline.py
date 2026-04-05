@@ -31,6 +31,7 @@ DEFAULT_TASK_WEIGHTS: dict[str, dict[str, float]] = {
         "composition": 0.4, "tasks": 0.4, "kpi": 0.3,
         "inbox": 2.5, "rhythm": 2.0, "security_lessons": 2.0,
         "strategic_context": 0.25, "audit_findings": 0.15,
+        "episodic_context": 1.2, "dream_insights": 0.8,
     },
     "projekt": {
         "sequence_memory": 1.0, "live_notes": 1.0, "goal_context": 1.5,
@@ -40,6 +41,7 @@ DEFAULT_TASK_WEIGHTS: dict[str, dict[str, float]] = {
         "composition": 0.6, "tasks": 0.3, "kpi": 0.2,
         "inbox": 2.5, "rhythm": 2.0, "security_lessons": 2.0,
         "strategic_context": 0.3, "audit_findings": 0.15,
+        "episodic_context": 1.5, "dream_insights": 0.8,
     },
     "recherche": {
         "sequence_memory": 1.0, "live_notes": 0.5, "goal_context": 0.7,
@@ -49,6 +51,7 @@ DEFAULT_TASK_WEIGHTS: dict[str, dict[str, float]] = {
         "composition": 0.3, "tasks": 0.3, "kpi": 0.2,
         "inbox": 2.5, "rhythm": 2.0, "security_lessons": 2.0,
         "strategic_context": 0.2, "audit_findings": 0.1,
+        "episodic_context": 0.8, "dream_insights": 0.5,
     },
     "evolution": {
         "sequence_memory": 1.0, "live_notes": 0.5, "goal_context": 0.8,
@@ -58,6 +61,7 @@ DEFAULT_TASK_WEIGHTS: dict[str, dict[str, float]] = {
         "composition": 0.5, "tasks": 0.4, "kpi": 0.5,
         "inbox": 2.5, "rhythm": 2.0, "security_lessons": 2.0,
         "strategic_context": 0.5, "audit_findings": 0.4,
+        "episodic_context": 1.0, "dream_insights": 0.7,
     },
 }
 
@@ -175,12 +179,20 @@ class PerceptionPipeline:
             except Exception as e:
                 logger.warning(f"PerceptionPipeline: Kanal '{ch.name}' fehlgeschlagen: {e}")
 
-        # Warnung wenn Always-Load das Budget sprengt
-        if used_tokens > budget:
+        # Budget-Enforcement: Wenn Always-Load das Budget sprengt, hinten kuerzen
+        if used_tokens > budget and len(parts) > 1:
             logger.warning(
                 f"PerceptionPipeline: Verbrauch ({used_tokens} Tok) "
-                f"uebersteigt Budget ({budget} Tok)"
+                f"uebersteigt Budget ({budget} Tok) — kuerze nicht-essentielle Kanaele"
             )
+            # Von hinten (niedrigster Score) entfernen bis Budget passt
+            while used_tokens > budget and len(parts) > 1:
+                removed = parts.pop()
+                removed_name = self._last_active_channels.pop()
+                removed_tokens = max(len(removed.split()) * 4 // 3, 10)
+                used_tokens -= removed_tokens
+                truncated_count += 1
+                logger.info(f"PerceptionPipeline: Kanal '{removed_name}' gedroppt (Budget)")
 
         # Token-Averages persistieren (1x pro Sequenz, nicht pro Step)
         safe_json_write(self._token_avg_path, self._token_averages)

@@ -325,6 +325,20 @@ class ConsciousnessEngine:
             base_weight=0.15, estimated_tokens=60,
         ))
 
+        # Episodisches Gedaechtnis — Findings aus vergangenen Sequenzen
+        # Verhindert, dass Phi dieselben Fehler wiederholt
+        self.perception_pipeline.register_channel(PerceptionChannel(
+            name="episodic_context", builder=self._ch_episodic_context,
+            base_weight=1.2, estimated_tokens=250,
+        ))
+
+        # Dream-Insights — Destillierte Learnings aus Dream-Konsolidierung
+        # Schliesst die Luecke: Dream-Output erreicht jetzt die Execution-Schicht
+        self.perception_pipeline.register_channel(PerceptionChannel(
+            name="dream_insights", builder=self._ch_dream_insights,
+            base_weight=0.8, estimated_tokens=200,
+        ))
+
         # Sequence-Runner — composable Sequenz-Phasen (bereit fuer Feature-Flag)
         self.sequence_runner = SequenceRunner(event_bus=self.event_bus)
 
@@ -1342,6 +1356,95 @@ SEQUENZ-PLANUNG: Nutze write_sequence_plan am Anfang — plane dein Ziel, Exit-K
             return ""
         return "AUDIT-FINDINGS (offen): " + "; ".join(open_items[:5])
 
+    def _ch_dream_insights(self) -> str:
+        """Destillierte Erkenntnisse aus Dream-Konsolidierung.
+
+        Laedt die wichtigsten Effizienz-Muster und Prozess-Insights
+        aus dem letzten Dream-Zyklus. Das sind die Meta-Learnings
+        die Phi zwischen Sequenzen vergisst.
+        """
+        dream_log_path = self.consciousness_path / "dream_log.json"
+        beliefs_path = self.consciousness_path / "beliefs.json"
+        parts = []
+
+        # 1. Effizienz-Muster + Prozess-Insights aus letztem Dream
+        try:
+            dreams = safe_json_read(dream_log_path, [])
+            if dreams:
+                last = dreams[-1]
+                patterns = last.get("efficiency_patterns", [])
+                # process_insights kann String ODER Liste sein (Dream speichert String)
+                raw_insights = last.get("process_insights", "")
+                if isinstance(raw_insights, str):
+                    insights = [raw_insights] if raw_insights.strip() else []
+                else:
+                    insights = list(raw_insights)[:2]
+                items = (patterns[:2] if isinstance(patterns, list) else []) + insights[:2]
+                if items:
+                    parts.append("DREAM-ERKENNTNISSE (aus Konsolidierung):")
+                    for item in items:
+                        text = str(item)[:120]
+                        if text.strip():
+                            parts.append(f"  - {text}")
+        except Exception:
+            pass
+
+        # 2. Top-Beliefs (staerkste Ueberzeugungen aus Erfahrung)
+        try:
+            beliefs = safe_json_read(beliefs_path, {})
+            formed = beliefs.get("formed_from_experience", [])
+            wisdom = beliefs.get("wisdom", [])
+            # Wisdom hat Vorrang (destillierter), dann Beliefs
+            top = wisdom[:2] if wisdom else formed[:2]
+            if top:
+                if not parts:
+                    parts.append("DREAM-ERKENNTNISSE:")
+                for b in top:
+                    text = str(b)[:100]
+                    if text.strip():
+                        parts.append(f"  - {text}")
+        except Exception:
+            pass
+
+        return "\n".join(parts) if parts else ""
+
+    def _ch_episodic_context(self) -> str:
+        """Episodisches Gedaechtnis: Findings aus vergangenen Sequenzen.
+
+        Laedt die letzten 3 Episoden (gefiltert nach aktuellem Focus)
+        und injiziert Fehler-Hinweise, Blocker und Erfolge in die Perception.
+        DAS ist die Bruecke zwischen 'was habe ich gelernt' und 'was weiss ich jetzt'.
+        """
+        focus = self._pstate.get("focus", "")
+        try:
+            episodes = self.episodic_bridge.load_recent(focus, max_episodes=3)
+        except Exception as e:
+            logger.warning("EpisodicBridge.load_recent fehlgeschlagen: %s", e)
+            return ""
+
+        if not episodes:
+            return ""
+
+        parts = ["EPISODISCHES GEDAECHTNIS (Erkenntnisse aus frueheren Sequenzen):"]
+        for ep in episodes:
+            seq = ep.get("sequence", "?")
+            findings = ep.get("findings", [])
+            next_action = ep.get("next_action", "")
+            if not findings and not next_action:
+                continue
+
+            findings_str = "; ".join(
+                f.get("content", "")
+                for f in findings
+                if f.get("content")
+            )
+            line = f"  Seq {seq}: {findings_str}"
+            if next_action:
+                line += f" | Naechster Schritt: {next_action[:80]}"
+            parts.append(line)
+
+        return "\n".join(parts) if len(parts) > 1 else ""
+
     # === Wahrnehmung ===
 
     def _build_perception(self) -> str:
@@ -1372,7 +1475,18 @@ SEQUENZ-PLANUNG: Nutze write_sequence_plan am Anfang — plane dein Ziel, Exit-K
             goal_type, focus=focus, failure_checker=self.failure_memory.check,
         )
         self._track_baseline("skill_hit", 1 if skill_prompt else 0, goal_type)
-        failure_check = self.failure_memory.check(focus)
+        # Letzten Fehler-Kontext aus Goal-Anker laden fuer Fingerprint-Matching
+        last_error_ctx = ""
+        try:
+            active_goals = self.goal_stack.get_active()
+            if active_goals:
+                anchor_path = self.consciousness_path / "goal_context" / f"anchor_{active_goals[0].get('id', '')}.json"
+                if anchor_path.exists():
+                    anchor_data = safe_json_read(anchor_path, {})
+                    last_error_ctx = anchor_data.get("bottleneck", "")
+        except Exception:
+            pass
+        failure_check = self.failure_memory.check(focus, error_context=last_error_ctx)
         self._track_baseline("fm_match", 1 if failure_check else 0)
 
         # --- Phase 2: Shared State fuer Channel-Builder ---

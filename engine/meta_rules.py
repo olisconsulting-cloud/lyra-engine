@@ -64,12 +64,16 @@ class MetaRuleEngine:
         if count == 3:
             self._escalate_to_actuator(pattern_id)
             self._create_rule_from_pattern(pattern_id, description)
-            logger.info(f" Meta-Regel erstellt: {pattern_id} (nach {count}x)")
+            logger.info("Meta-Regel erstellt: %s (nach %dx)", pattern_id, count)
 
         # Alle 5 weiteren Vorkommen: erneut eskalieren (Pattern bleibt aktiv)
+        # Max 5 Re-Eskalationen (count 8,13,18,23,28) — danach Spirale verhindern
         elif count > 3 and count % 5 == 0:
-            self._escalate_to_actuator(pattern_id)
-            logger.info("Meta-Regel re-eskaliert: %s (count=%d)", pattern_id, count)
+            if count <= 28:
+                self._escalate_to_actuator(pattern_id)
+                logger.info("Meta-Regel re-eskaliert: %s (count=%d)", pattern_id, count)
+            else:
+                logger.info("Meta-Regel Eskalations-Limit: %s (count=%d, max erreicht)", pattern_id, count)
 
         self._save_rules()
 
@@ -171,7 +175,7 @@ class MetaRuleEngine:
             "id": pattern_id,
             "created": datetime.now(timezone.utc).isoformat(),
             "created_at_seq": self._get_current_seq(),
-            "baseline_count": counts.get(pattern_id, 0),
+            "baseline_count": self.rules.get("pattern_counts", {}).get(pattern_id, 0),
             "description": description[:200],
             "active": True,
             **template,

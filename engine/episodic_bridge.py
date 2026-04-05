@@ -85,10 +85,12 @@ class EpisodicBridge:
                 with open(path, "r", encoding="utf-8") as f:
                     ep = json.load(f)
                 if focus and ep.get("focus", ""):
-                    # Einfacher Wort-Overlap als Relevanz-Check
-                    ep_words = set(ep["focus"].lower().split())
-                    focus_words = set(focus.lower().split())
-                    if len(ep_words & focus_words) < 2:
+                    # Wort-Overlap als Relevanz-Check (mit Hyphen-Splitting)
+                    ep_words = self._tokenize_focus(ep["focus"])
+                    focus_words = self._tokenize_focus(focus)
+                    # Bei kurzen Goals (1-2 Woerter) reicht 1 Match
+                    min_overlap = 1 if len(focus_words) <= 2 else 2
+                    if len(ep_words & focus_words) < min_overlap:
                         continue
                 result.append(ep)
                 if len(result) >= max_episodes:
@@ -168,6 +170,20 @@ class EpisodicBridge:
             "file_insights": file_insights,
             "next_action": next_action,
         }
+
+    @staticmethod
+    def _tokenize_focus(text: str) -> set[str]:
+        """Tokenisiert Focus-Text fuer Relevanz-Matching.
+
+        Splittet auf Leerzeichen UND Bindestriche, damit
+        'data-insights' zu {'data', 'insights'} wird statt {'data-insights'}.
+        """
+        words = set()
+        for word in text.lower().split():
+            words.add(word)
+            if "-" in word:
+                words.update(word.split("-"))
+        return words
 
     @staticmethod
     def _short_path(filepath: str) -> str:

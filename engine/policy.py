@@ -258,6 +258,7 @@ class DecisionGate:
         if policy["status"] == "blocked":
             policy["status"] = "active"
             policy["can_retry_after"] = 0
+            policy["weight"] = max(policy["weight"], 0.5)  # Faire Chance nach Unblock
             logger.info(
                 "Policy UNBLOCKED: %s (Exploration erfolgreich, Weight %.2f)",
                 context_key, policy["weight"],
@@ -277,7 +278,7 @@ class DecisionGate:
 
         # Original-Backoff aus Policy lesen (gespeichert bei Block-Erstellung)
         original = policy.get("exploration_backoff", 50)
-        new_backoff = min(original * 2, 500)  # Verdoppeln, max 500 Sequenzen
+        new_backoff = min(original * 2, 100)  # Verdoppeln, max 100 Sequenzen (nicht 500 — Lockout vermeiden)
         policy["exploration_backoff"] = new_backoff
         policy["can_retry_after"] = current_seq + new_backoff
         logger.info(

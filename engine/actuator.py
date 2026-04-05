@@ -396,7 +396,18 @@ class BehaviorActuator:
 
             target = pattern_config["target"]
             direction = pattern_config["direction"]
+
+            # Rate-Limit: Max 1 Anpassung pro Parameter pro Sequenz
+            adjusted_this_seq = self._state.get("_adjusted_params_this_seq", {})
+            if adjusted_this_seq.get(target) == seq_num:
+                logger.info(
+                    "Actuator: SKIP '%s' — Parameter '%s' bereits in Seq %d angepasst",
+                    pattern_id, target, seq_num,
+                )
+                return False
+
             self._adjust_parameter(target, direction, pattern_id, seq_num)
+            self._state.setdefault("_adjusted_params_this_seq", {})[target] = seq_num
             self._state["_last_adjustment_seq"] = seq_num
             return True
         return False
