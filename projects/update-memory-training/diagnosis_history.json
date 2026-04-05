@@ -14,5 +14,24 @@
       "trend": "stabil",
       "confidence": "low"
     }
+  },
+  {
+    "exercise_name": "unnamed_exercise",
+    "success_rate": 0.0,
+    "total_operations": 0,
+    "successful_operations": 0,
+    "error_patterns": [],
+    "recommendations": [],
+    "timestamp": "2026-04-05T18:51:11.093730",
+    "trend_analysis": {
+      "status": "success",
+      "total_diagnoses": 1,
+      "average_success_rate": 0.0,
+      "median_success_rate": 0.0,
+      "trend": "unbestimmt",
+      "confidence": "low",
+      "last_diagnosis": "unnamed_exercise",
+      "timestamp": "2026-04-05T18:51:11.093725"
+    }
   }
 ]
