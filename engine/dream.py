@@ -237,6 +237,18 @@ Antworte als JSON:
         if goals:
             parts.append(f"\n=== ZIELE ===\n{json.dumps(goals, indent=2, ensure_ascii=False)}")
 
+            # Failed-Domain-Summary fuer Dream-Empfehlungen
+            failed_domains = goals.get("_failed_domains", [])
+            if failed_domains:
+                fd_lines = ["=== GESCHEITERTE DOMAENEN (nicht erneut empfehlen) ==="]
+                for fd in failed_domains[-10:]:
+                    fd_lines.append(
+                        f"  - {fd.get('domain', '?')}: {fd.get('title', '?')} "
+                        f"(Waste: {fd.get('wasted_steps', 0)} Steps, "
+                        f"Effizienz: {fd.get('efficiency', 0):.0%})"
+                    )
+                parts.append("\n".join(fd_lines))
+
         # Telos Skill-Gaps (kompakte Ring-Summary fuer Token-Effizienz)
         telos = self._safe_load_json(self.consciousness_path / "telos.json")
         if telos:
