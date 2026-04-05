@@ -1,0 +1,19 @@
+{
+  "sequence_id": "test_seq_001",
+  "start_time": "2026-04-05T22:09:39.959739",
+  "max_steps": 25,
+  "current_step": 18,
+  "finish_called": false,
+  "finish_step": null,
+  "finish_time": null,
+  "warnings": [
+    {
+      "step": 18,
+      "message": "Finish sequence noch nicht aufgerufen nach 18 Steps (Warnschwelle: 15)",
+      "time": "2026-04-05T22:09:52.939382",
+      "level": "warning"
+    }
+  ],
+  "alerts": [],
+  "status": "active"
+}
