@@ -1,0 +1,203 @@
+{
+  "file": "C:/Users/olisc/Claude/Lyra/data/data/sample_data.csv",
+  "basic_info": {
+    "total_rows": 10,
+    "total_columns": 5,
+    "file_size_bytes": 301,
+    "loading_timestamp": "2026-04-06T00:47:02.429845"
+  },
+  "column_types": {
+    "numeric": [
+      "Age",
+      "Salary",
+      "Experience"
+    ],
+    "categorical": [
+      "Name",
+      "Department"
+    ],
+    "datetime": [],
+    "boolean": [],
+    "other": []
+  },
+  "analysis": {
+    "summary_statistics": {
+      "Age": {
+        "count": 10,
+        "mean": 35.8,
+        "std": 7.786027371016765,
+        "min": 27.0,
+        "25%": 29.5,
+        "50%": 34.0,
+        "75%": 41.0,
+        "max": 50.0,
+        "unique_values": 10
+      },
+      "Salary": {
+        "count": 10,
+        "mean": 57700.0,
+        "std": 12028.207587906762,
+        "min": 42000.0,
+        "25%": 49000.0,
+        "50%": 56500.0,
+        "75%": 63750.0,
+        "max": 80000.0,
+        "unique_values": 10
+      },
+      "Experience": {
+        "count": 10,
+        "mean": 10.1,
+        "std": 7.752418977325722,
+        "min": 2.0,
+        "25%": 4.25,
+        "50%": 7.5,
+        "75%": 14.25,
+        "max": 25.0,
+        "unique_values": 10
+      }
+    },
+    "quality_report": {
+      "missing_values": {
+        "Name": {
+          "count": 0,
+          "percentage": 0.0
+        },
+        "Age": {
+          "count": 0,
+          "percentage": 0.0
+        },
+        "Salary": {
+          "count": 0,
+          "percentage": 0.0
+        },
+        "Department": {
+          "count": 0,
+          "percentage": 0.0
+        },
+        "Experience": {
+          "count": 0,
+          "percentage": 0.0
+        }
+      },
+      "duplicates": {
+        "total_duplicate_rows": 0,
+        "duplicate_percentage": 0.0
+      },
+      "data_types": {
+        "Name": "str",
+        "Age": "int64",
+        "Salary": "int64",
+        "Department": "str",
+        "Experience": "int64"
+      }
+    },
+    "structure_report": {
+      "column_details": {
+        "Name": {
+          "dtype": "str",
+          "unique_values": 10,
+          "null_count": 0,
+          "memory_usage_bytes": 668
+        },
+        "Age": {
+          "dtype": "int64",
+          "unique_values": 10,
+          "null_count": 0,
+          "memory_usage_bytes": 212
+        },
+        "Salary": {
+          "dtype": "int64",
+          "unique_values": 10,
+          "null_count": 0,
+          "memory_usage_bytes": 212
+        },
+        "Department": {
+          "dtype": "str",
+          "unique_values": 4,
+          "null_count": 0,
+          "memory_usage_bytes": 696
+        },
+        "Experience": {
+          "dtype": "int64",
+          "unique_values": 10,
+          "null_count": 0,
+          "memory_usage_bytes": 212
+        }
+      },
+      "memory_usage": {
+        "total_memory_bytes": 1472,
+        "per_column": {
+          "Index": 132,
+          "Name": 536,
+          "Age": 80,
+          "Salary": 80,
+          "Department": 564,
+          "Experience": 80
+        }
+      },
+      "shape_analysis": {
+        "rows": 10,
+        "columns": 5,
+        "total_cells": 50,
+        "density_percentage": 100.0
+      }
+    },
+    "missing_report": {
+      "overall_missing": {
+        "total_missing_cells": 0,
+        "missing_percentage": 0.0
+      },
+      "by_column": {
+        "Name": {
+          "missing_count": 0,
+          "missing_percentage": 0.0,
+          "non_missing_count": 10
+        },
+        "Age": {
+          "missing_count": 0,
+          "missing_percentage": 0.0,
+          "non_missing_count": 10
+        },
+        "Salary": {
+          "missing_count": 0,
+          "missing_percentage": 0.0,
+          "non_missing_count": 10
+        },
+        "Department": {
+          "missing_count": 0,
+          "missing_percentage": 0.0,
+          "non_missing_count": 10
+        },
+        "Experience": {
+          "missing_count": 0,
+          "missing_percentage": 0.0,
+          "non_missing_count": 10
+        }
+      },
+      "patterns": {
+        "rows_by_missing_count": {
+          "0": 10
+        }
+      }
+    }
+  },
+  "reports": [
+    {
+      "type": "summary",
+      "path": "data_reports\\summary_statistics_20260406_004702.json",
+      "columns_analyzed": 3
+    },
+    {
+      "type": "quality",
+      "path": "data_reports\\quality_report_20260406_004702.json"
+    },
+    {
+      "type": "structure",
+      "path": "data_reports\\structure_report_20260406_004702.json"
+    },
+    {
+      "type": "missing",
+      "path": "data_reports\\missing_report_20260406_004702.json"
+    }
+  ]
+}

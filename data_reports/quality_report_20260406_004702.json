@@ -1,0 +1,35 @@
+{
+  "missing_values": {
+    "Name": {
+      "count": 0,
+      "percentage": 0.0
+    },
+    "Age": {
+      "count": 0,
+      "percentage": 0.0
+    },
+    "Salary": {
+      "count": 0,
+      "percentage": 0.0
+    },
+    "Department": {
+      "count": 0,
+      "percentage": 0.0
+    },
+    "Experience": {
+      "count": 0,
+      "percentage": 0.0
+    }
+  },
+  "duplicates": {
+    "total_duplicate_rows": 0,
+    "duplicate_percentage": 0.0
+  },
+  "data_types": {
+    "Name": "str",
+    "Age": "int64",
+    "Salary": "int64",
+    "Department": "str",
+    "Experience": "int64"
+  }
+}
