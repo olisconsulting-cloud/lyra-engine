@@ -290,6 +290,9 @@ class CriticAgent:
         elif self.provider == "openai":
             self.api_key = os.getenv("OPENAI_API_KEY", "").strip()
             self.api_url = "https://api.openai.com/v1/chat/completions"
+        elif self.provider == "anthropic":
+            self.api_key = os.getenv("ANTHROPIC_API_KEY", "").strip()
+            self.api_url = "https://api.anthropic.com/v1/messages"
         else:
             raise ValueError(f"CriticAgent: Unbekannter Provider '{self.provider}' fuer Modell '{self.model}'")
 
@@ -306,6 +309,19 @@ class CriticAgent:
                 if resp.status_code != 200:
                     return ""
                 return resp.json()["candidates"][0]["content"]["parts"][-1]["text"]
+            elif self.provider == "anthropic":
+                resp = client.post(
+                    self.api_url,
+                    headers={"x-api-key": self.api_key,
+                             "anthropic-version": "2023-06-01",
+                             "Content-Type": "application/json"},
+                    json={"model": self.model,
+                          "messages": [{"role": "user", "content": prompt}],
+                          "max_tokens": max_tokens},
+                )
+                if resp.status_code != 200:
+                    return ""
+                return resp.json()["content"][0]["text"]
             else:
                 resp = client.post(
                     self.api_url,
@@ -410,6 +426,9 @@ class PromptMutator:
         elif self.provider == "openai":
             self.api_key = os.getenv("OPENAI_API_KEY", "").strip()
             self.api_url = "https://api.openai.com/v1/chat/completions"
+        elif self.provider == "anthropic":
+            self.api_key = os.getenv("ANTHROPIC_API_KEY", "").strip()
+            self.api_url = "https://api.anthropic.com/v1/messages"
         else:
             raise ValueError(f"PromptMutator: Unbekannter Provider '{self.provider}' fuer Modell '{self.model}'")
 
@@ -426,6 +445,19 @@ class PromptMutator:
                 if resp.status_code != 200:
                     return ""
                 return resp.json()["candidates"][0]["content"]["parts"][-1]["text"]
+            elif self.provider == "anthropic":
+                resp = client.post(
+                    self.api_url,
+                    headers={"x-api-key": self.api_key,
+                             "anthropic-version": "2023-06-01",
+                             "Content-Type": "application/json"},
+                    json={"model": self.model,
+                          "messages": [{"role": "user", "content": prompt}],
+                          "max_tokens": max_tokens},
+                )
+                if resp.status_code != 200:
+                    return ""
+                return resp.json()["content"][0]["text"]
             else:
                 resp = client.post(
                     self.api_url,

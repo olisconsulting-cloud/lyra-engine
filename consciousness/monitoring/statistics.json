@@ -1,0 +1,35 @@
+{
+  "success": true,
+  "total_sequences": 2,
+  "finished_sequences": 1,
+  "average_finish_step": 8.0,
+  "warning_rate": 0,
+  "critical_rate": 0,
+  "sequences": [
+    {
+      "sequence_id": "seq_214",
+      "finished": true,
+      "finish_step": 8,
+      "warnings": 2,
+      "alerts": 1,
+      "status": "finished"
+    },
+    {
+      "sequence_id": "test_seq_001",
+      "finished": false,
+      "finish_step": null,
+      "warnings": 1,
+      "alerts": 0,
+      "status": "active"
+    }
+  ],
+  "recent_alerts": [
+    {
+      "sequence_id": "seq_214",
+      "message": "KRITISCH: Finish sequence noch nicht aufgerufen nach 26 Steps (Kritische Schwelle: 25)",
+      "step": 26,
+      "time": "2026-04-05T22:15:59.943044",
+      "level": "critical"
+    }
+  ]
+}
