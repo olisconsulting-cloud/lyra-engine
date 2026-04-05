@@ -24,7 +24,7 @@ ALWAYS_LOAD = frozenset({"focus", "working_memory", "time", "planning"})
 # Keys muessen mit den registrierten Channel-Namen uebereinstimmen
 DEFAULT_TASK_WEIGHTS: dict[str, dict[str, float]] = {
     "standard": {
-        "sequence_memory": 1.0, "live_notes": 0.8, "goal_context": 0.9,
+        "sequence_memory": 1.0, "live_notes": 0.8, "goal_context": 1.3,
         "proactive_context": 0.5, "projects_list": 0.4, "unified_memory": 0.6,
         "filesystem": 0.3, "file_changes": 0.3,
         "efficiency_alerts": 0.2, "checkpoint": 0.5,
@@ -32,7 +32,7 @@ DEFAULT_TASK_WEIGHTS: dict[str, dict[str, float]] = {
         "inbox": 2.5, "rhythm": 2.0, "security_lessons": 2.0,
     },
     "projekt": {
-        "sequence_memory": 1.0, "live_notes": 1.0, "goal_context": 1.2,
+        "sequence_memory": 1.0, "live_notes": 1.0, "goal_context": 1.5,
         "proactive_context": 0.8, "projects_list": 1.5, "unified_memory": 1.0,
         "filesystem": 0.5, "file_changes": 0.6,
         "efficiency_alerts": 0.3, "checkpoint": 1.0,

@@ -62,6 +62,7 @@ from .unified_memory import (
     UnifiedMemory, MemoryHit, semantic_adapter, experience_adapter,
     failure_adapter, strategy_adapter,
 )
+from .episodic_bridge import EpisodicBridge
 from .skill_enricher import SkillEnricher
 from .sequence_runner import SequenceRunner
 # SequenceFinisher entfernt — Logik bleibt in _handle_finish_sequence
@@ -664,6 +665,7 @@ class ConsciousnessEngine:
         self.seq_intel = SequenceIntelligence(self.consciousness_path)
         self.skill_library = SkillLibrary(config.DATA_PATH)
         self.skill_enricher = SkillEnricher(self.failure_memory)
+        self.episodic_bridge = EpisodicBridge(config.DATA_PATH)
         self.proactive_learner = ProactiveLearner(config.DATA_PATH)
 
         # Tool-Lifecycle: Module die seq_intel brauchen
@@ -768,7 +770,7 @@ class ConsciousnessEngine:
         ))
         self.perception_pipeline.register_channel(PerceptionChannel(
             name="goal_context", builder=self._ch_goal_context,
-            base_weight=1.0, estimated_tokens=250,
+            base_weight=1.3, estimated_tokens=700,
         ))
         self.perception_pipeline.register_channel(PerceptionChannel(
             name="proactive_context", builder=self._ch_proactive_context,
@@ -1342,6 +1344,24 @@ SEQUENZ-PLANUNG: Nutze write_sequence_plan am Anfang — plane dein Ziel, Exit-K
             "bottleneck": tool_input.get("bottleneck", ""),
         }
 
+        # Episodic Bridge: Strukturierte Findings extrahieren und einbetten
+        try:
+            episode = self.episodic_bridge.save_episode(
+                sequence_num=self.sequences_total,
+                focus=focus,
+                summary=summary,
+                errors=m.errors,
+                files_written=list(m.written_paths),
+                files_read=list(m.read_paths),
+                tool_sequence=m.tool_sequence,
+                bottleneck=tool_input.get("bottleneck", ""),
+            )
+            anchor["findings"] = episode.get("findings", [])
+            anchor["file_insights"] = episode.get("file_insights", {})
+            anchor["next_action"] = episode.get("next_action", "")
+        except Exception as e:
+            logger.warning("EpisodicBridge fehlgeschlagen: %s", e)
+
         try:
             safe_json_write(anchor_path, anchor)
         except Exception as e:
@@ -1414,7 +1434,28 @@ SEQUENZ-PLANUNG: Nutze write_sequence_plan am Anfang — plane dein Ziel, Exit-K
                 if anchor.get("bottleneck"):
                     lines.append(f"  Engpass: {anchor['bottleneck'][:100]}")
 
-            lines.append("  → Starte DIREKT mit der Arbeit, nicht mit Orientierung!")
+            # Episodic Bridge: Findings aus letzter Sequenz
+            ep_findings = anchor.get("findings", [])
+            if ep_findings:
+                lines.append("  LETZTE ERKENNTNISSE:")
+                for ef in ep_findings[:3]:
+                    lines.append(f"    - [{ef.get('type', '?')}] {ef.get('content', '')[:120]}")
+
+            ep_files = anchor.get("file_insights", {})
+            if ep_files:
+                lines.append("  BEKANNTE DATEIEN:")
+                for fname, insight in list(ep_files.items())[:5]:
+                    lines.append(f"    - {fname}: {insight[:80]}")
+
+            # Naechste Aktion: Sub-Goal (strukturiert) > Episode-Summary (heuristisch)
+            next_sg = anchor.get("next_step", "")
+            ep_next = anchor.get("next_action", "")
+            if next_sg:
+                lines.append(f"  → NAECHSTE AKTION: {next_sg}")
+            elif ep_next:
+                lines.append(f"  → LETZTER STAND: {ep_next}")
+            else:
+                lines.append("  → Starte DIREKT mit der Arbeit, nicht mit Orientierung!")
 
             return "\n".join(lines)
         except Exception as e:
@@ -1429,7 +1470,7 @@ SEQUENZ-PLANUNG: Nutze write_sequence_plan am Anfang — plane dein Ziel, Exit-K
         if wm_path.exists():
             try:
                 content = wm_path.read_text(encoding="utf-8")
-                return content[:800]  # Max 800 Zeichen (Token-Effizienz)
+                return content[:1200]  # Max 1200 Zeichen (Goal-Context traegt jetzt Details)
             except (OSError, UnicodeDecodeError):
                 pass
         return ""
@@ -1483,16 +1524,16 @@ SEQUENZ-PLANUNG: Nutze write_sequence_plan am Anfang — plane dein Ziel, Exit-K
 
             if summary:
                 # Neuen Eintrag vorne anfuegen, auf 5 begrenzen
-                short_summary = summary.replace("\n", " ")[:150]
+                short_summary = summary.replace("\n", " ")[:250]
                 old_history.insert(0, f"- Seq {self.sequences_total + 1}: {short_summary}")
-                old_history = old_history[:5]
+                old_history = old_history[:8]
 
             if old_history:
                 lines.append(f"## Verlauf")
                 lines.extend(old_history)
                 lines.append("")
 
-            content = "\n".join(lines)[:2000]
+            content = "\n".join(lines)[:3000]
             # Atomar schreiben — temp + rename
             tmp_fd, tmp_path = tempfile.mkstemp(
                 dir=str(wm_path.parent), suffix=".tmp"
