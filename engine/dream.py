@@ -50,7 +50,12 @@ class DreamEngine:
             return False  # Zu kurz fuer sinnvollen Vergleich
 
         for existing in existing_beliefs:
-            ex_text = existing if isinstance(existing, str) else str(existing)
+            if isinstance(existing, dict):
+                ex_text = existing.get("text", "")
+            elif isinstance(existing, str):
+                ex_text = existing
+            else:
+                continue
             ex_words = set(ex_text.lower().split())
             if len(ex_words) < 3:
                 continue
@@ -81,7 +86,12 @@ Deine Aufgabe: Das Gedaechtnis eines autonomen KI-Agenten namens Lyra aufraumen 
 Du bekommst den aktuellen Stand aller Memory-Dateien. Deine Aufgabe:
 
 1. ANALYSE: Was sind die wichtigsten Erkenntnisse? Was wiederholt sich? Was ist veraltet?
-2. BELIEFS: Konsolidiere auf max 15 einzigartige, wertvolle Ueberzeugungen. Loesche Redundanz.
+2. BELIEFS: Konsolidiere Ueberzeugungen mit der Abstraktionsleiter:
+   a) CLUSTERE aehnliche Beliefs zu Gruppen (z.B. alle exec()-Beliefs zusammen)
+   b) EXTRAHIERE aus jedem Cluster EIN abstraktes Prinzip (nicht die Details, sondern die Regel dahinter)
+   c) DESTILLIERE aus allen Prinzipien max 3 WISDOM-Saetze (domain-uebergreifende Weisheit)
+   Beliefs haben Konfidenz (0.0-1.0). Haeufig bestaetigte Beliefs → hohe Konfidenz.
+   Widersprueche erkennen und aufloesen (z.B. "nutze exec()" vs "vermeide exec()").
 3. STRATEGIEN: Welche Regeln sind noch relevant? Welche koennen geloescht werden?
 4. SKILLS: Stimmen die Levels? Gibt es Meta-Skills die fehlen?
 5. ZUSAMMENFASSUNG: Was hat Lyra in letzter Zeit gelernt? Ein Absatz.
@@ -93,8 +103,10 @@ Du bekommst den aktuellen Stand aller Memory-Dateien. Deine Aufgabe:
 
 Antworte als JSON:
 {
-  "consolidated_beliefs": ["Liste der 10-15 wichtigsten Ueberzeugungen"],
-  "obsolete_beliefs": ["Beliefs die ueberholt sind — werden nicht geloescht sondern als Wisdom-Lektionen archiviert (max 3)"],
+  "consolidated_beliefs": [{"text": "Das Prinzip", "confidence": 0.8, "source": "Woraus abgeleitet"}],
+  "wisdom_extractions": ["Domain-uebergreifende Weisheit — max 3 Saetze, abstrahiert aus allen Beliefs"],
+  "contradictions_resolved": [{"beliefs": ["Belief A", "Belief B"], "resolution": "Wie der Widerspruch aufgeloest wird"}],
+  "obsolete_beliefs": ["Beliefs die ueberholt sind — max 3, werden als Lektionen archiviert"],
   "strategy_updates": [{"rule": "...", "action": "keep|delete|update", "reason": "..."}],
   "skill_notes": "Freitext-Analyse der Skills",
   "memory_summary": "Was Lyra in letzter Zeit gelernt hat — 2-3 Saetze",
@@ -292,48 +304,121 @@ Antworte als JSON:
         """Wendet die Dream-Ergebnisse an."""
         applied = []
 
-        # Beliefs konsolidieren — MERGE statt Replace
-        # Neue Beliefs werden zu bestehenden HINZUGEFUEGT, nicht ersetzt.
-        # Duplikate werden gefiltert, max 30 Beliefs insgesamt.
+        # Beliefs konsolidieren — Konfidenz-basiert, MERGE statt Replace
+        # Beliefs sind jetzt strukturiert: {text, confidence, source}
+        # Alte String-Beliefs werden automatisch migriert
         new_beliefs = result.get("consolidated_beliefs", [])
         if new_beliefs and len(new_beliefs) >= 3:
             beliefs_path = self.consciousness_path / "beliefs.json"
             try:
                 beliefs = self._safe_load_json(beliefs_path) or {}
-                validated = [b for b in new_beliefs if isinstance(b, str) and len(b) > 5][:30]
+                _KNOWN_KEYS = {"about_self", "about_world", "about_oliver",
+                               "formed_from_experience", "wisdom"}
+                for key in _KNOWN_KEYS:
+                    if key not in beliefs:
+                        beliefs[key] = []
+
+                # Neue Beliefs normalisieren (String → Dict mit Konfidenz)
+                validated = []
+                for b in new_beliefs[:30]:
+                    if isinstance(b, dict) and b.get("text"):
+                        validated.append({
+                            "text": b["text"][:300],
+                            "confidence": min(1.0, max(0.1, b.get("confidence", 0.5))),
+                            "source": b.get("source", "dream")[:200],
+                        })
+                    elif isinstance(b, str) and len(b) > 5:
+                        validated.append({
+                            "text": b[:300],
+                            "confidence": 0.5,
+                            "source": "dream",
+                        })
+
                 if len(validated) >= 3:
-                    _KNOWN_KEYS = {"about_self", "about_world", "about_oliver",
-                                   "formed_from_experience", "wisdom"}
-                    for key in _KNOWN_KEYS:
-                        if key not in beliefs:
-                            beliefs[key] = []
                     existing = beliefs.get("formed_from_experience", [])
-                    # Neue Beliefs zu bestehenden HINZUFUEGEN (nicht ersetzen)
-                    merged = list(existing)
+                    # Alte Strings migrieren → Dict-Format
+                    migrated = []
+                    for e in existing:
+                        if isinstance(e, str):
+                            migrated.append({"text": e, "confidence": 0.5, "source": "legacy"})
+                        elif isinstance(e, dict) and e.get("text"):
+                            migrated.append(e)
+                    # Merge: Neue zu bestehenden hinzufuegen
+                    merged = list(migrated)
                     added = 0
                     for b in validated:
-                        if not self._is_belief_duplicate(b, merged):
+                        existing_texts = [m.get("text", "") for m in merged]
+                        if not self._is_belief_duplicate(b["text"], existing_texts):
                             merged.append(b)
                             added += 1
-                    # Max 30 Beliefs — aelteste zuerst in Wisdom destillieren
+                        else:
+                            # Duplikat gefunden → Konfidenz des bestehenden erhoehen
+                            for m in merged:
+                                if self._is_belief_duplicate(b["text"], [m.get("text", "")]):
+                                    m["confidence"] = min(1.0, m.get("confidence", 0.5) + 0.1)
+                                    break
+                    # Max 30 Beliefs — niedrigste Konfidenz zuerst in Wisdom
                     if len(merged) > 30:
-                        overflow = merged[:len(merged) - 30]
-                        merged = merged[len(merged) - 30:]
-                        # Ueberlauf → Wisdom-Archiv (destilliert, nie geloescht)
+                        merged.sort(key=lambda x: x.get("confidence", 0), reverse=True)
+                        overflow = merged[30:]
+                        merged = merged[:30]
                         wisdom = beliefs.get("wisdom", [])
-                        for old_belief in overflow:
-                            text = old_belief if isinstance(old_belief, str) else old_belief.get("text", "")
+                        for old in overflow:
+                            text = old.get("text", "")
                             if text and not self._is_belief_duplicate(text, wisdom):
                                 wisdom.append(text)
-                        beliefs["wisdom"] = wisdom[-50:]  # Max 50 Wisdom-Eintraege
+                        beliefs["wisdom"] = wisdom[-50:]
                     beliefs["formed_from_experience"] = merged
                     with open(beliefs_path, "w", encoding="utf-8") as f:
                         json.dump(beliefs, f, indent=2, ensure_ascii=False)
                     applied.append(f"Beliefs: {added} neu, {len(merged)} total")
                 else:
-                    applied.append(f"Beliefs: Validierung fehlgeschlagen ({len(validated)} von {len(new_beliefs)} gueltig)")
+                    applied.append(f"Beliefs: Validierung fehlgeschlagen")
             except (OSError, json.JSONDecodeError) as e:
                 applied.append(f"Beliefs-Update fehlgeschlagen: {e}")
+
+        # Wisdom-Extraktionen: Domain-uebergreifende Prinzipien aus dem LLM
+        wisdom_extractions = result.get("wisdom_extractions", [])
+        if wisdom_extractions:
+            beliefs_path = self.consciousness_path / "beliefs.json"
+            try:
+                beliefs = self._safe_load_json(beliefs_path) or {}
+                wisdom = beliefs.get("wisdom", [])
+                added_w = 0
+                for w in wisdom_extractions[:3]:
+                    if isinstance(w, str) and len(w) > 10:
+                        prefix = "[prinzip] "
+                        entry = prefix + w[:300]
+                        if not self._is_belief_duplicate(w, wisdom):
+                            wisdom.append(entry)
+                            added_w += 1
+                if added_w > 0:
+                    beliefs["wisdom"] = wisdom[-50:]
+                    with open(beliefs_path, "w", encoding="utf-8") as f:
+                        json.dump(beliefs, f, indent=2, ensure_ascii=False)
+                    applied.append(f"Wisdom: {added_w} Prinzipien extrahiert")
+            except (OSError, json.JSONDecodeError):
+                pass
+
+        # Widerspruchs-Aufloesungen: Konfligierende Beliefs → ein klaerer Belief
+        contradictions = result.get("contradictions_resolved", [])
+        if contradictions:
+            beliefs_path = self.consciousness_path / "beliefs.json"
+            try:
+                beliefs = self._safe_load_json(beliefs_path) or {}
+                wisdom = beliefs.get("wisdom", [])
+                for c in contradictions[:3]:
+                    if isinstance(c, dict) and c.get("resolution"):
+                        resolution = f"[aufgeloest] {c['resolution'][:300]}"
+                        if not self._is_belief_duplicate(c["resolution"], wisdom):
+                            wisdom.append(resolution)
+                if contradictions:
+                    beliefs["wisdom"] = wisdom[-50:]
+                    with open(beliefs_path, "w", encoding="utf-8") as f:
+                        json.dump(beliefs, f, indent=2, ensure_ascii=False)
+                    applied.append(f"Widersprueche: {len(contradictions)} aufgeloest")
+            except (OSError, json.JSONDecodeError):
+                pass
 
         # Obsolete Beliefs → Wisdom destillieren (nie loeschen, immer lernen)
         # Max 3 pro Dream-Zyklus — verhindert Belief-Extinction
