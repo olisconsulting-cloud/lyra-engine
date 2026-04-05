@@ -21,7 +21,7 @@ from pathlib import Path
 from .checkpoint import CheckpointManager
 from .sequence_planner import SequencePlanner
 from .meta_rules import MetaRuleEngine
-from .policy import PolicyEngine
+from .policy import PolicyEngine, _classify_failure
 
 
 # === Datenklassen (Return-Types) ===
@@ -410,6 +410,46 @@ class SequenceIntelligence:
             self._cached_plan = self._planner.get_active_plan()
             self._plan_cache_dirty = False
         return self._cached_plan
+
+    def get_failure_category_summary(self) -> dict:
+        """Klassifiziert alle ungeloesten Fehler dieser Sequenz nach Kategorie.
+
+        Nutzt PolicyEngine._classify_failure() auf die last_error Strings
+        aus dem stuck_tracker. Nur noch offene Fehler zaehlen (bei Erfolg
+        wird der Eintrag geloescht).
+
+        Returns:
+            {
+                "dominant": "capability"|"input_error"|"logic_error"|"unknown"|"none",
+                "counts": {"capability": N, "input_error": N, "logic_error": N, "unknown": N},
+                "total_errors": N,
+            }
+        """
+        # Prioritaet fuer Tie-Breaking (spezifischste zuerst)
+        priority = ["capability", "input_error", "logic_error", "unknown"]
+        counts = {cat: 0 for cat in priority}
+
+        for key, info in self._stuck_tracker.items():
+            if info.get("count", 0) <= 0:
+                continue
+            error_msg = info.get("last_error", "")
+            tool_name = key.split(":")[0] if ":" in key else key
+            category = _classify_failure(error_msg, tool_name)
+            counts[category.value] += 1
+
+        total = sum(counts.values())
+        if total == 0:
+            return {"dominant": "none", "counts": counts, "total_errors": 0}
+
+        # Dominant: hoechster Count, Tie-Break nach Prioritaet
+        dominant = "unknown"
+        max_count = 0
+        for cat in priority:
+            if counts[cat] > max_count:
+                max_count = counts[cat]
+                dominant = cat
+
+        return {"dominant": dominant, "counts": counts, "total_errors": total}
 
     # =========================================================
     # Phase 3: Sequenz-Ende

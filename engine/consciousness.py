@@ -2263,9 +2263,12 @@ SEQUENZ-PLANUNG: Nutze write_sequence_plan am Anfang — plane dein Ziel, Exit-K
 
         # Actuator: Prediction-Error-Loop schliessen
         # Wandelt Bottleneck-Erkenntnisse in harte Parameteraenderungen um
+        # FailureMemory-Kontext: Verhindert generische Parameter-Aenderungen
+        # bei Non-Process-Fehlern (CAPABILITY, INPUT_ERROR, LOGIC_ERROR)
         try:
             sm = self.seq_intel.metrics
             eff_ratio = output_count / max(1, sm.step_count)
+            failure_ctx = self.seq_intel.get_failure_category_summary()
             self.actuator.process_prediction_error(
                 bottleneck=bottleneck,
                 next_time=next_time,
@@ -2273,6 +2276,7 @@ SEQUENZ-PLANUNG: Nutze write_sequence_plan am Anfang — plane dein Ziel, Exit-K
                 steps_used=sm.step_count,
                 files_written=sm.files_written,
                 efficiency_ratio=eff_ratio,
+                failure_context=failure_ctx,
             )
         except Exception as e:
             logger.warning("Actuator-Feedback fehlgeschlagen: %s", e)
@@ -2794,6 +2798,11 @@ Antworte als JSON:
                         rec_result = self.dream._apply_recommendations(last_dream, self.goal_stack)
                         if rec_result:
                             result += f" | {rec_result}"
+                        # Actuator: Dream-Insights empfangen (bidirektionale Bruecke)
+                        try:
+                            self.actuator.learn_from_dream(last_dream)
+                        except Exception as e:
+                            logger.warning("Actuator-Dream-Bridge fehlgeschlagen: %s", e)
                     # Memory-Consolidation: Fibonacci-Decay auf Experiences
                     try:
                         removed = self.memory.consolidate(max_per_bucket=5)

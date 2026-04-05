@@ -185,12 +185,79 @@ class BehaviorActuator:
 
         return "\n".join(lines)
 
+    # === Public API: Dream-Integration ===
+
+    def learn_from_dream(self, dream_result: dict):
+        """Empfaengt Dream-Insights und leitet Parameter-Signale ab.
+
+        Dream-Insights sind INPUT, kein Override.
+        ActuatorMeta behaelt das letzte Wort (kann reverten).
+        Bereits revertierte Aenderungen werden nicht wiederholt.
+
+        Args:
+            dream_result: Geparstes Dream-Ergebnis (aus dream_log.json).
+                Relevanter Key: actuator_recommendations
+        """
+        recommendations = dream_result.get("actuator_recommendations", [])
+        if not recommendations:
+            return
+
+        current_seq = (
+            self._state["efficiency_history"][-1]["sequence"]
+            if self._state.get("efficiency_history") else 0
+        )
+
+        applied = 0
+        for rec in recommendations[:3]:
+            param = rec.get("parameter", "")
+            direction = rec.get("direction", "")
+            reason = rec.get("reason", "")
+
+            if param not in DEFAULTS or direction not in ("increase", "decrease"):
+                continue
+
+            # Guard: Kuerzlich revertierte Aenderung nicht wiederholen
+            if self._was_recently_reverted(param, direction):
+                logger.info(
+                    "Actuator: Dream-Empfehlung ignoriert (kuerzlich revertiert): "
+                    "%s %s — %s", param, direction, reason,
+                )
+                continue
+
+            self._adjust_parameter(
+                param, direction,
+                trigger=f"dream:{reason[:50]}",
+                seq_num=current_seq,
+            )
+            applied += 1
+
+        if applied:
+            self._state["_last_adjustment_seq"] = current_seq
+            self._save()
+            logger.info("Actuator: %d Dream-Empfehlungen angewandt", applied)
+
+    def _was_recently_reverted(self, param: str, direction: str) -> bool:
+        """Prueft ob ActuatorMeta eine aehnliche Aenderung kuerzlich revertiert hat."""
+        recent_changes = self._state.get("change_history", [])[-10:]
+        for change in recent_changes:
+            if not change.get("reverted"):
+                continue
+            if change.get("parameter") != param:
+                continue
+            # Gleiche Richtung wie revertiert? Dann nicht wiederholen.
+            was_decrease = change.get("new_value", 0) < change.get("old_value", 0)
+            if (direction == "decrease" and was_decrease) or \
+               (direction == "increase" and not was_decrease):
+                return True
+        return False
+
     # === Public API: Feedback verarbeiten ===
 
     def process_prediction_error(
         self, bottleneck: str, next_time: str,
         seq_num: int, steps_used: int, files_written: int,
         efficiency_ratio: float,
+        failure_context: dict | None = None,
     ):
         """Verarbeitet MetaCognition-Feedback nach einer Sequenz.
 
@@ -212,19 +279,20 @@ class BehaviorActuator:
         adjusted_this_call = False
         for pattern_id, config in PATTERN_MAP.items():
             if any(kw in combined for kw in config["keywords"]):
-                if self._record_hit(pattern_id, config, seq_num, steps_used, files_written):
+                if self._record_hit(pattern_id, config, seq_num, steps_used,
+                                    files_written, failure_context):
                     adjusted_this_call = True
 
         # Datenbasierte Erkennung (unabhaengig von Bottleneck-Text)
         # Immer pruefen — auch wenn Keywords gematcht haben
         if files_written == 0 and steps_used > 10:
             if self._record_hit("zero_output", PATTERN_MAP["zero_output"],
-                                seq_num, steps_used, files_written):
+                                seq_num, steps_used, files_written, failure_context):
                 adjusted_this_call = True
 
         if steps_used >= 50:  # Nah am harten Limit von 60
             if self._record_hit("finish_too_late", PATTERN_MAP["finish_too_late"],
-                                seq_num, steps_used, files_written):
+                                seq_num, steps_used, files_written, failure_context):
                 adjusted_this_call = True
 
         # Erfolg? Parameter zurueck Richtung Default relaxieren
@@ -253,8 +321,12 @@ class BehaviorActuator:
     # === Internes ===
 
     def _record_hit(self, pattern_id: str, pattern_config: dict,
-                    seq_num: int, steps_used: int, files_written: int) -> bool:
+                    seq_num: int, steps_used: int, files_written: int,
+                    failure_context: dict | None = None) -> bool:
         """Zaehlt Pattern-Hit und passt Parameter an wenn Threshold erreicht.
+
+        Ueberspringt Anpassung wenn Fehler-Kategorie zeigt dass Parameter-
+        Tuning nicht helfen wird (z.B. CAPABILITY, INPUT_ERROR, LOGIC_ERROR).
 
         Returns:
             True wenn ein Parameter angepasst wurde.
@@ -270,12 +342,37 @@ class BehaviorActuator:
 
         # Anpassung bei Threshold (und dann alle N weitere Hits)
         if count >= ADJUSTMENT_THRESHOLD and (count - ADJUSTMENT_THRESHOLD) % ADJUSTMENT_THRESHOLD == 0:
+            # Guard: Non-Process-Fehler → Skip (Parameter-Tuning hilft nicht)
+            if failure_context and self._should_skip_adjustment(failure_context):
+                dominant = failure_context.get("dominant", "unknown")
+                logger.info(
+                    "Actuator: SKIP '%s' — dominanter Fehler ist %s "
+                    "(nicht-prozessual, Parameter-Tuning hilft nicht)",
+                    pattern_id, dominant,
+                )
+                self._state.setdefault("skipped_adjustments", []).append({
+                    "pattern": pattern_id, "sequence": seq_num, "reason": dominant,
+                })
+                self._state["skipped_adjustments"] = self._state["skipped_adjustments"][-50:]
+                return False
+
             target = pattern_config["target"]
             direction = pattern_config["direction"]
             self._adjust_parameter(target, direction, pattern_id, seq_num)
             self._state["_last_adjustment_seq"] = seq_num
             return True
         return False
+
+    @staticmethod
+    def _should_skip_adjustment(failure_context: dict) -> bool:
+        """True wenn dominanter Fehlertyp zeigt dass Parameter-Tuning nicht hilft.
+
+        CAPABILITY (fehlende Lib), INPUT_ERROR (falscher Pfad),
+        LOGIC_ERROR (Bug) → brauchen Code/Umgebungs-Fixes, nicht weniger Steps.
+        UNKNOWN und NONE → koennten Prozess-Fehler sein → nicht skippen.
+        """
+        dominant = failure_context.get("dominant", "none")
+        return dominant in ("capability", "input_error", "logic_error")
 
     def _adjust_parameter(self, param: str, direction: str,
                           trigger: str, seq_num: int):

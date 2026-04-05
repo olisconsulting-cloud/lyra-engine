@@ -88,6 +88,7 @@ Du bekommst den aktuellen Stand aller Memory-Dateien. Deine Aufgabe:
 7. META-SKILLS: Wie arbeitet Lyra? Beschreibe den Arbeitsstil — plant sie gut? Fuehrt sie effizient aus? Springt sie zwischen Aufgaben? Nutzt sie finish_sequence rechtzeitig?
 8. RECOMMENDATIONS: Max 2 Empfehlungen, JEDE mit 2-3 konkreten Sub-Goals. Jedes Sub-Goal muss ein messbarer, ausfuehrbarer Schritt sein — keine Absichtserklaerungen.
 9. TOOL-OEKOSYSTEM: Analysiere die selbstgebauten Tools. Welche sind wertvoll und sollten behalten werden? Welche verfallen (nie genutzt, niedrige Success-Rate)? Gibt es Luecken — Tools die fehlen? Gibt es aehnliche Tools die konsolidiert werden sollten?
+10. ACTUATOR-ANALYSE: Analysiere die Behavior-Actuator-Daten. Welche Parameteraenderungen haben geholfen (Effizienz gestiegen)? Welche wurden revertiert und warum? Gibt es Parameter die zu aggressiv oder zu konservativ eingestellt sind? Formuliere max 3 konkrete Empfehlungen fuer Parameteranpassungen.
 
 Antworte als JSON:
 {
@@ -99,7 +100,8 @@ Antworte als JSON:
   "recommendations": [{"title": "Kurzer Titel (max 80 Zeichen)", "sub_goals": ["Konkreter Schritt 1", "Konkreter Schritt 2", "Messbares Erfolgskriterium"]}],
   "process_insights": "Was Lyra ueber ihren ARBEITSSTIL gelernt hat — nicht Aufgaben, sondern WIE sie arbeitet",
   "efficiency_patterns": ["Konkrete Beobachtungen ueber Produktivitaet und Effizienz"],
-  "tool_insights": "Analyse des Tool-Oekosystems: Was ist wertvoll, was verfaellt, was fehlt?"
+  "tool_insights": "Analyse des Tool-Oekosystems: Was ist wertvoll, was verfaellt, was fehlt?",
+  "actuator_recommendations": [{"parameter": "step_budget_modifier|research_depth_limit|output_checkpoint_step", "direction": "increase|decrease", "reason": "Begruendung"}]
 }"""
 
         try:
@@ -222,7 +224,63 @@ Antworte als JSON:
             except Exception as e:
                 logger.warning(f"Tool-Dream-Bridge fehlgeschlagen: {e}")
 
+        # Behavior Actuator (Parameter-Anpassungen + Meta-Learning-Historie)
+        actuator_state = self._safe_load_json(
+            self.consciousness_path / "actuator_state.json"
+        )
+        if actuator_state:
+            parts.append(self._format_actuator_for_dream(actuator_state))
+
         return "\n".join(parts)
+
+    def _format_actuator_for_dream(self, state: dict) -> str:
+        """Formatiert Actuator-State als lesbaren Abschnitt fuer Dream-Prompt."""
+        lines = ["\n=== BEHAVIOR ACTUATOR ==="]
+
+        # Aktuelle Parameter vs. Defaults
+        params = state.get("parameters", {})
+        defaults = {
+            "step_budget_modifier": 1.0,
+            "research_depth_limit": 25,
+            "output_checkpoint_step": 12,
+        }
+        lines.append("Aktuelle Parameter:")
+        for key, val in params.items():
+            default = defaults.get(key, "?")
+            marker = " (ANGEPASST)" if val != default else ""
+            lines.append(f"  {key}: {val}{marker} (Default: {default})")
+
+        # Pattern-Hits (welche Probleme erkannt)
+        hits = state.get("pattern_hits", {})
+        if hits:
+            lines.append(f"Pattern-Hits: {hits}")
+
+        # Aenderungshistorie (letzte 10)
+        changes = state.get("change_history", [])[-10:]
+        if changes:
+            lines.append("Letzte Parameteraenderungen:")
+            for c in changes:
+                status = ("REVERTIERT" if c.get("reverted")
+                          else "BEHALTEN" if c.get("evaluated")
+                          else "PENDING")
+                eff_before = c.get("efficiency_before", 0)
+                eff_after = c.get("efficiency_after", 0)
+                lines.append(
+                    f"  {c.get('parameter')}: {c.get('old_value')} -> {c.get('new_value')} "
+                    f"(Trigger: {c.get('trigger')}, Seq {c.get('sequence')}, "
+                    f"Eff {eff_before:.0%} -> {eff_after:.0%}, Status: {status})"
+                )
+
+        # Effizienz-Trend
+        eff_hist = state.get("efficiency_history", [])[-10:]
+        if eff_hist:
+            avg = sum(e["efficiency"] for e in eff_hist) / len(eff_hist)
+            zero_out = sum(1 for e in eff_hist if e.get("files", 0) == 0)
+            lines.append(f"Effizienz letzte {len(eff_hist)} Seq: {avg:.0%} Durchschnitt")
+            if zero_out:
+                lines.append(f"  Davon {zero_out} Sequenzen mit 0 Output")
+
+        return "\n".join(lines)
 
     def _apply_results(self, result: dict) -> str:
         """Wendet die Dream-Ergebnisse an."""
