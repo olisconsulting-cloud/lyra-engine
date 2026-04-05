@@ -72,6 +72,10 @@ from .telemetry import telemetry
 # SequenceFinisher entfernt — Logik bleibt in _handle_finish_sequence
 from . import config
 from .config import safe_json_write, safe_json_read
+from .tool_definitions import (
+    TOOLS, TOOL_TIERS, REQUIRED_FIELDS,
+    select_tools, _get_compact_tools, _normalize_spin_key,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -79,17 +83,8 @@ MAX_STEPS_PER_SEQUENCE = 60          # Von Oliver auf 60 erhoeht (Gemma 4: 256K 
 MAX_INPUT_TOKENS_PER_SEQUENCE = 200_000  # Gemma 4 = 256k, 78% Nutzung mit Sicherheitsmarge
 MAX_TOKENS = 32000                    # Max Output-Tokens pro LLM-Call (Gemma kann 131k, Default fuer alle Tasks)
 
-def _normalize_spin_key(tool_name: str, raw_name: str) -> str:
-    """Erzeugt einen normalisierten Spin-Key aus sortierten Inhaltswörtern.
-
-    'ki-server-90-tage-startplan' und 'ki-server-startplan-90-tage'
-    erzeugen denselben Key: 'create_project:90|ki|server|startplan|tage'
-    """
-    words = sorted(config.normalize_name_words(raw_name))
-    return f"{tool_name}:{('|'.join(words)) if words else raw_name[:50]}"
-
-
-# === Tool-Definitionen fuer Anthropic API ===
+# Tool-Definitionen: Extrahiert nach engine/tool_definitions.py
+# Imports: TOOLS, TOOL_TIERS, REQUIRED_FIELDS, select_tools, _get_compact_tools, _normalize_spin_key
 
 TOOLS = [
     {
@@ -730,7 +725,7 @@ class ConsciousnessEngine:
         # Perception-Pipeline — gewichtete Wahrnehmung mit Token-Budget
         # Shared State pro Sequenz: self._pstate (von _build_perception gesetzt)
         self._pstate: dict = {}
-        self.perception_pipeline = PerceptionPipeline(config.DATA_PATH, max_tokens=5000)
+        self.perception_pipeline = PerceptionPipeline(config.DATA_PATH, max_tokens=8000)
 
         # Always-Load Kanaele (Kern — immer voll geladen)
         self.perception_pipeline.register_channel(PerceptionChannel(

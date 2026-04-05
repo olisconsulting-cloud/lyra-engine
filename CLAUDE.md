@@ -18,7 +18,7 @@ engine/                        Code (Git-tracked)
     sequence_intelligence.py     Stuck-Detection, Sequenz-Metriken, Step-Prompts
     sequence_runner.py           Sequenz-Ausfuehrung + Tool-Handling
     sequence_planner.py          Plan-Generierung fuer Sequenzen
-    perception_pipeline.py       Multi-Channel Perception (20 Channels, 5k Budget)
+    perception_pipeline.py       Multi-Channel Perception (20 Channels, 8k Budget)
     perception.py                Raw-Input-Verarbeitung
     evaluation.py                Score 0-100, Checkpoints, Alerts
     actions.py                   Action-Engine + Action-Management
