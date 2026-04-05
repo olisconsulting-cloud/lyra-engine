@@ -24,22 +24,27 @@
 
 ---
 
-## Hebel 2: REFINEMENT LOOPS (Iterieren = Denken) — OFFEN
+## Hebel 2: REFINEMENT LOOPS (Iterieren = Denken) — TEILWEISE LIVE
 
 **Warum #2:** "Refinement is Intelligence" — dominierende Erkenntnis ARC-2025.
 
-**Was fehlt:**
-- Phi macht einen Versuch pro Sub-Goal. Scheitern → loggen → weiter.
-- Kein Critic-Loop: "das war 60% richtig, verbessere Teil X"
-- `quantum.py` Critic existiert, ist aber passiv
+**Implementiert (2026-04-05):**
+- **Dream-to-Actuator Goal-Intelligence:** Dream analysiert SubGoal-Metriken,
+  empfiehlt abort/simplify/decompose, Actuator setzt um
+- **Kumulative SubGoal-Metriken:** `_attempt_stats` pro SubGoal (total_sequences,
+  total_files, total_errors) — erkennt Spin-Loops auch bei Goal-Alternierung
+- **Auto-Fail bei Unviability:** 8+ Seq mit <1 Datei/Seq → automatisch gescheitert
+- **BehaviorActuator:** 3 Parameter (step_budget, research_depth, output_checkpoint)
+  werden per Prediction-Error-Loop und Dream-Feedback angepasst
+- **ActuatorMeta:** Evaluiert nach 10 Seq ob Anpassung hilft, revertiert wenn nicht
 
-**Was zu bauen:**
-- Nach jedem Tool-Call: Ergebnis bewerten (success/partial/failure)
-- Bei partial: Reflexion + gezielter Retry (max 3 Loops)
+**Offen:**
 - Critic in `quantum.py` aktiv machen: Revision vorschlagen, nicht nur speichern
+- Per-Tool-Call Bewertung (success/partial/failure) statt nur per Sequenz
 - Budget: Max 3 Refinement-Loops pro Sub-Goal (Cost-Control)
 
-**Dateien:** `engine/quantum.py`, `engine/consciousness.py`
+**Dateien:** `engine/actuator.py`, `engine/goal_stack.py`, `engine/dream.py`,
+`engine/consciousness.py`, `engine/quantum.py`
 
 ---
 
@@ -132,7 +137,7 @@ selbst-generierte Aufgaben = exponentielles Lernen.
 
 - Nach jeder Phase: `python review_phi.py` als Gate
 - Nach Hebel 1: Phi kann zeigen ob sie besser/schlechter wird ✅
-- Nach Hebel 2: Mehr Goals pro Sequenz (messbar via Hebel 1)
+- Nach Hebel 2: Spin-Loops automatisch erkannt + SubGoals auto-gefailt ✅ (teilweise)
 - Nach Hebel 3: Meta-Rules werden automatisch deaktiviert wenn unwirksam
 - Nach Hebel 4: Phi generiert eigene Uebungsaufgaben und loest sie
 - Laufend: 20-30 Sequenzen beobachten zwischen Phasen

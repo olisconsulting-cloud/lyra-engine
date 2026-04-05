@@ -230,6 +230,28 @@ Antworte als JSON:
         if goals:
             parts.append(f"\n=== ZIELE ===\n{json.dumps(goals, indent=2, ensure_ascii=False)}")
 
+        # Telos Skill-Gaps (kompakte Ring-Summary fuer Token-Effizienz)
+        telos = self._safe_load_json(self.consciousness_path / "telos.json")
+        if telos:
+            ring_summary = []
+            for ring in telos.get("ringe", []):
+                if ring.get("completion", 1.0) >= 0.9:
+                    continue  # Ring fertig, keine Gaps
+                # Level-basiert: novice/beginner = Gap (completion fehlt pro Domain)
+                gaps = [d["name"] for d in ring.get("domaenen", [])
+                        if d.get("level", "novice") in ("novice", "beginner")]
+                if gaps:
+                    ring_summary.append(
+                        f"Ring {ring['nummer']} ({ring['name']}): {', '.join(gaps)}"
+                    )
+            if ring_summary:
+                parts.append(
+                    "\n=== TELOS SKILL-GAPS ===\n"
+                    + "\n".join(ring_summary)
+                    + "\n\nWICHTIG: Dream-Empfehlungen muessen Skill-Gaps adressieren, "
+                    "nicht bereits gemeisterte Domains wiederholen."
+                )
+
         # Failures/Lessons
         failures = self._safe_load_json(self.consciousness_path / "failures.json")
         if failures:

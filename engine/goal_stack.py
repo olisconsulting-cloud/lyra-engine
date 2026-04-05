@@ -135,6 +135,20 @@ class GoalStack:
         # Gewichtete Kombination: 60% Diversitaet, 40% Ring, Meta-Penalty
         return (diversity * 0.6 + ring_bonus * 0.4) * meta_penalty
 
+    def _get_telos_suggestion(self) -> str:
+        """Gibt die hoechstpriorisierte Telos-Luecke als Vorschlag zurueck."""
+        if not self._telos:
+            return "data_analysis oder business_thinking"
+        for ring in self._telos.get("ringe", []):
+            if ring.get("completion", 1.0) >= 0.9:
+                continue
+            # Level-basiert: novice/beginner = Gap (completion fehlt pro Domain)
+            gaps = [d["name"] for d in ring.get("domaenen", [])
+                    if d.get("level", "novice") in ("novice", "beginner")]
+            if gaps:
+                return f"Ring {ring['nummer']} ({ring['name']}): {', '.join(gaps)}"
+        return "neues Terrain erkunden"
+
     def _save(self):
         try:
             safe_json_write(self.goals_path, self.goals)
@@ -371,6 +385,17 @@ class GoalStack:
                 f"AEHNLICHES ZIEL BEREITS ABGESCHLOSSEN: '{completed_match['title']}'. "
                 f"Waehle ein Ziel das eine NEUE Faehigkeit trainiert — "
                 f"nicht dieselbe Aufgabe wiederholen."
+            )
+
+        # Domain-Wiederholungs-Guard: Nicht 5x die gleiche Domain trainieren
+        domain = self._classify_domain(title)
+        recent = self._get_recent_goal_domains(10)
+        if recent.count(domain) >= 4 and domain != "sonstiges":
+            suggestion = self._get_telos_suggestion()
+            return (
+                f"DOMAIN-WIEDERHOLUNG: '{domain}' war {recent.count(domain)}x in den "
+                f"letzten 10 Goals. Waehle eine andere Domain! "
+                f"Telos empfiehlt: {suggestion}"
             )
 
         goal = {

@@ -221,6 +221,23 @@ class AdaptiveRhythm:
         return 0
 
     def _get_biggest_skill_gap(self) -> Optional[str]:
+        # 1. Telos: Hoechste Gap aus niedrigstem unfertigem Ring
+        telos_path = self.data_path / "consciousness" / "telos.json"
+        if telos_path.exists():
+            try:
+                with open(telos_path, "r", encoding="utf-8") as f:
+                    telos = json.load(f)
+                for ring in telos.get("ringe", []):
+                    if ring.get("completion", 1.0) >= 0.9:
+                        continue  # Ring fertig
+                    for dom in ring.get("domaenen", []):
+                        # Level-basiert: novice/beginner = Gap (completion fehlt pro Domain)
+                        if dom.get("level", "novice") in ("novice", "beginner"):
+                            return f"{dom['name']} (Ring {ring['nummer']}: {ring['name']})"
+            except Exception:
+                pass  # Fallback auf CompetenceMatrix
+
+        # 2. Fallback: CompetenceMatrix (rohe Skill-Daten)
         skills_path = self.data_path / "consciousness" / "skills.json"
         if not skills_path.exists():
             return "python_coding (keine Skills getrackt)"

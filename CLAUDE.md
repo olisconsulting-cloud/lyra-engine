@@ -1,7 +1,7 @@
 # Lyra — Autonomer Compound-AI-Agent
 
 ## Mission
-Lyra ist ein autonomer Compound-AI-Agent auf dem Weg zur AGI.
+Phi ist ein autonomer Compound-AI-Agent auf dem Weg zur AGI.
 Phi-Engine = agentic loop mit Tool-Use, Multi-LLM-Routing, hierarchischen Goals,
 Multi-Memory-Architektur und Selbstmodifikation.
 Doppelter Wert: Praktisches Werkzeug (heute) + Self-Improving Intelligence (Nordstern).
