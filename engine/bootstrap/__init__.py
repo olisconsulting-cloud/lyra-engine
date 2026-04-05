@@ -160,8 +160,9 @@ def load_approved_packages(instance_approved: set) -> set:
     """
     bootstrap = _read_bootstrap("approved_packages.json", default={"packages": []})
     bootstrap_set = {p.lower() for p in bootstrap.get("packages", [])}
-    merged = bootstrap_set | {p.lower() for p in instance_approved}
-    new_from_bootstrap = bootstrap_set - instance_approved
+    instance_lower = {p.lower() for p in instance_approved}
+    merged = bootstrap_set | instance_lower
+    new_from_bootstrap = bootstrap_set - instance_lower
     if new_from_bootstrap:
         logger.info(f"Bootstrap: {len(new_from_bootstrap)} Pakete aus Allowlist geladen")
     return merged
