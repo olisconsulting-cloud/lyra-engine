@@ -23,12 +23,12 @@ Das ist der Unterschied zwischen einem Spiegel und einem Lenkrad.
 Enforcement-Layer in consciousness.py der NACH dem LLM-Call prueft
 ob eine Meta-Rule verletzt wird und HANDELT statt nur zu warnen.
 
-Beispiel: `if step >= 15 and not finished: force_finish_sequence()`
+Beispiel: `if step >= 20 and not finished: force_finish_sequence()`
 
 ## Phasen
 
 ### Phase 1 — finish_sequence Enforcement (JETZT)
-- Hard-Limit: Ab Step 15 wird finish_sequence automatisch aufgerufen
+- Hard-Limit: Ab Step 20 wird finish_sequence automatisch aufgerufen
 - Narrator zeigt an: "Auto-Finish: Step-Limit erreicht"
 - MetaCognition-Eintrag: "auto_enforced: finish_sequence"
 - Messbar: productive_steps Ratio vorher/nachher
@@ -44,10 +44,10 @@ Beispiel: `if step >= 15 and not finished: force_finish_sequence()`
 - Schwelle konfigurierbar pro Regel
 
 ## Kritische Regeln
-- Enforcement darf NICHT zu aggressiv sein — Step 15 ist konservativ
+- Enforcement darf NICHT zu aggressiv sein — Step 20 ist konservativ
 - Phi muss im Narrator SEHEN warum auto-finished wurde (Transparenz)
 - Jeder Enforcement wird in MetaCognition geloggt (Lern-Feedback)
-- evolution/sprint: erhoehtes Limit (25 statt 15) — Selbstverbesserung braucht Raum, aber kein Freifahrtschein
+- evolution/sprint: erhoehtes Limit (30 statt 20) — Selbstverbesserung braucht Raum, aber kein Freifahrtschein
 
 ## Metriken
 - **Vorher**: productive_steps/total_steps = ~22% (Baseline aus metacognition.json)

@@ -3415,7 +3415,7 @@ Antworte als JSON:
                 # Meta-Rules als Code — nicht bitten, erzwingen.
                 # step = LLM-Calls (Loop-Variable), step_count = Tool-Calls.
                 # Enforcement basiert auf step (LLM-Calls), nicht step_count.
-                # evolution/sprint: erhoehtes Limit (25 statt 15).
+                # evolution/sprint: erhoehtes Limit (30 statt 20).
                 is_evo = mode.get("mode") in ("evolution", "sprint")
                 enforcement_limit = 30 if is_evo else 20
                 if step >= enforcement_limit and not finished:
