@@ -86,7 +86,12 @@ class PerceptionPipeline:
         self._learned_weights: dict[str, dict[str, float]] = safe_json_read(
             self._weights_path, {}
         )
+        self._token_avg_path = data_path / "consciousness" / "perception_token_avg.json"
+        self._token_averages: dict[str, float] = safe_json_read(
+            self._token_avg_path, {}
+        )
         self._last_active_channels: list[str] = []
+        self._last_build_stats: dict = {}
 
     def register_channel(self, channel: PerceptionChannel):
         """Registriert einen Wahrnehmungskanal."""
